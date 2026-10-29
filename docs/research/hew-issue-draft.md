@@ -26,6 +26,10 @@ I ran a small local spike (it is not a PR) against v1.3.1 (`612c1c1`):
 
 My reading: `tol::PLANE_DIST` / `POINT_MERGE` = 1e-9 m, but one f64 ulp at 9.15e6 is ≈ 1.86e-9 m. A refitted plane cannot hold its own vertices within that tolerance. Release builds stay safe, because the refusal leaves the object untouched. Test source: `<link>`.
 
+Two related observations at the same northing:
+- A 48-segment circle of radius 3 m is refused on extrude (`degenerate_geometry`).
+- The viewport renders f32 world positions with no relative-to-center offset. A box 4.244 m deep renders about 5.0 m deep, because f32 spacing at 9.15e6 is 1 m.
+
 Downstream, I plan to keep geometry relative to a project origin, so this doesn't block me. Still, would you prefer one of these?
 - (a) A documented assumption that kernel geometry lives near the origin.
 - (b) A magnitude-relative tolerance.

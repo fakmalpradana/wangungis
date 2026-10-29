@@ -37,18 +37,20 @@ Hasil sementara:
   - Atribut Object bertahan melewati push/pull, undo, redo, dan reload (diuji dengan assert).
   - Celah: belum ada atribut per face, dan integrasi UI butuh perubahan `wasm-api`/`app`, yaitu PR upstream atau fork.
   - Indeks snapping (`inference`) dibangun ulang penuh setelah setiap edit, sehingga muncul jeda 3,5–6 detik di skala kota. Perbaikannya juga butuh PR atau fork.
-- #3 **belum lulus** (2026-10-29, `docs/research/hew-spike-s2-utm.md`). Bagian kernel lulus bersyarat; bagian render belum diuji.
+- #3 **gagal pada koordinat absolut** (2026-10-29, `docs/research/hew-spike-s2-utm.md`). Kriteria ini lulus hanya dengan koordinat lokal + origin proyek, dan Hew belum punya mekanisme itu.
+  - Render: viewport tanpa RTC, posisi `f32` world. Kotak sedalam 4,244 m di UTM tergambar ≈ 5,00 m (galat 0,76 m).
+  - Kernel: lingkaran r = 3 m di UTM absolut ditolak saat diekstrusi.
   - Push/pull yang diterima selalu presisi (galat ≤ 1,5e-9 m, metrik pencocokan vertex satu-satu).
   - Kotak yang diputar 30° di koordinat UTM absolut (Y ≈ 9,15e6) membuat 3–13% push/pull ditolak (`NonManifoldResult`). Penyebabnya toleransi absolut 1e-9 m yang lebih kecil dari ulp `f64`.
   - Dengan koordinat lokal, termasuk pada jarak 10 km: 0 penolakan.
   - Syarat lulus: geometri disimpan relatif terhadap origin proyek (ADR-006).
-  - Bagian render (jitter di viewport) belum diuji. UI Hew juga belum punya lapisan origin-shift.
+  - UI Hew belum punya lapisan origin-shift.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
 
 Status sementara (2026-10-29, setelah review silang Gemini):
 - Lulus: #1, #7.
 - Gagal: #2.
-- Belum lulus: #3 (bagian render belum diuji).
+- Gagal pada koordinat absolut: #3 (lulus hanya dengan origin lokal, dan mekanisme ini belum ada di Hew).
 - Bergantung pada #6: #5.
 - Belum diuji: #4, #6.
 

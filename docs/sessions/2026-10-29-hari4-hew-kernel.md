@@ -29,3 +29,4 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
   - A2 dengan dokumen, buffer, dan indeks dimuat bersamaan: RSS 3,5 GB, waktu sampai interaktif 7,8 dtk.
   - Temuan baru: indeks inference dibangun ulang penuh tiap edit → jeda 3,5–6 dtk.
   - #3 diturunkan ke "belum lulus". Estimasi A2 direvisi ke 140–200 jam. Usulan aturan tiga jalur A/A2/B.
+- #3 bagian render: viewport Hew tanpa RTC (f32 world). Kotak 4,244 m di UTM tergambar ±5,00 m (diukur dari piksel). Lingkaran r=3 m di UTM ditolak saat ekstrusi. #3 = gagal di koordinat absolut, lulus hanya dengan origin lokal.

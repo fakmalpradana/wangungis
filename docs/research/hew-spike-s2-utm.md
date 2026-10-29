@@ -43,4 +43,26 @@ Catatan debug build: hasil debug **tidak sama** dengan release. Pada dua kasus y
 
 Rincian bagian kernel, lulus bersyarat: Syaratnya: WangunGIS menyimpan geometri relatif terhadap origin proyek `f64`, dan koordinat UTM absolut tidak pernah masuk ke kernel. Ini sudah menjadi rancangan ADR-003 dan ADR-006. Bagian render (jitter di viewport three.js) belum diuji karena butuh GUI; ini dilanjutkan bersama spike FPS (Hari 7).
 
+## Bagian render (diuji 2026-10-29)
+
+Viewport Hew tidak memakai RTC atau origin-shift. Sudah dicari di `app/src/viewport` dan `tessellate`: `tessellate` mengeluarkan posisi `f32` dalam koordinat world. Pada Y ≈ 9,15e6, presisi f32 hanya **1 m** (2²³ ≈ 8,4e6).
+
+Cara uji:
+- Kotak 5,277 × 4,244 × 3 m dibuat di origin dan di (430000,123; 9150000,456) dengan `hew-cli`.
+- Keduanya dimuat di build web Hew (Chromium headless + Metal), lalu difoto dari atas pada jarak kamera yang sama.
+- Script: [`hew-spike-render-shot.mjs`](hew-spike-render-shot.mjs).
+
+| Model | Tinggi kotak di layar | Kedalaman yang tergambar |
+|---|---|---|
+| Origin | 341 px | 4,244 m (benar) |
+| UTM absolut | **402 px** | **≈ 5,00 m** (rasio 1,179). Kedua sisi dibulatkan ke kelipatan 1 m |
+
+Gambar: [origin](img/hew-render-box-origin.png), [UTM](img/hew-render-box-utm.png).
+
+Kesimpulan bagian render: pada koordinat absolut, geometri **tergambar salah sampai 0,76 m** (18%). Ini lebih parah dari jitter, karena geometrinya memang salah. Pada koordinat lokal tidak ada masalah.
+
+Temuan kernel tambahan: lingkaran r = 3 m (48 segmen) di UTM absolut **ditolak saat diekstrusi** (`degenerate_geometry`), sedangkan di origin berhasil.
+
+**Status akhir #3: gagal pada koordinat absolut, dan lulus hanya bila semua geometri lokal terhadap origin proyek.** Hew belum punya mekanisme origin itu, baik di kernel, `tessellate`, maupun viewport. Jadi pada jalur A, mekanisme ini harus dibangun di seluruh pipeline. Pada A2, ini sudah menjadi rancangan kita (ADR-003/006).
+
 Usulan untuk upstream: toleransi relatif terhadap besaran koordinat, atau dokumentasi bahwa kernel menganggap geometri berada dekat origin. Usulan ini dimasukkan ke draf issue Hew (Hari 5).
