@@ -40,6 +40,7 @@ Hasil sementara:
 - #3 **gagal pada koordinat absolut** (2026-10-29, `docs/research/hew-spike-s2-utm.md`). Kriteria ini lulus hanya dengan koordinat lokal + origin proyek, dan Hew belum punya mekanisme itu.
   - Render: viewport tanpa RTC, posisi `f32` world. Kotak sedalam 4,244 m di UTM tergambar ≈ 5,00 m (galat 0,76 m).
   - Kernel: lingkaran r = 3 m di UTM absolut ditolak saat diekstrusi.
+  - Sweep 36 sudut: 0 penolakan sampai ±2,1e6 m per sumbu. Usulan batas koordinat lokal kernel: ±1.000 km dari origin proyek.
   - Push/pull yang diterima selalu presisi (galat ≤ 1,5e-9 m, metrik pencocokan vertex satu-satu).
   - Kotak yang diputar 30° di koordinat UTM absolut (Y ≈ 9,15e6) membuat 3–13% push/pull ditolak (`NonManifoldResult`). Penyebabnya toleransi absolut 1e-9 m yang lebih kecil dari ulp `f64`.
   - Dengan koordinat lokal, termasuk pada jarak 10 km: 0 penolakan.

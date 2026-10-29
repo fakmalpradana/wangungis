@@ -43,6 +43,24 @@ Catatan debug build: hasil debug **tidak sama** dengan release. Pada dua kasus y
 
 Rincian bagian kernel, lulus bersyarat: Syaratnya: WangunGIS menyimpan geometri relatif terhadap origin proyek `f64`, dan koordinat UTM absolut tidak pernah masuk ke kernel. Ini sudah menjadi rancangan ADR-003 dan ADR-006. Bagian render (jitter di viewport three.js) belum diuji karena butuh GUI; ini dilanjutkan bersama spike FPS (Hari 7).
 
+## Sweep jarak × sudut (2026-10-29, menjawab review Gemini "hanya 30°")
+
+Pengaturan: 36 rotasi (0–175°, langkah 5°) × 100 push/pull per jarak. Kotak diletakkan di diagonal (x = y). Test: `z_extent_sweep`.
+
+| Jarak dari origin | Per sumbu | ulp `f64` per sumbu | Ditolak | Kotak gagal dibuat | Galat maks |
+|---|---|---|---|---|---|
+| 0 – 1.000 km | ≤ 7,1e5 m | ≤ 1,2e-10 m | **0 / 3.600** | 0 | ≤ 5,9e-10 m |
+| 3.000 km | 2,1e6 m | 4,7e-10 m | **0 / 3.600** | 0 | 1,7e-9 m |
+| 4.000 km | 2,8e6 m | 4,7e-10 m | 1 / 3.600 | 0 | 1,2e-9 m |
+| 5.000 km | 3,5e6 m | 4,7e-10 m | 9 / 3.600 | 0 | 1,2e-9 m |
+| 6.000 km | 4,2e6 m | 9,3e-10 m | 127 / 3.400 | 2 / 36 | 5,0e-9 m |
+| 8.000 km | 5,7e6 m | 9,3e-10 m | 623 / 2.600 | 10 / 36 | 4,2e-9 m |
+| 9.150 km | 6,5e6 m | 9,3e-10 m | 868 / 2.500 | 11 / 36 | 3,6e-9 m |
+
+**Aturan desain yang diusulkan (masukan untuk ADR-006 dan K6):**
+- **Kernel:** koordinat lokal maksimal **±1.000 km** dari origin proyek. Ini 2× di bawah batas tanpa-penolakan (±2,1e6 m), cukup untuk satu kota atau satu provinsi per origin.
+- **Render:** f32 punya resolusi 1 mm pada ±10 km dan ±8 mm pada ±100 km. Karena itu RTC per tile (±5 km) tetap wajib di renderer, terpisah dari origin kernel (ADR-003).
+
 ## Bagian render (diuji 2026-10-29)
 
 Viewport Hew tidak memakai RTC atau origin-shift. Sudah dicari di `app/src/viewport` dan `tessellate`: `tessellate` mengeluarkan posisi `f32` dalam koordinat world. Pada Y ≈ 9,15e6, presisi f32 hanya **1 m** (2²³ ≈ 8,4e6).

@@ -220,3 +220,22 @@ const R30: f64 = std::f64::consts::FRAC_PI_6;
 #[test] fn g_utm_frac_rot() { row(run("UTM + fraction, rotated 30deg", 430_000.123, 9_150_000.456, R30)) }
 #[test] fn h_local_100m_rot() { row(run("local (100, 200), rotated 30deg", 100.0, 200.0, R30)) }
 #[test] fn i_10km_rot() { row(run("10 km (10000, 10000), rotated 30deg", 10_000.0, 10_000.0, R30)) }
+
+/// How far from the origin can geometry sit before push/pull starts being
+/// refused? 36 rotations x several distances (along the diagonal), 100 ops each.
+#[test]
+fn z_extent_sweep() {
+    std::panic::set_hook(Box::new(|_| {}));
+    for dist in [0.0, 1_000.0, 10_000.0, 50_000.0, 100_000.0, 300_000.0, 1_000_000.0, 3_000_000.0, 4_000_000.0, 5_000_000.0, 6_000_000.0, 8_000_000.0, 9_150_000.0] {
+        let (mut refused, mut total, mut worst, mut no_box) = (0usize, 0usize, 0.0f64, 0usize);
+        for k in 0..36 {
+            let rot = (k as f64 * 5.0).to_radians();
+            let xy = dist * std::f64::consts::FRAC_1_SQRT_2;
+            let Ok(r) = std::panic::catch_unwind(|| run("sweep", xy, xy, rot)) else { no_box += 1; continue };
+            refused += r.failed;
+            total += r.ok + r.failed;
+            if r.max_err.is_finite() { worst = worst.max(r.max_err); }
+        }
+        println!("SWEEP | {dist:>10.0} m (per axis {:.2e}) | refused {refused}/{total} | box creation failed {no_box}/36 | max vertex error {worst:.2e} m |", dist * std::f64::consts::FRAC_1_SQRT_2);
+    }
+}
