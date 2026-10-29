@@ -50,6 +50,15 @@ Kesimpulan:
   - Object yang lebih besar dari satu tile.
 - Estimasi **asumsi**: 10–20 jam. Lebih murah daripada memodifikasi `inference` (20–40 jam) dan tidak butuh persetujuan upstream.
 
+**Kesesuaian hasil tile dengan scene global** ([`spike-a2-inference-tiled-agree.rs`](spike-a2-inference-tiled-agree.rs)):
+- Cara uji: 2.000 query acak dengan posisi kamera acak. Hasil dari 3×3 tile di sekitar target digabung berdasarkan (`SnapKind::rank_group`, sudut ke sinar).
+- Hasil: **98,0%** identik dengan satu `InferenceScene` global, baik pada kota tiruan maupun grid. Tanpa rank group, kesesuaian 97,4%.
+- Sisa 2% punya dua penyebab yang masuk akal:
+  - (a) Penentu seri di dalam satu rank group memakai jarak sudut yang dinormalisasi oleh "gravity" per jenis snap. Normalisasi ini tidak tersedia lewat API publik.
+  - (b) Penghalang di tile yang dilewati sinar, di luar 3×3 tile di sekitar target. Filter oklusi dengan `pick_face` di 3×3 tile tidak mengubah hasil.
+- Perbaikan: telusuri tile di sepanjang proyeksi sinar (DDA), dan minta Hew membuka metrik ranking-nya sebagai API publik (PR kecil).
+- Kesimpulan: pendekatan tile layak, tetapi belum identik. Dua perbaikan di atas termasuk estimasi 10–20 jam.
+
 ## Kesimpulan
 1. Masalah #2 di Hew sepenuhnya berasal dari lapisan web/renderer, bukan dari kernel.
 2. Dengan kernel Hew yang dipakai native dan batching sederhana, model 1M face / 167 ribu Object berjalan **233 FPS**. Itu ±8× di atas target v1.0 untuk 10M face (≥ 30 FPS) bila diskalakan linear, dan ini masih **asumsi**.

@@ -32,3 +32,4 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
 - #3 bagian render: viewport Hew tanpa RTC (f32 world). Kotak 4,244 m di UTM tergambar ±5,00 m (diukur dari piksel). Lingkaran r=3 m di UTM ditolak saat ekstrusi. #3 = gagal di koordinat absolut, lulus hanya dengan origin lokal.
 - Mitigasi stall: InferenceScene per tile 100 m (tanpa ubah Hew). Snap setelah edit 5,9 dtk → 7,8 ms (kota), 3,5 dtk → 0,48 ms (grid). Lintas tile belum.
 - S2 sweep 36 sudut × jarak: 0 tolak s.d. ±2,1e6 m/sumbu; melonjak ≥4,2e6. Usulan: koordinat lokal kernel ±1.000 km, render RTC per tile ±5 km.
+- Kesesuaian snap per tile vs scene global: 98,0% identik (2.000 query). Sisa karena normalisasi gravity tidak publik + penghalang di luar 3×3 tile.
