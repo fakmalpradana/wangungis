@@ -26,6 +26,11 @@ Hasil sementara:
   - Clippy `-D warnings` bersih.
   - Catatan untuk kriteria #4: kode Rust di `crates/` berjumlah ±279 ribu baris.
 - #4 **menunggu manusia**. Penjelasan alur push/pull dan 5 pertanyaan uji ada di `docs/research/hew-kernel.md`. Lulus bila manusia bisa menjawab tanpa melihat dokumen.
+- #2 **gagal untuk skenario kota** (2026-10-29, `docs/research/hew-spike-fps.md`).
+  - GPU sanggup: 1M face dalam 1.024 Object = 122 FPS.
+  - Tetapi setiap Object = 2 draw call tanpa batching: 16,6 ribu Object = 14 FPS, 41,6 ribu = 5,6 FPS, dan 167 ribu Object membuat tab crash saat dimuat.
+  - Kota LOD2 dengan 1M face ≈ 17–50 ribu Object, perkiraan 5–14 FPS.
+  - Bisa diperbaiki dengan batching renderer (estimasi **asumsi** 40–80 jam).
 - #3 **lulus bersyarat, bagian kernel** (2026-10-29, `docs/research/hew-spike-s2-utm.md`).
   - Push/pull yang diterima selalu presisi (galat ≤ 1,3e-9 m).
   - Kotak yang diputar 30° di koordinat UTM absolut (Y ≈ 9,15e6) membuat 3–13% push/pull ditolak (`NonManifoldResult`). Penyebabnya toleransi absolut 1e-9 m yang lebih kecil dari ulp `f64`.
@@ -33,6 +38,8 @@ Hasil sementara:
   - Syarat lulus: geometri disimpan relatif terhadap origin proyek (ADR-006).
   - Bagian render (jitter di viewport) belum diuji.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
+
+Status sementara (2026-10-29): #1, #7 lulus; #3 lulus bersyarat; #2 gagal untuk skenario kota; #4, #5, #6 belum. Akibatnya jalur A hanya mungkin bila #4, #5, dan #6 semuanya lulus, dan #3 bersyarat diterima. Biaya batching renderer harus masuk estimasi jalur A.
 
 Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, dengan Hew sebagai referensi.
 

@@ -16,3 +16,5 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
 - Hari 5: draf issue Hew (`research/hew-issue-draft.md`), TIDAK diposting (butuh persetujuan manusia).
 - Hari 8–9: CI `validate-lod` 3 OS + fixture LOD1 + `scripts/validate_lod.py` di PR #2.
 - Hari 10, spike S3 (`research/spike-s3-manifold.md`): proptest 1.000 kasus lulus lokal; UTM absolut residu planaritas 1,6e-7 m.
+- Hari 7, spike FPS (`research/hew-spike-fps.md`): Chromium headless + Metal M4. 16,6 ribu Object = 14 FPS (33 ribu draw/frame); 167 ribu Object = crash. 1.024 Object × 1.000 face = 122 FPS. #2 gagal untuk kota; batas = 2 draw call per Object.
+- CI PR #2 hijau 3 OS (log dicek: PASS kedua fixture di tiap OS). Tidak di-merge sendiri: menunggu review manusia (AGENTS §12).
