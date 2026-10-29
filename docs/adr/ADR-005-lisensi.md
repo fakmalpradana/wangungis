@@ -28,7 +28,7 @@ Lisensi yang sudah dicek pada 2026-10-29 (GitHub API):
 - val3dity: GPL-3.0.
 - Hew: AGPL-3.0.
 
-Lisensi egui dan Tauri belum dicek.
+- egui, wgpu, Tauri, `manifold-csg`, manifold3d: GitHub API melaporkan Apache-2.0 (dicek 2026-10-29). Detail dual-license MIT/Apache belum dicek di file LICENSE masing-masing.
 
 **Risiko SignPath.** Syarat SignPath Foundation berbunyi: "OSI-approved Open Source license without commercial dual-licensing for all components" ([signpath.org/terms](https://signpath.org/terms)). Slint (GPLv3/royalty-free/komersial), CGAL, dan Qt juga ditawarkan dengan lisensi komersial. Membundel salah satunya bisa membuat proyek ditolak SignPath. Konfirmasi ke SignPath sebelum memilih library UI atau CGAL. Pilihan yang tidak terkena risiko ini: egui, wgpu, Manifold, Clipper2.
 

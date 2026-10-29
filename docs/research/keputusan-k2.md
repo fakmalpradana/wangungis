@@ -20,7 +20,11 @@ Tanggal: 2026-10-29. Ringkasan dari spike Hari 3–11 (rincian di `docs/adr/ADR-
 **A2**, dengan alasan berikut.
 - Dua kelemahan Hew yang terukur, yaitu renderer tanpa batching dan kernel yang terkunci di WASM tanpa origin lokal, berada di lapisan web. Lapisan itu memang akan kita ganti.
 - Bagian terbaik Hew, yaitu kernel dengan property test dan undo yang tidak bisa merusak model, bisa dipakai apa adanya. Hal ini sudah dibuktikan secara native oleh 4 prototipe: ekspor CityJSON yang lolos val3dity, render, inference, dan tile.
-- Biayanya: seluruh UI/tool ditulis ulang, dan crate Hew harus disinkronkan berkala karena API-nya belum stabil (5 rilis dalam 11 hari).
+- Biayanya: seluruh UI/tool ditulis ulang, dan crate Hew harus disinkronkan berkala.
+- Biaya sinkronisasi terukur kecil. Hitungan baris `pub fn/struct/enum` di `kernel`, `inference`, dan `tessellate` (heuristik berbasis baris; perubahan signature terhitung hapus + tambah):
+  - v1.2.0 → v1.3.1 (2 minggu): **0** item publik dihapus atau diubah, 21 ditambah.
+  - v1.0.0 → v1.3.1 (2 bulan): 12 dihapus atau diubah, 194 ditambah.
+  - Dalam 30 hari terakhir hanya ada 15 commit di ketiga crate itu. Perubahan API-nya sebagian besar berupa penambahan.
 
 ## Yang masih harus Anda putuskan atau kerjakan
 1. **#4:** jawab 5 pertanyaan uji di `docs/research/hew-kernel.md`. Bila gagal, kernel Hew terlalu sulit dipahami, dan A2 kehilangan alasannya.
