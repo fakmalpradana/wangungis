@@ -56,6 +56,14 @@ Keempat risiko pertama diuji di Fase 0.
 
 ## 3. Langkah 14 hari pertama
 
+**Progres per 2026-10-29 (sebagian besar dikerjakan agen dalam mode otonom):**
+- Hari 1–2 selesai: K1 AGPL, K3 WangunGIS, repo, CI.
+- Hari 3–11: spike selesai kecuali yang butuh manusia.
+  - #4: uji pemahaman.
+  - #6: posting issue.
+- Tambahan di luar rencana: opsi **A2** dengan 4 prototipe pendukung.
+- Bahan keputusan Hari 12 (K2): [`research/keputusan-k2.md`](research/keputusan-k2.md).
+
 Asumsi ritme ±1–2 jam per hari. Setiap hari = satu sesi agen kecil + log sesi.
 
 | Hari | Kegiatan | Hasil yang bisa dicek |
