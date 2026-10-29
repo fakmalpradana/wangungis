@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  VAL3DITY_VERSION: "2.7.0"
+  CJVAL_VERSION: "0.10.0"
+
+jobs:
+  validate-lod:
+    name: validate-lod (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache cjval
+        id: cjval-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cjval*
+          key: cjval-${{ env.CJVAL_VERSION }}-${{ runner.os }}
+
+      - name: Install cjval
+        if: steps.cjval-cache.outputs.cache-hit != 'true'
+        run: cargo install cjval --version ${{ env.CJVAL_VERSION }} --features build-binary --locked
+
+      # val3dity has no Linux binary or apt package: build the tagged release.
+      - name: Cache val3dity (Linux)
+        if: runner.os == 'Linux'
+        id: v3-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/val3dity-bin
+          key: val3dity-${{ env.VAL3DITY_VERSION }}-${{ matrix.os }}
+
+      - name: Install val3dity (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcgal-dev libeigen3-dev libgeos++-dev libgeos-dev libboost-filesystem-dev
+          if [ "${{ steps.v3-cache.outputs.cache-hit }}" != "true" ]; then
+            git clone --depth 1 --branch "$VAL3DITY_VERSION" https://github.com/tudelft3d/val3dity.git /tmp/val3dity
+            cmake -S /tmp/val3dity -B /tmp/val3dity/build -DCMAKE_BUILD_TYPE=Release
+            cmake --build /tmp/val3dity/build -j 4
+            mkdir -p ~/val3dity-bin && cp /tmp/val3dity/build/val3dity ~/val3dity-bin/
+          fi
+          echo "$HOME/val3dity-bin" >> "$GITHUB_PATH"
+
+      - name: Install val3dity (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew tap tudelft3d/software
+          # Homebrew refuses third-party formulae until trusted; older brews lack the command.
+          brew trust --formula tudelft3d/software/val3dity || true
+          brew install tudelft3d/software/val3dity
+
+      - name: Install val3dity (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          gh release download "$VAL3DITY_VERSION" -R tudelft3d/val3dity -p val3dity-win64.zip -D "$RUNNER_TEMP"
+          # The release asset is a zip wrapping a second zip.
+          unzip -q "$RUNNER_TEMP/val3dity-win64.zip" -d "$RUNNER_TEMP/outer"
+          unzip -q "$RUNNER_TEMP/outer/val3dity-win64.zip" -d "$RUNNER_TEMP/val3dity"
+          echo "$RUNNER_TEMP/val3dity" >> "$GITHUB_PATH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          cjval --version
+          val3dity --version
+
+      - name: Validate LOD fixtures
+        run: python scripts/validate_lod.py
