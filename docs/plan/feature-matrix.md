@@ -120,7 +120,7 @@ Legenda:
 | 69 | Atap hip/gable pada footprint L/T/U (straight skeleton) | – | – | S | XL | 0.3 | straight skeleton | U P V | T | belum |
 | 70 | Atap mansard | – | – | S | L | 0.3 | — | U P V | T | belum |
 | 71 | Overhang atap | – | – | S | M | 0.3 | — | U P V | T | belum |
-| 72 | Roof fitting dari DSM/point cloud | – | – | S | XL | 0.3/0.4 | GDAL, PDAL | U B V | T | belum |
+| 72 | Roof fitting dari DSM/point cloud | – | – | S | XL | 0.3/0.4 | data raster/point cloud dari `io` (tiff/las crate) | U B V | T | belum |
 | 73 | Semantik permukaan (Ground/Wall/Roof/Closure) | – | – | M | M | 0.3 | — | U V | T | belum |
 | 74 | Klasifikasi semantik otomatis dari normal | – | – | M | S | 0.3 | — | U P | T | belum |
 | 75 | Validasi live: watertight, planaritas, orientasi | P | P | M | L | 0.3 | robust | U P V | T | belum |
@@ -138,12 +138,12 @@ Legenda:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 83 | Save/load format native berversi | ✓ | ✓ | M | M | 0.1 | serde, zip | U P E | T+R | belum |
 | 84 | Ekspor CityJSON 2.0 | – | – | M | M | 0.2 | serde, cjval | U V | T+R | belum |
-| 85 | Impor CityJSON + round-trip tanpa kehilangan | – | – | M | M | 0.2 | cjseq | U V | T+R | belum |
-| 86 | Ekspor CityGML 2.0 | P | – | M | M | 0.3 | citygml-tools (konversi) | U V | R | belum |
+| 85 | Impor CityJSON + round-trip tanpa kehilangan | – | – | M | M | 0.2 | serde_json (+ cjseq untuk CityJSONSeq) | U V | T+R | belum |
+| 86 | Ekspor CityGML 2.0 | P | – | M | M | 0.3 | citygml-tools (konversi; Java 17+) | U V | R | belum |
 | 87 | Ekspor CityGML 3.0 | – | – | C | M | 0.3 | citygml-tools | U V | R | belum |
 | 88 | Ekspor 3D Tiles 1.1 | – | – | S | M | 0.3 | tyler | U | R | belum |
 | 89 | glTF/GLB impor-ekspor | P | ✓ | M | S | 0.1 | gltf crate | U | R | belum |
-| 90 | OBJ/STL ekspor | ✓ | ✓ | S | S | 0.1 | — | U | R | belum |
+| 90 | OBJ/STL ekspor | ✓ | P (STL saja) | S | S | 0.1 | — | U | R | belum |
 | 91 | DXF impor (footprint dari CAD) | ✓ | – | S | M | 0.2 | dxf crate | U | R | belum |
 | 92 | IFC ekspor dasar | ✓ | – | C | L | 0.5 | IfcOpenShell (Python) | U V | R | belum |
 | 93 | USD/USDZ ekspor | P | ✓ | W | M | — | — | — | R | belum |

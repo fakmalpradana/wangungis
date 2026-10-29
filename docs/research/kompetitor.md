@@ -80,7 +80,7 @@ Kolom: **SU** SketchUp · **BL** Blender (+BlenderGIS, Archipack, Up3date) · **
 | 54 | Edit IFC native | – | – | – | ✓ | – | ✓ | – | – | – | – | – |
 | | **I/O umum** | | | | | | | | | | | |
 | 55 | glTF | ? | ✓ | ✓ | ✓ | P | ✓ | ✓ | ✓ | ? | – | ✓ |
-| 56 | OBJ/STL | ✓ | ✓ | ✓ | ✓ | P | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 56 | OBJ/STL | ✓ | ✓ | ✓ | ✓ | P | ✓ | ✓ | ✓ | ✓ | ✓ | P (STL saja) |
 | 57 | DXF/DWG | ✓ | P | ✓ | ✓ | ✓ | P | ✓ | P | ✓ | – | – |
 | 58 | USD/USDZ | P | ✓ | ✓ | – | – | – | ✓ | ✓ | ✓ | – | ✓ |
 | 59 | Impor .skp | ✓ | P | ✓ | P | ✓ | – | ? | – | ? | – | ✓ |

@@ -84,9 +84,9 @@ Tiga bagian berikut tetap berlaku untuk kedua jalur. Pada jalur A, banyak piliha
 |---|---|---|
 | Validasi geometri LOD | val3dity (CLI, `brew install val3dity`) | GPLv3; hati-hati bila ditautkan sebagai library [docs](https://val3dity.readthedocs.io/main/usage/), [GitHub](https://github.com/tudelft3d/val3dity). Rencana: dipanggil sebagai proses di CI, tidak ditautkan. |
 | Validasi skema CityJSON | `cjval` (Rust) | [GitHub](https://github.com/cityjson/cjval) |
-| CityJSON I/O | serde + `cjseq` | [GitHub](https://github.com/cityjson/cjseq) |
-| CityGML 2/3 | citygml-tools (konversi dari/ke CityJSON) | belum diriset lisensinya (**asumsi** Apache-2.0) |
-| 3D Tiles | `tyler` (CityJSON → 3D Tiles 1.1) | lisensi belum dicek |
+| CityJSON I/O | `serde_json` + pemetaan scene sendiri; `cjseq` (MIT) hanya untuk konversi/stream CityJSONSeq | [GitHub](https://github.com/cityjson/cjseq) |
+| CityGML 2/3 | citygml-tools (konversi dari/ke CityJSON) | Apache-2.0, aplikasi **Java 17+** ([GitHub](https://github.com/citygml4j/citygml-tools)). Butuh JRE di CI dan di mesin pengguna; risiko packaging (R8). |
+| 3D Tiles | `tyler` (CityJSON → 3D Tiles 1.1) | Apache-2.0 ([GitHub](https://github.com/3DGI/tyler)) |
 | IFC | IfcOpenShell (LGPL-3.0-or-later; add-on Blender GPL) | [PyPI](https://pypi.org/project/ifcopenshell) — dipakai lewat Python |
 | CRS | PROJ (`proj` crate, `bundled_proj`) | [docs.rs](https://docs.rs/crate/proj/0.20.3) |
 | Raster/vektor | GDAL (`gdal` crate atau Python) | Windows butuh GDAL terpasang [gdal-sys](https://docs.rs/crate/gdal-sys/0.4.0/source/Readme.md) |

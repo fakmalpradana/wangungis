@@ -15,10 +15,12 @@ Status: draf 2026-10-29. Bergantung ADR-000: pada jalur A, modul yang sudah ada 
 ```
 ui ──► tools ──► commands ──► scene ──► core-geometry
  │       │          │           ▲            ▲
- │       └──► inference ────────┘────────────┘
+ │       ├──► inference ────────┘────────────┘
+ │       └──► lod
+ ├──► lod
  ├──► render ──► scene, core-geometry
  ├──► io ──► scene, lod, core-geometry
- └──► plugin-host ──► commands (via API publik saja)
+ └──► plugin-host ──► commands, lod, io (via API publik saja)
 lod ──► scene, core-geometry, commands
 ```
 
@@ -68,7 +70,7 @@ proyek.csk  (zip)
 | BVH per objek + BVH tingkat scene | inference, picking | F0 |
 | Instancing Components | render | 0.1 |
 | Frustum culling per objek/tile | render | 0.2 |
-| LOD rendering (bangunan jauh pakai LOD1) | render + lod | 0.2 |
+| LOD rendering (bangunan jauh pakai LOD1) | render (membaca representasi multi-LOD yang disimpan di `scene`) | 0.2 |
 | Tessellation dan validasi paralel (rayon) | core-geometry, lod | 0.2 |
 | Batch LOD di thread worker, UI tidak menunggu | lod, ui | 0.2 |
 | Streaming tile untuk scene kota besar | io, render | 0.4 |

@@ -38,10 +38,10 @@ Tujuan: membuktikan atau membantah risiko terbesar sebelum menulis fitur.
 Pekerjaan:
 1. Repo git, lisensi sementara, struktur modul (AGENTS.md §4), CI GitHub Actions macOS/Windows/Linux.
 2. **Spike S1 — Evaluasi Hew** (ADR-000, 7 kriteria).
-3. **Spike S2 — Presisi UTM**: push/pull + move pada X=430.000, Y=9.150.000; bandingkan dengan origin; render RTC tanpa jitter.
+3. **Spike S2 — Presisi UTM**: push/pull + move pada X=430.000, Y=9.150.000; bandingkan dengan origin; render RTC tanpa jitter (#36, kedua jalur; jalur A menambahkan RTC bila Hew belum punya).
 4. **Spike S3 — Face poligon ↔ Manifold**: boolean pada dua kotak dan satu bangunan L; planaritas setelah kembali ≤ toleransi.
 5. **Spike S4 — val3dity di CI**: ekspor satu kubus LOD1 ke CityJSON, jalankan `val3dity` dan `cjval` di ketiga OS.
-6. Jalur B saja: half-edge minimal + Push/Pull + inference endpoint/sumbu + render wgpu (matrix #1, #6, #19–#20, #22, #31, #34, #36).
+6. Jalur B saja: half-edge minimal + Push/Pull + inference endpoint/sumbu + render wgpu (matrix #1, #6, #19–#20, #22, #31, #34).
 
 Kriteria keluar:
 - CI hijau di 3 OS pada main.
@@ -56,7 +56,7 @@ Rilis: tidak ada rilis publik; repo publik dengan README "pre-alpha".
 ## v0.1 — Modeling inti
 
 Fitur: matrix #1–#14, #17, #19–#28, #31–#34, #42–#46, #49, #83, #89–#90, #97, #100.
-Jalur A: sebagian besar sudah ada di Hew. Tugasnya: verifikasi dengan test kita, tambahkan CRS/origin di format, dan siapkan crate `lod`/`geo` sebagai titik ekstensi.
+Jalur A: sebagian besar sudah ada di Hew. Tugasnya: verifikasi dengan test kita, tambahkan CRS/origin di format, dan siapkan crate `lod`/`geo` sebagai titik ekstensi. Pekerjaan baru di jalur A: #14 auto-split face (tidak ada di Hew, kompleksitas L), ekspor OBJ (#90, Hew hanya STL), dan item `Hew: ?` yang belum terverifikasi. Estimasi 40 jam likely kemungkinan rendah; dikoreksi setelah spike S1.
 
 Kriteria keluar:
 - Tugas referensi "kotak 5×4×3 m dengan pintu, lalu salin 10× dalam array" selesai tanpa error di 3 OS.
@@ -81,7 +81,8 @@ Kriteria keluar:
 Fitur: #15–#16, #63, #67–#75, #86–#88; #72 roof fitting minimal untuk atap planar sederhana.
 
 Kriteria keluar:
-- Template flat, shed, gable, hip, dan mansard pada footprint persegi, L, T, dan U, dengan overhang.
+- Must: template flat, shed, gable, dan hip pada footprint persegi (#67–#68).
+- Should: atap pada footprint L, T, dan U (#69), mansard (#70), dan overhang (#71).
 - Klasifikasi semantik otomatis benar pada 100% kasus uji.
 - Validasi live menampilkan kode error val3dity yang sama dengan validator CLI.
 - Ekspor CityGML 2.0 dan 3D Tiles 1.1; LOD2 lolos val3dity 100%.

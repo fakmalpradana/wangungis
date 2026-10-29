@@ -143,7 +143,7 @@ Anggaran per fase (asumsi awal, dikoreksi dengan data nyata setelah Fase 0):
 
 ## 7. Usulan perubahan file aturan
 
-Status 2026-10-29 (disetujui manusia): butir 7.1 nomor 3–6, 7.2, dan 7.3 **sudah diterapkan**. Butir 7.1 nomor 1–2 menunggu nama proyek dan hasil spike (ADR-000).
+Status 2026-10-29 (disetujui manusia): butir 7.1 nomor 3–6, 7.2, dan 7.3 **sudah diterapkan**. Butir 7.1 nomor 1 sebagian diterapkan: nama WangunGIS diisi 2026-10-29, lisensi menunggu ADR-005. Butir 7.1 nomor 2 menunggu hasil spike (ADR-000).
 
 ### 7.1 AGENTS.md
 1. §1: isi nama proyek setelah dipilih; lisensi setelah ADR-005 diterima.
@@ -156,7 +156,7 @@ Status 2026-10-29 (disetujui manusia): butir 7.1 nomor 3–6, 7.2, dan 7.3 **sud
 ### 7.2 CLAUDE.md
 - Tambahkan: "Skill review tersedia: `/ponytail-review`, `/caveman-review`, agen `caveman:cavecrew-reviewer`. Delegasi bulk ke agy lewat agen `antigravity:antigravity-delegate`; verifikasi sendiri hasilnya."
 
-### 7.3 GEMINI.md (draf, belum dibuat di root)
+### 7.3 GEMINI.md (sudah dibuat di root; draf awal di bawah)
 ```markdown
 # GEMINI.md
 

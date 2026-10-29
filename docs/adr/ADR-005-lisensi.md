@@ -13,10 +13,23 @@
 
 ## Alasan
 - Kompatibel dengan dependensi yang mungkin dipakai: CGAL paket GPL ([cgal.org](https://www.cgal.org/license.html)), Slint GPLv3, Qt LGPL, Manifold Apache-2.0, Clipper2 BSL-1.0.
-- val3dity (GPLv3) dipanggil sebagai proses CLI, tidak ditautkan.
+- val3dity (GPLv3) dipanggil sebagai proses CLI, tidak ditautkan. Alasannya isolasi build C++/CGAL, bukan ketidakcocokan lisensi: lisensi GPL-3.0-or-later maupun AGPL-3.0-only sama-sama kompatibel dengan GPLv3.
 
 ## Alternatif ditolak
 - **MIT/Apache-2.0 / MPL-2.0**: menutup akses ke paket CGAL GPL dan Slint GPL, tanpa manfaat nyata untuk proyek satu orang tanpa model bisnis.
 
 ## Catatan
-Ini bukan nasihat hukum. Cek ulang lisensi `tyler`, citygml-tools, egui, dan Tauri sebelum ADR ini diterima.
+Ini bukan nasihat hukum.
+
+Lisensi yang sudah dicek pada 2026-10-29 (GitHub API):
+- `tyler`: Apache-2.0.
+- citygml-tools: Apache-2.0.
+- `cjseq` dan `cjval`: MIT.
+- val3dity: GPL-3.0.
+- Hew: AGPL-3.0.
+
+Lisensi egui dan Tauri belum dicek.
+
+**Risiko SignPath.** Syarat SignPath Foundation berbunyi: "OSI-approved Open Source license without commercial dual-licensing for all components" ([signpath.org/terms](https://signpath.org/terms)). Slint (GPLv3/royalty-free/komersial), CGAL, dan Qt juga ditawarkan dengan lisensi komersial. Membundel salah satunya bisa membuat proyek ditolak SignPath. Konfirmasi ke SignPath sebelum memilih library UI atau CGAL. Pilihan yang tidak terkena risiko ini: egui, wgpu, Manifold, Clipper2.
+
+Hew Plugin API Exception adalah izin tambahan menurut AGPL §7. Izin tambahan seperti ini tidak membuat proyek menjadi dual-license. Penilaian ini **asumsi** dan belum dikonfirmasi ke SignPath.

@@ -57,11 +57,11 @@ Rilis mengikuti Tahap 5. Pada jalur A (Hew), sebagian besar butir v0.1 sudah ter
 | Rilis | Must | Should | Could | Won't (di rilis ini) |
 |---|---|---|---|---|
 | Fase 0 | CI 3 OS, spike Hew, spike presisi UTM, spike Manifold | val3dity di CI | — | UI final |
-| v0.1 | Line, Rect, Circle, Arc, Push/Pull, Move/Rotate/Scale, Eraser, inference dasar, VCB, undo/redo, save/load, orbit/pan/zoom | Offset, Tape Measure, Groups | Follow Me | LOD tools |
+| v0.1 | Line, Rect, Circle, Arc, Push/Pull, Move/Rotate/Scale, Eraser, inference dasar, VCB, undo/redo, save/load, orbit/pan/zoom, Groups | Offset, Tape Measure | Follow Me | LOD tools |
 | v0.2 | Proyek ber-CRS, origin `f64`, impor GeoJSON/Shapefile, LOD1 batch, ekspor CityJSON | Impor GeoTIFF terrain, reprojection | Impor OSM | Atap |
-| v0.3 | Template atap (flat, shed, gable, hip), semantik permukaan, validasi + val3dity, ekspor CityGML 2.0 | Mansard, overhang, roof fitting dari DSM, ekspor 3D Tiles | Atap kompleks gabungan, CityGML 3.0 | LOD3 |
+| v0.3 | Template atap (flat, shed, gable, hip), semantik permukaan, validasi + val3dity, ekspor CityGML 2.0 | Atap pada footprint L/T/U, mansard, overhang, roof fitting dari DSM, ekspor 3D Tiles | CityGML 3.0 | LOD3 |
 | v0.4 | Komponen jendela/pintu, template fasad, multi-LOD per bangunan | Balkon, kolom, library komponen, konversi LOD3→LOD2→LOD1 | Ornamen, impor point cloud | Plugin |
-| v0.5+ | Scenes, Styles, Section Plane, Shadows, API Python | Dokumen 2D (setara LayOut), IFC dasar, UI Bahasa Indonesia | AI-assist (segmentasi ONNX lokal) | Kolaborasi |
+| v0.5+ | — | Scenes, Section Plane, Shadows, API Python, UI Bahasa Indonesia | Styles, Dokumen 2D (setara LayOut), IFC dasar, AI-assist (segmentasi ONNX lokal) | Kolaborasi |
 
 ## Metrik terukur vs SketchUp
 
