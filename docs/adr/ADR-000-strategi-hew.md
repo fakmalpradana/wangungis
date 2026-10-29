@@ -25,6 +25,8 @@ Hasil sementara:
   - Test app (Vitest): 6.219 lulus di 282 file.
   - Clippy `-D warnings` bersih.
   - Catatan untuk kriteria #4: kode Rust di `crates/` berjumlah ±279 ribu baris.
+- #4 **menunggu manusia**. Penjelasan alur push/pull dan 5 pertanyaan uji ada di `docs/research/hew-kernel.md`. Lulus bila manusia bisa menjawab tanpa melihat dokumen.
+- Temuan untuk #3: `tol::POINT_MERGE = 1e-9` m, sedangkan ulp `f64` di Y ≈ 9,15e6 ≈ 1,86e-9 m. Uji di Hari 6 dengan koordinat absolut dan dengan koordinat lokal + origin.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
 
 Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, dengan Hew sebagai referensi.
