@@ -20,6 +20,11 @@ Jalankan spike evaluasi 1–2 minggu sebelum memilih antara:
 | 7 | Lisensi | manusia menerima AGPL-3.0-only untuk proyek |
 
 Hasil sementara:
+- #1 **lulus** (2026-10-29). Hew v1.3.1 (`612c1c1`) di M4 16 GB, clone bersih. Pemasangan toolchain + `cargo build --workspace` + `scripts/verify.sh` selesai hijau dalam 819 detik (±14 menit) tanpa intervensi.
+  - Test Rust: 2.935 lulus, 0 gagal, 3 ignored.
+  - Test app (Vitest): 6.219 lulus di 282 file.
+  - Clippy `-D warnings` bersih.
+  - Catatan untuk kriteria #4: kode Rust di `crates/` berjumlah ±279 ribu baris.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
 
 Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, dengan Hew sebagai referensi.
