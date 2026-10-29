@@ -86,8 +86,8 @@ jobs:
       - name: Tool versions
         shell: bash
         run: |
-          cjval --version | tee /dev/stderr | grep -Fq "$CJVAL_VERSION"
-          val3dity --version | tee /dev/stderr | grep -Fq "$VAL3DITY_VERSION"
+          v=$(cjval --version); echo "$v"; grep -Fq "$CJVAL_VERSION" <<< "$v"
+          v=$(val3dity --version); echo "$v"; grep -Fq "$VAL3DITY_VERSION" <<< "$v"
 
       - name: Validate LOD fixtures
         run: python scripts/validate_lod.py
