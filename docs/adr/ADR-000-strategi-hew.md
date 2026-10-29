@@ -51,3 +51,36 @@ Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, denga
 - Tidak menyalin kode Hew ke jalur B kecuali lisensi proyek AGPL.
 - Kernel Hew dikompilasi ke WebAssembly (`wasm32-unknown-unknown`). Crate dengan dependensi C/C++ (`proj` dengan `bundled_proj`, `manifold-csg`) tidak bisa begitu saja masuk ke kernel WASM. Pada jalur A, crate ini kemungkinan harus berjalan di sisi native Tauri. Hal ini diuji sebagai bagian kriteria #5 (Hari 11). Ditemukan dalam review silang Gemini, 2026-10-29.
 - Kriteria #2 (≥ 30 FPS) adalah ambang minimum spike. Target produk tetap ≥ 60 FPS pada 1M face di v0.2 (`plan/produk.md`), jadi selisihnya harus ditutup sebelum v0.2.
+
+## Usulan opsi A2 dari hasil spike (2026-10-29, menunggu keputusan manusia K2)
+
+Spike memperlihatkan hal-hal berikut:
+- Bagian Hew yang paling bernilai bagi kita adalah crate Rust murninya, dan semuanya tanpa dependensi UI:
+  - `kernel` (65 ribu baris; dependensi hanya slotmap/serde/zip/tracing).
+  - `inference` (8,9 ribu baris).
+  - `tessellate` (4 ribu baris).
+  - `mesh-export` (2,9 ribu baris).
+- Dua kelemahan Hew untuk kita sama-sama berada di lapisan web:
+  - Renderer three.js tanpa batching (#2).
+  - Kernel yang terkunci di WASM: batas memori 4 GB, dan PROJ/Manifold tidak bisa dimuat.
+- Prototipe #5 sudah memakai `kernel` secara **native** dari crate di luar pohon Hew, tanpa mengubah Hew.
+
+**Opsi A2 — pakai crate inti Hew sebagai library, bangun aplikasi native sendiri:**
+- **Reuse:** `kernel`, `inference`, `tessellate`, `mesh-export` sebagai dependensi git yang dipin ke satu commit.
+- **Tulis sendiri:** shell aplikasi + tool interaksi dengan egui, dan renderer wgpu dengan batching dan RTC. Tool UI Hew (±37 ribu baris TypeScript) dipakai sebagai referensi perilaku. Porting langsung dengan atribusi juga boleh karena AGPL sudah diterima (K1).
+- **Lisensi:** AGPL-3.0-only.
+
+Perbandingan dengan jalur A, untuk kebutuhan kita:
+- **Kelebihan:**
+  - Tidak ada batas WASM 4 GB.
+  - PROJ, Manifold, dan GDAL bisa dipakai langsung.
+  - Renderer dirancang untuk banyak bangunan sejak awal.
+  - Tidak bergantung pada persetujuan pengelola untuk UI. Kriteria #6 hanya menyangkut perubahan kernel seperti atribut per face.
+- **Kekurangan:**
+  - Seluruh UI/tool ditulis ulang.
+  - API kernel Hew belum stabil (5 rilis dalam 11 hari), jadi butuh sinkronisasi berkala.
+- **Estimasi (asumsi, belum diukur):**
+  - F0 ±40–60 jam: renderer + shell.
+  - v0.1 ±100–130 jam, di antara jalur A (40 jam) dan B (200 jam), karena kernel, push/pull, undo, dan inference tidak ditulis ulang.
+
+Ini usulan, bukan keputusan. Keputusan A, A2, atau B tetap diambil manusia di Hari 12 (K2), setelah #4 dan #6 selesai.
