@@ -16,3 +16,9 @@
 
 ## Risiko yang diuji di spike
 - Pemetaan face poligon ↔ mesh segitiga Manifold dan kembalinya tanpa kehilangan planaritas.
+
+## Bila opsi A2 dipilih (ADR-000, menunggu K2)
+- Half-edge, push/pull, undo, dan boolean memakai `kernel` Hew.
+- Predikat: Hew baru memakai orientasi 2D eksak. Kebutuhan `robust` 3D dievaluasi ulang.
+- Manifold menjadi opsional, untuk boolean berat dan LOD3.
+- Toleransi: konstanta Hew (`POINT_MERGE` = 1e-9 m) dipertahankan. Syaratnya, koordinat lokal kernel ≤ ±1.000 km dari origin proyek (sweep S2: 0 penolakan sampai ±2,1e6 m). Mengubah toleransi butuh persetujuan manusia (AGENTS.md §14, K6).
