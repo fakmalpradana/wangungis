@@ -20,3 +20,4 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
 - CI PR #2 hijau 3 OS (log dicek: PASS kedua fixture di tiap OS). Tidak di-merge sendiri: menunggu review manusia (AGENTS §12).
 - Hari 11 pra-evaluasi #5 (`research/hew-spike-ext.md`): crate di luar pohon Hew, CRS/origin di attribute dictionary (round-trip bit-identik), ekspor CityJSON lolos val3dity 2/2. Celah: atribut per face, UI. #5 lulus sebagian.
 - Spike A2 (`research/spike-a2-native-render.md`): kernel+tessellate Hew native + wgpu batching. 1M face/167 ribu Object = 233 FPS, muat 1,06 dtk, RSS 1,8 GB (web Hew crash). Premis A2 terbukti untuk render/memori.
+- Spike A2 inference: 167 ribu Object, indeks 143 ms, snap 16/26 µs (median/p95), pick 1 µs; query pertama 3,6 dtk (struktur lazy).

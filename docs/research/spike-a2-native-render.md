@@ -27,3 +27,19 @@ Setup:
    - MSAA dan edge bergaya CAD.
    - UI egui.
    - RTC: posisi dari `tessellate` berupa f32 koordinat world, jadi geometri harus sudah lokal (lihat S2).
+
+## Tambahan: snapping dan picking dengan crate `inference` Hew (native)
+
+Sumber: [`spike-a2-inference.rs`](spike-a2-inference.rs). Setup:
+- Semua Object dimasukkan ke `InferenceScene`.
+- Lalu dijalankan 1.000 query dari kamera setinggi ±120 m ke titik acak di seluruh scene.
+- Jenis query: `resolve` (snap dengan cone aperture 0,01) dan `pick_face`.
+
+| Model | Object | Bangun indeks | Query snap pertama | Snap median / p95 / maks (setelah query pertama) | `pick_face` median / p95 |
+|---|---|---|---|---|---|
+| Grid 129² | 16.641 | 14 ms | ±0,26 s | 12 / 14 µs | 1 / 2 µs |
+| Grid 409² | 167.281 | 143 ms | **3,6 s** | 16 / 26 / 65 µs | 1 / 2 µs |
+
+Kesimpulan: snapping dan picking Hew tetap interaktif pada 167 ribu Object. Yang perlu ditangani:
+- Query pertama membangun struktur tambahan secara lazy dan butuh 3,6 detik. Solusinya: picu sekali di thread latar setelah model dimuat.
+- `pick_face` mengenai 943 dari 1.000 sinar. Sisanya jatuh di celah antar-bangunan, jadi angka ini wajar.
