@@ -19,3 +19,4 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
 - Hari 7, spike FPS (`research/hew-spike-fps.md`): Chromium headless + Metal M4. 16,6 ribu Object = 14 FPS (33 ribu draw/frame); 167 ribu Object = crash. 1.024 Object × 1.000 face = 122 FPS. #2 gagal untuk kota; batas = 2 draw call per Object.
 - CI PR #2 hijau 3 OS (log dicek: PASS kedua fixture di tiap OS). Tidak di-merge sendiri: menunggu review manusia (AGENTS §12).
 - Hari 11 pra-evaluasi #5 (`research/hew-spike-ext.md`): crate di luar pohon Hew, CRS/origin di attribute dictionary (round-trip bit-identik), ekspor CityJSON lolos val3dity 2/2. Celah: atribut per face, UI. #5 lulus sebagian.
+- Spike A2 (`research/spike-a2-native-render.md`): kernel+tessellate Hew native + wgpu batching. 1M face/167 ribu Object = 233 FPS, muat 1,06 dtk, RSS 1,8 GB (web Hew crash). Premis A2 terbukti untuk render/memori.

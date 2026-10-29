@@ -83,4 +83,6 @@ Perbandingan dengan jalur A, untuk kebutuhan kita:
   - F0 ±40–60 jam: renderer + shell.
   - v0.1 ±100–130 jam, di antara jalur A (40 jam) dan B (200 jam), karena kernel, push/pull, undo, dan inference tidak ditulis ulang.
 
+**Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Picking, edit inkremental, dan UI belum diuji.
+
 Ini usulan, bukan keputusan. Keputusan A, A2, atau B tetap diambil manusia di Hari 12 (K2), setelah #4 dan #6 selesai.
