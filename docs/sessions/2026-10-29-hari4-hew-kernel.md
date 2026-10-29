@@ -10,3 +10,9 @@ Tujuan: pahami alur push/pull Hew, tulis penjelasan 1 halaman.
 - Kriteria #4: menunggu manusia menjawab 5 pertanyaan.
 
 Langkah berikut: manusia uji pemahaman; Hari 5 buka issue scope geospasial di Hew (kriteria #6, butuh persetujuan karena posting publik).
+
+Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
+- Hari 6, spike S2 (`research/hew-spike-s2-utm.md`): hipotesis terbukti. Kotak diputar 30° di Y≈9,15e6 → 3–13/100 push/pull ditolak; debug panic di clone (aman di release). Lokal/10 km → 0 tolak. #3 lulus bersyarat (pakai origin lokal).
+- Hari 5: draf issue Hew (`research/hew-issue-draft.md`), TIDAK diposting (butuh persetujuan manusia).
+- Hari 8–9: CI `validate-lod` 3 OS + fixture LOD1 + `scripts/validate_lod.py` di PR #2.
+- Hari 10, spike S3 (`research/spike-s3-manifold.md`): proptest 1.000 kasus lulus lokal; UTM absolut residu planaritas 1,6e-7 m.

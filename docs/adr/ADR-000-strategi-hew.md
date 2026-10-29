@@ -26,7 +26,12 @@ Hasil sementara:
   - Clippy `-D warnings` bersih.
   - Catatan untuk kriteria #4: kode Rust di `crates/` berjumlah ±279 ribu baris.
 - #4 **menunggu manusia**. Penjelasan alur push/pull dan 5 pertanyaan uji ada di `docs/research/hew-kernel.md`. Lulus bila manusia bisa menjawab tanpa melihat dokumen.
-- Temuan untuk #3: `tol::POINT_MERGE = 1e-9` m, sedangkan ulp `f64` di Y ≈ 9,15e6 ≈ 1,86e-9 m. Uji di Hari 6 dengan koordinat absolut dan dengan koordinat lokal + origin.
+- #3 **lulus bersyarat, bagian kernel** (2026-10-29, `docs/research/hew-spike-s2-utm.md`).
+  - Push/pull yang diterima selalu presisi (galat ≤ 1,3e-9 m).
+  - Kotak yang diputar 30° di koordinat UTM absolut (Y ≈ 9,15e6) membuat 3–13% push/pull ditolak (`NonManifoldResult`). Penyebabnya toleransi absolut 1e-9 m yang lebih kecil dari ulp `f64`.
+  - Dengan koordinat lokal, termasuk pada jarak 10 km: 0 penolakan.
+  - Syarat lulus: geometri disimpan relatif terhadap origin proyek (ADR-006).
+  - Bagian render (jitter di viewport) belum diuji.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
 
 Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, dengan Hew sebagai referensi.
