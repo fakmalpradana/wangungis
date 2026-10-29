@@ -102,7 +102,7 @@ Perbandingan dengan jalur A, untuk kebutuhan kita:
 
     Rentang yang lebih jujur: **v0.1 ±140–200 jam**. Pembanding: jalur A dengan biaya perbaikan menjadi ±100–160 jam, dan jalur B ±200 jam.
 
-**Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Revisi dengan dokumen, buffer, dan indeks dimuat bersamaan: model kota 25 ribu × 40 face mencapai 203 FPS (web Hew 8,6 FPS), RSS 3,5 GB, dan waktu sampai interaktif 7,8 detik. Snap pertama setelah edit butuh 5,9 detik, masalah yang sama dengan jalur A. UI belum diuji.
+**Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Revisi dengan dokumen, buffer, dan indeks dimuat bersamaan: model kota 25 ribu × 40 face mencapai 203 FPS (web Hew 8,6 FPS), RSS 3,5 GB, dan waktu sampai interaktif 7,8 detik. Snap pertama setelah edit butuh 5,9 detik, masalah yang sama dengan jalur A. Mitigasi tanpa mengubah Hew (satu `InferenceScene` per tile 100 m) menurunkannya ke **7,8 ms**; snapping lintas tile belum ditangani (estimasi 10–20 jam, asumsi). UI belum diuji.
 
 **Usulan aturan keputusan tiga jalur** (menggantikan aturan biner A/B; menunggu persetujuan manusia):
 - **A**: hanya bila #2 lulus setelah perbaikan yang diterima upstream, dan #4, #5, #6 lulus.

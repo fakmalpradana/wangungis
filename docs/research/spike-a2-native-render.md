@@ -32,6 +32,24 @@ Pada model kota yang sama, web Hew mencapai 8,6 FPS dengan waktu muat 10 detik.
 - Di skala kota, setiap edit diikuti jeda 3,5–6 detik pada gerakan kursor berikutnya. Waktu sampai interaktif (5–8 detik) juga melewati target ≤ 3 detik.
 - Perbaikan: indeks inkremental, misalnya BVH per Object + BVH tingkat atas, atau indeks per tile. Ini perubahan desain di crate `inference`: butuh PR upstream atau fork. Estimasi **asumsi** 20–40 jam.
 
+## Mitigasi tanpa mengubah Hew: satu `InferenceScene` per tile 100 m
+
+Sumber: [`spike-a2-inference-tiled.rs`](spike-a2-inference-tiled.rs). Setiap Object dimasukkan ke scene milik tile tempat vertex pertamanya berada. Edit hanya membuat tile itu kotor, dan query hanya menyentuh tile di bawah kursor.
+
+| Model | Tile (Object/tile) | Bangun | Pemanasan semua tile (serial) | Daftar ulang 1 Object | Snap pertama **setelah edit** | Berikutnya |
+|---|---|---|---|---|---|---|
+| Kota tiruan 25k × 40 | 380 (±65) | 0,30 s | 2,30 s | 0,1 ms | **7,8 ms** (sebelumnya 5,9 s) | 35 µs |
+| Grid kotak 167k | 2.009 (±83) | 0,16 s | 0,56 s | 0,007 ms | **0,48 ms** (sebelumnya 3,5 s) | 8 µs |
+
+Kesimpulan:
+- Jeda setelah edit **hilang** dengan wrapper per tile di atas crate `inference` yang tidak diubah.
+- Pemanasan per tile saling independen, jadi bisa diparalelkan antar-thread karena setiap tile punya scene sendiri. Dengan begitu waktu sampai interaktif untuk model kota kemungkinan turun ke ±2 detik. Angka ini **asumsi** dan belum diukur.
+- Yang belum ditangani:
+  - Snapping lintas batas tile: query tile tetangga, lalu gabungkan hasilnya dengan aturan prioritas `SnapKind` yang sama.
+  - Garis inference panjang yang melewati banyak tile.
+  - Object yang lebih besar dari satu tile.
+- Estimasi **asumsi**: 10–20 jam. Lebih murah daripada memodifikasi `inference` (20–40 jam) dan tidak butuh persetujuan upstream.
+
 ## Kesimpulan
 1. Masalah #2 di Hew sepenuhnya berasal dari lapisan web/renderer, bukan dari kernel.
 2. Dengan kernel Hew yang dipakai native dan batching sederhana, model 1M face / 167 ribu Object berjalan **233 FPS**. Itu ±8× di atas target v1.0 untuk 10M face (≥ 30 FPS) bila diskalakan linear, dan ini masih **asumsi**.
