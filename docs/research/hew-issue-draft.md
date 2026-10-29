@@ -33,7 +33,10 @@ Downstream, I plan to keep geometry relative to a project origin, so this doesn'
 
 I'm happy to turn the spike into a failing spec if that's useful.
 
-**2. Extension points.**
+**2. Snapping index at city scale.**
+With ~25k–167k Objects, the first `resolve()` after any mutation takes 3.5–6 s. This is because `InferenceScene` marks the whole spatial index dirty and rebuilds it lazily ("lazy full rebuild on the next query"). Steady-state queries are fast (15–30 µs). Would you be open to an incremental index, for example per-Object BVHs under a top-level BVH, if I propose one with specs first?
+
+**3. Extension points.**
 The geospatial parts would need:
 - A project CRS (EPSG code) plus an f64 origin stored in the document.
 - Per-object semantic attributes (e.g. RoofSurface, WallSurface) that survive edits.

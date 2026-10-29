@@ -94,7 +94,48 @@ fn main() {
     let t_tess = t0.elapsed() - t_load;
     println!("objects {objects}, faces {faces}, triangles {}, edge segments {}, load {:.2?}, tessellate+merge {:.2?}",
         idx.len() / 3, edges.len() / 2, t_load, t_tess);
-    drop(doc);
+    // Keep the document resident and build the snapping index too, so RSS and
+    // time-to-interactive cover document + render buffers + spatial index together.
+    let t_idx = Instant::now();
+    let mut scene = inference::InferenceScene::new();
+    let ids: Vec<_> = doc.live_object_ids().into_iter().filter(|o| doc.is_world_object(*o)).collect();
+    for oid in &ids {
+        scene.add_object(*oid, doc.object(*oid).unwrap(), &kernel::Transform::IDENTITY);
+    }
+    let mid = [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0];
+    let query = |scene: &inference::InferenceScene, dx: f64| {
+        let target = kernel::Point3::new(mid[0] + dx, mid[1], 4.5);
+        let eye = kernel::Point3::new(target.x - 60.0, target.y - 80.0, 120.0);
+        let t = Instant::now();
+        let hit = scene.resolve(&inference::SnapQuery {
+            weights: inference::SnapWeights::default(),
+            ray: inference::PickRay { origin: eye, direction: target - eye },
+            anchor: None, lock: None, aperture: 0.01, aperture_mode: inference::ApertureMode::Cone,
+            constraint_plane: None, soft_axis_aperture_scale: None, off_plane_points: false, see_through_points: false,
+        }).is_some();
+        (t.elapsed(), hit)
+    };
+    let (warm, _) = query(&scene, 0.0);
+    let t_index = t_idx.elapsed();
+    println!("index build + first (lazy) snap {:.2?} (first snap alone {warm:.2?}); time to interactive {:.2?}", t_index, t_load + t_tess + t_index);
+    let (steady, _) = query(&scene, 7.0);
+    // Edit one Object (push/pull its top), then re-register it, as an editor would.
+    let mut doc = doc;
+    let victim = ids[ids.len() / 2];
+    let top = doc.object(victim).unwrap().faces().iter()
+        .find(|(_, f)| f.plane.normal().approx_eq(kernel::Vec3::new(0.0, 0.0, 1.0), kernel::tol::NORMAL_DIRECTION))
+        .map(|(id, _)| id).unwrap();
+    let t_edit = Instant::now();
+    doc.apply_object_op(victim, kernel::KernelOp::PushPull { face: top, distance: 2.0 }).unwrap();
+    let edit = t_edit.elapsed();
+    let t_re = Instant::now();
+    scene.remove_object(victim);
+    scene.add_object(victim, doc.object(victim).unwrap(), &kernel::Transform::IDENTITY);
+    let mesh = tessellate::tessellate(doc.object(victim).unwrap(), &palette).unwrap();
+    let reindex = t_re.elapsed();
+    let (after_edit, _) = query(&scene, 0.0);
+    let (after_edit2, _) = query(&scene, 3.0);
+    println!("steady snap {steady:.2?}; edit push/pull {edit:.2?}; re-index + re-tessellate one object {reindex:.2?} ({} tris); snap after edit {after_edit:.2?}, next {after_edit2:.2?}", mesh.indices.len() / 3);
 
     // --- wgpu offscreen ---
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());

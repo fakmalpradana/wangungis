@@ -12,18 +12,22 @@ Bila model kita memakai face poligon planar, apakah alur berikut tetap menghasil
 - Bangunan: footprint L (8–30 m per sisi, takik 20–70%) diekstrusi 3–20 m.
 - Bukaan jendela (0,6–2 × 0,6–1,5 m) dikurangkan dari dinding selatan sebagai kantong sedalam 0,5 m.
 - Seluruh model diputar 0–360° dan digeser ke origin acak.
-- Segitiga hasil dikelompokkan menjadi face bila normalnya sama (toleransi sudut 1e-9) dan offset bidangnya sama (toleransi 1e-6 m). Lalu diukur jarak terbesar vertex ke bidang face-nya.
+- Kedua operand diputar dan digeser **sebelum** boolean, jadi boolean dikerjakan di frame akhir.
+- Segitiga hasil dikelompokkan menjadi face bila sudut antar-normal < 1e-9 rad (lewat |n₁ × n₂|) dan offset bidangnya sama (toleransi 1e-6 m).
+- Hasil wajib tepat **13 face**: 8 face prisma L (dinding selatan tetap satu face berlubang) + 5 face kantong.
+- Lalu diukur jarak terbesar vertex ke bidang face-nya.
+- Revisi 2026-10-29, setelah review Gemini. Versi pertama tidak memeriksa jumlah face, toleransi sudutnya berbasis cos (±4,5e-5 rad), dan boolean dikerjakan sebelum transformasi.
 
 ## Hasil
 
 | Kasus | Jumlah | Volume (galat relatif) | Genus | Sliver | Residu planaritas maks |
 |---|---|---|---|---|---|
-| Lokal (origin ±1 km), proptest | 1.000 kasus acak | < 1e-9, semua lulus | 0 | 0 | ≤ 1e-9 m, semua lulus |
-| UTM absolut (430000,123; 9150000,456) | 200 rotasi | 1,4e-10 | 0 | 0 | **1,6e-7 m** |
+| Lokal (origin ±1 km), proptest | 1.000 kasus acak | < 1e-9, semua lulus | 0 | 0 | ≤ 1e-9 m, dan selalu tepat 13 face |
+| UTM absolut (430000,123; 9150000,456) | 200 rotasi | 1,4e-10 | 0 | 0 | 9,3e-9 m, tetapi **hanya 1/200 kembali menjadi 13 face**; sisanya pecah menjadi banyak face kecil |
 
 ## Kesimpulan
 1. Dengan koordinat lokal, alur poligon → Manifold → poligon **lulus**. Face hasil pengelompokan ulang planar dalam 1e-9 m, dan volumenya eksak untuk keperluan praktis. Kriteria keluar S3 terpenuhi.
-2. Pada koordinat UTM absolut, residu planaritas 1,6e-7 m. Angka ini masih jauh di bawah 1 mm, tetapi 160 kali lebih besar dari toleransi nanometer. Kesimpulannya sama dengan S2: geometri harus disimpan relatif terhadap origin proyek, dan toleransi kernel tidak boleh dipakai pada koordinat absolut.
+2. Pada koordinat UTM absolut, segitiga dari face yang sama punya normal yang berbeda lebih dari 1e-9 rad. Akibatnya 199 dari 200 kasus tidak bisa disusun kembali menjadi face poligon yang benar. Kesimpulannya sama dengan S2: geometri harus disimpan relatif terhadap origin proyek, dan toleransi kernel tidak boleh dipakai pada koordinat absolut.
 3. Untuk jalur A, `manifold-csg` punya target `wasm32-unknown-unknown`, tetapi berstatus **provisional**:
    - Butuh fitur `unstable-wasm-uu` dan LLVM 20+.
    - Tidak ada runtime exception, jadi exception di STL langsung membuat program abort.
@@ -31,4 +35,7 @@ Bila model kita memakai face poligon planar, apakah alur berikut tetap menghasil
 
    Belum diuji di spike ini. Ini relevan untuk kriteria #5 (Hari 11). Alternatifnya, Hew sudah punya boolean sendiri (`boolean.rs`).
 
-Belum diuji: bukaan yang menembus dinding berketebalan (model LOD3 dengan dinding solid), dan sliver pada kasus hampir koplanar.
+Belum diuji:
+- Masukan berupa face poligon dari kernel half-edge sungguhan. Operand dibuat dengan primitif Manifold, bukan hasil triangulasi face kita.
+- Bukaan yang menembus dinding berketebalan (model LOD3 dengan dinding solid).
+- Sliver pada kasus hampir koplanar.

@@ -26,7 +26,10 @@ Satu dokumen berisi pohon **Object**, Group, Component, Sketch, dan Guide. Setia
       - Jalur cepat: semua tepi tegak lurus, misalnya atas kotak. Cukup geser vertex dan hitung ulang bidang face.
       - Jalur dinding (`push_pull_build_walls`) diikuti `validate_sweep_result` untuk menolak self-intersection.
       - Jalur *collapse* menutup kembali undakan sebidang.
-   5. Validasi akhir (`check_invariants` dan `validate`) selalu jalan, juga di build release. Bila gagal, hasilnya error bertipe `NonManifoldResult`, dan Object asli tidak tersentuh.
+   5. Validasi akhir pada salinan:
+      - `check_invariants` hanya aktif di build debug, dan langsung panic bila invariant rusak.
+      - `validate` selalu jalan, juga di build release, dan menolak dengan error bertipe `NonManifoldResult`.
+      - Object asli tidak tersentuh dalam kedua kasus.
    6. Salinan menggantikan Object asli.
    7. Laporan hasil memuat face yang dibuat dan yang dihapus, serta penanda apakah undo butuh `unbuild_push_pull`. Undo khusus ini diperlukan untuk dinding miring, karena dorongan `-d` biasa tidak bisa mengembalikannya.
 

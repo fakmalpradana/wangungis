@@ -17,11 +17,26 @@ Setup:
 | Grid 289² | 83.521 | 501.126 | 1.002.252 | 0,52 s | 0,25 s | 0,9 GB | 2,41 ms | 415 | 2,2 FPS |
 | Grid 409² | 167.281 | 1.003.686 | 2.007.372 | 1,06 s | 0,49 s | 1,8 GB | 4,30 ms | **233** | tab crash |
 
+## Revisi: dokumen, buffer, dan indeks dimuat bersamaan, plus tes edit (2026-10-29, setelah review Gemini)
+Versi pertama membebaskan `Document` sebelum mengukur render, dan indeks `inference` diukur di program terpisah. Versi ini menyimpan semuanya di memori sekaligus, lalu menguji satu edit.
+
+| Model | Object / face | Muat + tessellate | Indeks + snap pertama | **Waktu sampai interaktif** | RSS total | FPS | Snap stabil | Edit 1 push/pull | Snap pertama **setelah edit** |
+|---|---|---|---|---|---|---|---|---|---|
+| Kota tiruan 25k × 40 face | 24.964 / 998.560 | 0,97 + 0,58 s | 6,25 s | **7,8 s** | 3,5 GB | **203** | 0,9 ms | 0,1 ms (+ indeks ulang dan tessellate ulang 1 Object 22 ms) | **5,9 s** |
+| Grid kotak 409² | 167.281 / 1.003.686 | 1,03 + 0,49 s | 3,71 s | **5,2 s** | 2,7 GB | 232 | 31 µs | 0,03 ms (+ 17 ms) | **3,5 s** |
+
+Pada model kota yang sama, web Hew mencapai 8,6 FPS dengan waktu muat 10 detik.
+
+**Masalah baru, berlaku untuk jalur A dan A2:**
+- `InferenceScene` di Hew membangun ulang seluruh indeks spasial secara lazy setelah *setiap* mutasi. Komentar di kodenya: "mark it dirty for a lazy full rebuild on the next query (per-committed-op, never per-frame)".
+- Di skala kota, setiap edit diikuti jeda 3,5–6 detik pada gerakan kursor berikutnya. Waktu sampai interaktif (5–8 detik) juga melewati target ≤ 3 detik.
+- Perbaikan: indeks inkremental, misalnya BVH per Object + BVH tingkat atas, atau indeks per tile. Ini perubahan desain di crate `inference`: butuh PR upstream atau fork. Estimasi **asumsi** 20–40 jam.
+
 ## Kesimpulan
 1. Masalah #2 di Hew sepenuhnya berasal dari lapisan web/renderer, bukan dari kernel.
 2. Dengan kernel Hew yang dipakai native dan batching sederhana, model 1M face / 167 ribu Object berjalan **233 FPS**. Itu ±8× di atas target v1.0 untuk 10M face (≥ 30 FPS) bila diskalakan linear, dan ini masih **asumsi**.
-3. Waktu buka 1,55 detik total, memenuhi target ≤ 3 detik.
-4. Premis opsi A2 terbukti untuk render dan memori. Yang belum dibuktikan:
+3. Muat + tessellate butuh 1,55 detik. Tetapi **waktu sampai interaktif 5,2–7,8 detik** karena indeks snapping (lihat revisi di atas), jadi target ≤ 3 detik **belum** terpenuhi.
+4. Premis opsi A2 terbukti untuk render. Untuk memori, 3,5 GB pada model 1M face masih di bawah RAM 16 GB, tetapi bukan angka kecil. Yang belum dibuktikan:
    - Picking per Object di buffer gabungan, misalnya lewat ID buffer atau BVH dari crate `inference` Hew.
    - Update inkremental saat satu Object diedit: buffer harus di-patch per rentang, bukan dibangun ulang semuanya.
    - MSAA dan edge bergaya CAD.

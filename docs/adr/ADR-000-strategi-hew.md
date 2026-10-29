@@ -29,20 +29,33 @@ Hasil sementara:
 - #2 **gagal untuk skenario kota** (2026-10-29, `docs/research/hew-spike-fps.md`).
   - GPU sanggup: 1M face dalam 1.024 Object = 122 FPS.
   - Tetapi setiap Object = 2 draw call tanpa batching: 16,6 ribu Object = 14 FPS, 41,6 ribu = 5,6 FPS, dan 167 ribu Object membuat tab crash saat dimuat.
-  - Kota LOD2 dengan 1M face ≈ 17–50 ribu Object, perkiraan 5–14 FPS.
+  - Diukur langsung pada kota tiruan (25 ribu Object × 40 face = 1M face): **8,6 FPS**, waktu muat 10 detik.
   - Bisa diperbaiki dengan batching renderer (estimasi **asumsi** 40–80 jam).
-- #5 **lulus sebagian** (pra-evaluasi 2026-10-29, `docs/research/hew-spike-ext.md`).
+  - Diukur di Chromium headless + Metal, bukan di Tauri WKWebView dengan DPR 2. Jadi angka ini proksi.
+- #5 **lulus sebagian, sisanya bergantung pada #6** (pra-evaluasi 2026-10-29, `docs/research/hew-spike-ext.md`).
   - Crate di luar pohon Hew bisa menyimpan CRS + origin di attribute dictionary (round-trip bit-identik) dan mengekspor CityJSON yang lolos val3dity, tanpa mengubah kernel.
+  - Atribut Object bertahan melewati push/pull, undo, redo, dan reload (diuji dengan assert).
   - Celah: belum ada atribut per face, dan integrasi UI butuh perubahan `wasm-api`/`app`, yaitu PR upstream atau fork.
-- #3 **lulus bersyarat, bagian kernel** (2026-10-29, `docs/research/hew-spike-s2-utm.md`).
-  - Push/pull yang diterima selalu presisi (galat ≤ 1,3e-9 m).
+  - Indeks snapping (`inference`) dibangun ulang penuh setelah setiap edit, sehingga muncul jeda 3,5–6 detik di skala kota. Perbaikannya juga butuh PR atau fork.
+- #3 **belum lulus** (2026-10-29, `docs/research/hew-spike-s2-utm.md`). Bagian kernel lulus bersyarat; bagian render belum diuji.
+  - Push/pull yang diterima selalu presisi (galat ≤ 1,5e-9 m, metrik pencocokan vertex satu-satu).
   - Kotak yang diputar 30° di koordinat UTM absolut (Y ≈ 9,15e6) membuat 3–13% push/pull ditolak (`NonManifoldResult`). Penyebabnya toleransi absolut 1e-9 m yang lebih kecil dari ulp `f64`.
   - Dengan koordinat lokal, termasuk pada jarak 10 km: 0 penolakan.
   - Syarat lulus: geometri disimpan relatif terhadap origin proyek (ADR-006).
-  - Bagian render (jitter di viewport) belum diuji.
+  - Bagian render (jitter di viewport) belum diuji. UI Hew juga belum punya lapisan origin-shift.
 - #7 **lulus** (2026-10-29): manusia menerima AGPL-3.0-only (keputusan K1).
 
-Status sementara (2026-10-29): #1, #7 lulus; #3 lulus bersyarat; #5 lulus sebagian; #2 gagal untuk skenario kota; #4 dan #6 belum. Akibatnya jalur A hanya mungkin bila #4, #5, dan #6 semuanya lulus, dan #3 bersyarat diterima. Biaya batching renderer harus masuk estimasi jalur A.
+Status sementara (2026-10-29, setelah review silang Gemini):
+- Lulus: #1, #7.
+- Gagal: #2.
+- Belum lulus: #3 (bagian render belum diuji).
+- Bergantung pada #6: #5.
+- Belum diuji: #4, #6.
+
+Menurut aturan di bawah, jalur A sudah **tidak bisa** lulus: #2 gagal, sehingga semua kriteria lain wajib lulus, padahal #5 tidak bisa lulus penuh tanpa #6. Biaya yang harus masuk ke estimasi jalur A bila tetap dipilih:
+- Batching renderer: 40–80 jam.
+- Indeks inference inkremental: 20–40 jam.
+- Lapisan origin-shift di UI.
 
 Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, dengan Hew sebagai referensi.
 
@@ -81,8 +94,17 @@ Perbandingan dengan jalur A, untuk kebutuhan kita:
   - API kernel Hew belum stabil (5 rilis dalam 11 hari), jadi butuh sinkronisasi berkala.
 - **Estimasi (asumsi, belum diukur):**
   - F0 ±40–60 jam: renderer + shell.
-  - v0.1 ±100–130 jam, di antara jalur A (40 jam) dan B (200 jam), karena kernel, push/pull, undo, dan inference tidak ditulis ulang.
+  - v0.1 ±100–130 jam (asumsi awal). Ada dua koreksi dari review Gemini:
+    - (a) Orkestrasi di `crates/wasm-api` (±24,7 ribu baris, mis. routing push-through ke boolean) juga harus diport atau dipakai ulang.
+    - (b) Indeks inference inkremental (20–40 jam) dibutuhkan baik di A maupun A2.
 
-**Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Picking, edit inkremental, dan UI belum diuji.
+    Rentang yang lebih jujur: **v0.1 ±140–200 jam**. Pembanding: jalur A dengan biaya perbaikan menjadi ±100–160 jam, dan jalur B ±200 jam.
+
+**Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Revisi dengan dokumen, buffer, dan indeks dimuat bersamaan: model kota 25 ribu × 40 face mencapai 203 FPS (web Hew 8,6 FPS), RSS 3,5 GB, dan waktu sampai interaktif 7,8 detik. Snap pertama setelah edit butuh 5,9 detik, masalah yang sama dengan jalur A. UI belum diuji.
+
+**Usulan aturan keputusan tiga jalur** (menggantikan aturan biner A/B; menunggu persetujuan manusia):
+- **A**: hanya bila #2 lulus setelah perbaikan yang diterima upstream, dan #4, #5, #6 lulus.
+- **A2**: bila #1, #3 (bagian kernel), dan #4 lulus, dan dependensi git ke crate inti Hew bisa dipin dan disinkronkan (kriteria ini belum diukur). Persetujuan pengelola (#6) hanya diperlukan untuk perubahan kernel seperti atribut per face dan indeks inkremental. Tanpa persetujuan itu, kita memelihara patch kecil di fork.
+- **B**: bila #4 gagal (kernel tidak bisa dipahami), atau bila sinkronisasi dengan Hew terbukti terlalu mahal.
 
 Ini usulan, bukan keputusan. Keputusan A, A2, atau B tetap diambil manusia di Hari 12 (K2), setelah #4 dan #6 selesai.

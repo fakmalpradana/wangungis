@@ -112,15 +112,32 @@ fn run(label: &'static str, x0: f64, y0: f64, rot: f64) -> Run {
     let us = [0.0, east];
     let vs = [0.0, d];
     let zs = [0.0, top];
-    let max_err = positions(&doc, obj)
+    // Bijective match: the box must still have exactly 8 vertices, one per
+    // expected corner of {0,east} x {0,d} x {0,top}; error = max Euclidean
+    // distance (local frame) from each corner to its vertex.
+    let local: Vec<[f64; 3]> = positions(&doc, obj)
         .iter()
         .map(|q| {
             let (dx, dy) = (q.x - x0, q.y - y0);
-            let u = dx * c + dy * s;
-            let v = -dx * s + dy * c;
-            off(u, &us).max(off(v, &vs)).max(off(q.z, &zs))
+            [dx * c + dy * s, -dx * s + dy * c, q.z]
         })
-        .fold(0.0, f64::max);
+        .collect();
+    let mut max_err = if local.len() == 8 { 0.0 } else { f64::INFINITY };
+    let mut used = [false; 8];
+    for &u in &us {
+        for &v in &vs {
+            for &z in &zs {
+                let (k, dist) = local
+                    .iter()
+                    .enumerate()
+                    .map(|(k, q)| (k, ((q[0] - u).powi(2) + (q[1] - v).powi(2) + (q[2] - z).powi(2)).sqrt()))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap();
+                if k < 8 && !used[k] { used[k] = true; } else { max_err = f64::INFINITY; }
+                max_err = max_err.max(dist);
+            }
+        }
+    }
 
     // Imprint a 1x1 m rectangle on the top face, then raise it 0.5 m (boss).
     let top_face = face_with(&doc, obj, Vec3::new(0.0, 0.0, 1.0), at(x0, y0, rot, 1.0, 1.0, top))

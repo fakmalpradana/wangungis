@@ -51,7 +51,9 @@ pub fn regroup(m: &Manifold, angle_tol: f64, dist_tol: f64) -> RoundTrip {
         };
         let hit = faces.iter_mut().find(|(fnrm, fd, _)| {
             let dot = fnrm[0] * n[0] + fnrm[1] * n[1] + fnrm[2] * n[2];
-            dot > 1.0 - angle_tol && (fd - d).abs() < dist_tol
+            let cx = [fnrm[1] * n[2] - fnrm[2] * n[1], fnrm[2] * n[0] - fnrm[0] * n[2], fnrm[0] * n[1] - fnrm[1] * n[0]];
+            let sin = (cx[0] * cx[0] + cx[1] * cx[1] + cx[2] * cx[2]).sqrt();
+            dot > 0.0 && sin < angle_tol && (fd - d).abs() < dist_tol
         });
         match hit {
             Some((_, _, pts)) => pts.extend([p, q, r]),
@@ -74,11 +76,13 @@ pub fn building_with_window(
     rot_deg: f64,
     (ox, oy): (f64, f64),
 ) -> Manifold {
-    let body = CrossSection::from_simple_polygon(&l_footprint(a, b, c, d)).extrude(h);
-    // Window: through the south wall (y = 0), wall assumed thicker than nothing:
-    // the box spans y in [-0.5, 0.5] so it cuts a 0.5 m deep pocket into the solid.
-    let window = Manifold::cube(ww, 1.0, wh, false).translate(wx, -0.5, wz);
-    (&body - &window).rotate(0.0, 0.0, rot_deg).translate(ox, oy, 0.0)
+    // Both operands are placed (rotated + translated) BEFORE the boolean, so the
+    // boolean itself runs in the final (possibly large-coordinate) frame.
+    let place = |m: Manifold| m.rotate(0.0, 0.0, rot_deg).translate(ox, oy, 0.0);
+    let body = place(CrossSection::from_simple_polygon(&l_footprint(a, b, c, d)).extrude(h));
+    // Window: a 0.5 m deep pocket into the south wall (y = 0); the box spans y in [-0.5, 0.5].
+    let window = place(Manifold::cube(ww, 1.0, wh, false).translate(wx, -0.5, wz));
+    &body - &window
 }
 
 #[cfg(test)]
@@ -118,6 +122,8 @@ mod tests {
             prop_assert!(((r.volume - v) / v).abs() < 1e-9, "volume {} vs {}", r.volume, v);
             prop_assert_eq!(r.genus, 0);
             prop_assert_eq!(r.slivers, 0);
+            // 8 faces of the L prism (south wall keeps its hole) + 5 pocket faces.
+            prop_assert_eq!(r.faces, 13, "regrouped face count");
             prop_assert!(r.planarity <= 1e-9, "planarity {:e}", r.planarity);
         }
     }
@@ -128,6 +134,7 @@ mod tests {
     fn utm_absolute_report() {
         let mut worst = 0.0f64;
         let mut worst_vol = 0.0f64;
+        let mut faces_ok = 0usize;
         for i in 0..200 {
             let rot = i as f64 * 1.7;
             let dims = (20.0, 15.0, 8.0, 6.0, 9.0);
@@ -135,8 +142,9 @@ mod tests {
             let r = check(dims, win, rot, (430_000.123, 9_150_000.456));
             let v = expected_volume(20.0, 15.0, 8.0, 6.0, 9.0, 1.2, 1.4);
             worst = worst.max(r.planarity);
+            faces_ok += (r.faces == 13) as usize;
             worst_vol = worst_vol.max(((r.volume - v) / v).abs());
         }
-        println!("UTM absolute, 200 rotations: max planarity residual {worst:.3e} m, max rel volume error {worst_vol:.3e}");
+        println!("UTM absolute, 200 rotations: max planarity residual {worst:.3e} m, max rel volume error {worst_vol:.3e}, regrouped into exactly 13 faces: {faces_ok}/200");
     }
 }

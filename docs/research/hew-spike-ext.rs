@@ -42,11 +42,6 @@ fn main() {
     let mut doc = Document::new();
     let a = make_box(&mut doc, 0.0, 0.0, 0.0, 10.0, 8.0, 6.0);
     let b = make_box(&mut doc, 20.0, 5.0, 30f64.to_radians(), 12.0, 9.0, 9.0);
-    // Raise b's roof 1.5 m with a push/pull (exercises an edit after creation).
-    let top = doc.object(b).unwrap().faces().iter()
-        .find(|(_, f)| f.plane.normal().approx_eq(Vec3::new(0.0, 0.0, 1.0), tol::NORMAL_DIRECTION))
-        .map(|(id, _)| id).unwrap();
-    doc.apply_object_op(b, KernelOp::PushPull { face: top, distance: 1.5 }).unwrap();
 
     // --- extension data in Hew attribute dictionaries (no kernel change) ---
     doc.attr_set(AttrTarget::Document, NS, "crs", text("EPSG:32749")).unwrap();
@@ -55,6 +50,18 @@ fn main() {
     for (obj, func) in [(a, "residential"), (b, "office")] {
         doc.attr_set(AttrTarget::Entity(EntityRef::Object(obj)), NS, "function", text(func)).unwrap();
     }
+
+    // Edits AFTER the attributes are set: push/pull, undo, redo. The object
+    // attribute must survive all of them (and the reload below).
+    let top = doc.object(b).unwrap().faces().iter()
+        .find(|(_, f)| f.plane.normal().approx_eq(Vec3::new(0.0, 0.0, 1.0), tol::NORMAL_DIRECTION))
+        .map(|(id, _)| id).unwrap();
+    doc.apply_object_op(b, KernelOp::PushPull { face: top, distance: 1.5 }).unwrap();
+    doc.undo().unwrap();
+    doc.redo().unwrap();
+    let func_of = |doc: &Document, o: ObjectId| doc.attr_get(&AttrTarget::Entity(EntityRef::Object(o))).unwrap()
+        .and_then(|d| d.get(NS)).and_then(|n| n.get("function")).cloned();
+    assert_eq!(func_of(&doc, b), Some(text("office")), "object attr survives push/pull + undo + redo");
 
     // --- round trip through .hew ---
     let bytes = doc.save();
@@ -68,6 +75,14 @@ fn main() {
         v => panic!("origin {v:?}"),
     };
     assert_eq!(org, origin, "origin must round-trip bit-exactly");
+    let funcs: Vec<_> = doc.live_object_ids().into_iter().filter_map(|o| {
+        doc.attr_get(&AttrTarget::Entity(EntityRef::Object(o))).ok().flatten()
+            .and_then(|d| d.get(NS)).and_then(|n| n.get("function")).cloned()
+    }).collect();
+    assert_eq!(funcs.len(), 2, "both object attrs survive reload");
+    let top_z = doc.live_object_ids().iter().filter_map(|o| doc.object(*o))
+        .flat_map(|o| o.vertices().values().map(|v| v.position.z)).fold(0.0, f64::max);
+    assert!((top_z - 10.5).abs() < 1e-9, "redone push/pull survives reload: top {top_z}");
 
     // --- export CityJSON 2.0: integer vertices in mm relative to the origin ---
     let scale = 0.001;

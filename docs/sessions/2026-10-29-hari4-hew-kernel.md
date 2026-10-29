@@ -21,3 +21,11 @@ Tambahan (mode otonom s.d. 11.00, diizinkan manusia):
 - Hari 11 pra-evaluasi #5 (`research/hew-spike-ext.md`): crate di luar pohon Hew, CRS/origin di attribute dictionary (round-trip bit-identik), ekspor CityJSON lolos val3dity 2/2. Celah: atribut per face, UI. #5 lulus sebagian.
 - Spike A2 (`research/spike-a2-native-render.md`): kernel+tessellate Hew native + wgpu batching. 1M face/167 ribu Object = 233 FPS, muat 1,06 dtk, RSS 1,8 GB (web Hew crash). Premis A2 terbukti untuk render/memori.
 - Spike A2 inference: 167 ribu Object, indeks 143 ms, snap 16/26 µs (median/p95), pick 1 µs; query pertama 3,6 dtk (struktur lazy).
+- Review silang Gemini PR #3: 12 temuan, mayoritas valid. Diperbaiki dan diukur ulang:
+  - S3: wajib 13 face, toleransi sudut sejati, boolean di frame akhir. Lokal tetap lulus; UTM hanya 1/200 utuh.
+  - #5: atribut diuji melewati push/pull, undo, redo, reload.
+  - S2: metrik pencocokan vertex satu-satu, kesimpulan sama.
+  - Kota tiruan 25 ribu × 40 face diukur langsung: web Hew 8,6 FPS vs A2 203 FPS.
+  - A2 dengan dokumen, buffer, dan indeks dimuat bersamaan: RSS 3,5 GB, waktu sampai interaktif 7,8 dtk.
+  - Temuan baru: indeks inference dibangun ulang penuh tiap edit → jeda 3,5–6 dtk.
+  - #3 diturunkan ke "belum lulus". Estimasi A2 direvisi ke 140–200 jam. Usulan aturan tiga jalur A/A2/B.
