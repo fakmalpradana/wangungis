@@ -91,3 +91,25 @@ jobs:
 
       - name: Validate LOD fixtures
         run: python scripts/validate_lod.py
+
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Debug: the Hew kernel's invariant checks are active.
+      - name: Test (debug)
+        run: cargo test --workspace --locked
+      # Release: typed refusals instead of debug panics (kernel_bound characterization).
+      - name: Test (release)
+        run: cargo test --workspace --locked --release

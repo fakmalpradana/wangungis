@@ -25,4 +25,8 @@
   - Sementara, semantik diturunkan dari normal face saat ekspor (`|n_z| > 0,9`). Cara ini **hanya berlaku untuk LOD1 di F0/v0.1**.
   - Cara ini salah untuk atap yang lebih curam dari ±26°, overhang/soffit, balkon, dan ClosureSurface. Cara ini juga membuang semantik hasil impor. Jadi bertentangan dengan ekspor tanpa kehilangan (di atas) dan dengan kriteria keluar v0.2 (round-trip 3D BAG).
   - **Sebelum v0.2 wajib ada** penyimpanan semantik per face: lewat PR ke Hew (`EntityRef::Face`) atau patch kecil di fork (ADR-000, #6).
+- **Koreksi 2026-11-01 (ADR-004):** satu `.hew` hanya memuat satu tile kernel, yaitu geometri ≤ 1,5 km dari origin-nya.
+  - Proyek kota menjadi wadah berisi banyak `.hew` (satu per tile) ditambah manifest proyek: origin, EPSG, dan daftar tile beserta offset `f64`.
+  - Bentuk wadahnya (zip atau folder) diputuskan saat tile kernel dibangun.
+  - Proyek kecil, satu tile, tetap satu `.hew` biasa yang bisa dibuka Hew.
 - Ekstensi file: `.hew` sampai ada alasan untuk berbeda (**asumsi**: file kita tetap bisa dibuka Hew, dan itu menguntungkan).
