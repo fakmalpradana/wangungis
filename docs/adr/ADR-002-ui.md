@@ -1,6 +1,6 @@
 # ADR-002: UI
 
-- Status: Proposed (bergantung ADR-000)
+- Status: **Accepted** 2026-11-01 untuk A2: **egui** (eframe) di atas wgpu (K2, ADR-000). Bagian jalur A/B di bawah disimpan sebagai riwayat.
 
 ## Keputusan
 - Jalur A: ikuti Hew — Tauri + TypeScript/React.
@@ -17,5 +17,5 @@
 - **Dear ImGui**: cocok untuk alat debug, kurang cocok untuk UI pengguna akhir (asumsi).
 - **Tauri + web di jalur B**: dua bahasa dan dua tumpukan build untuk satu orang.
 
-## Bila opsi A2 dipilih (ADR-000, menunggu K2)
+## Opsi A2 (dipilih, K2 2026-11-01)
 Keputusan untuk A2 sama dengan jalur B: **egui** (eframe) di atas wgpu. Lisensi Apache-2.0 menurut GitHub API (2026-10-29). Tool UI Hew (±37 ribu baris TypeScript) menjadi referensi perilaku. Karena AGPL sudah diterima (K1), porting langsung dengan atribusi juga diizinkan. Orkestrasi di `crates/wasm-api` (±24,7 ribu baris Rust) dievaluasi untuk dipakai ulang sebagai library biasa.

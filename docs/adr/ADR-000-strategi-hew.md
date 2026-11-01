@@ -1,6 +1,6 @@
 # ADR-000: Strategi terhadap Hew — spike evaluasi dulu
 
-- Status: **Accepted** (dipilih manusia 2026-10-28: jalur C)
+- Status: **Accepted** (dipilih manusia 2026-10-28: jalur C). Spike ditutup 2026-11-01 dengan keputusan K2 = **A2** (lihat bagian terakhir).
 - Konteks: [Hew](https://github.com/hew3d/hew) sudah menyediakan UX gaya SketchUp di atas kernel half-edge Rust (AGPL-3.0-only), tetapi tidak punya fitur geospasial/LOD. Rincian di `docs/research/teknologi.md` §0.
 
 ## Keputusan
@@ -111,3 +111,23 @@ Perbandingan dengan jalur A, untuk kebutuhan kita:
 - **B**: bila #4 gagal (kernel tidak bisa dipahami), atau bila sinkronisasi dengan Hew terbukti terlalu mahal.
 
 Ini usulan, bukan keputusan. Keputusan A, A2, atau B tetap diambil manusia di Hari 12 (K2), setelah #4 dan #6 selesai.
+
+## Keputusan K2 (2026-11-01): jalur A2
+
+Manusia mendelegasikan keputusan kepada agen: "keputusan saya mengikuti rekomendasi terbaik anda, jadi lanjutkan" (2026-11-01). Agen memilih **A2**, sesuai rekomendasi di `research/keputusan-k2.md`. Aturan keputusan tiga jalur di atas dipakai sebagai dasar pencatatan.
+
+Penyimpangan dari aturan itu, dicatat apa adanya:
+- **#4 tidak diuji.** Manusia menyatakan belum bisa menilai kode kernel. Syarat "#4 lulus" untuk A2 tidak terpenuhi. Penggantinya (lihat `plan/risiko.md` R6):
+  - Review silang agen lain (Gemini) untuk kebenaran pada setiap PR.
+  - Test otomatis wajib.
+  - Uji perilaku oleh 3D engineer pada rilis beta. Umpan baliknya menjadi sumber utama perbaikan.
+- **#6 ditunda.** A2 tidak butuh persetujuan pengelola Hew untuk mulai. Draf issue tetap di `research/hew-issue-draft.md`. Draf itu diposting baru ketika kita butuh perubahan kernel (misalnya atribut per face), dan selalu dengan persetujuan eksplisit manusia karena tampil publik atas nama akunnya.
+- **Sinkronisasi crate Hew belum diukur.** Ini diukur pada pembaruan pin pertama. Bila terlalu mahal, pertimbangkan pindah ke B (aturan di atas).
+
+Konsekuensi:
+- ADR-001..005 dan ADR-007 menjadi Accepted untuk A2.
+- ADR-006 Accepted dengan format `.hew` + atribut namespace `wangungis.*`.
+- Celah yang sudah terukur dan wajib ditangani di F0/v0.1:
+  - Renderer wgpu ber-batching + RTC (ADR-003).
+  - Indeks inference per tile (prototipe 7,8 ms; snapping lintas tile belum).
+  - Origin proyek: koordinat kernel lokal ≤ ±1.000 km (ADR-004).

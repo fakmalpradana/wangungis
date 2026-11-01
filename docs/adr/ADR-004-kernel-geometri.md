@@ -1,6 +1,6 @@
 # ADR-004: Kernel geometri
 
-- Status: Proposed
+- Status: **Accepted** 2026-11-01 untuk A2: kernel Hew + bagian "Bila opsi A2 dipilih" di bawah (K2, ADR-000). Keputusan umum di atasnya berlaku bila tidak bertentangan dengan bagian A2.
 
 ## Keputusan
 - Struktur utama: **half-edge** dengan face poligon planar (gaya SketchUp). Jalur A: milik Hew. Jalur B: ditulis sendiri (AGENTS.md §5).
@@ -17,7 +17,7 @@
 ## Risiko yang diuji di spike
 - Pemetaan face poligon ↔ mesh segitiga Manifold dan kembalinya tanpa kehilangan planaritas.
 
-## Bila opsi A2 dipilih (ADR-000, menunggu K2)
+## Opsi A2 (dipilih, K2 2026-11-01)
 - Half-edge, push/pull, undo, dan boolean memakai `kernel` Hew.
 - Predikat: Hew baru memakai orientasi 2D eksak. Kebutuhan `robust` 3D dievaluasi ulang.
 - Manifold menjadi opsional, untuk boolean berat dan LOD3.

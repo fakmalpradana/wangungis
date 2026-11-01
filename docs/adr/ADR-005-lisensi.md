@@ -1,6 +1,6 @@
 # ADR-005: Lisensi proyek
 
-- Status: Proposed (bergantung ADR-000)
+- Status: **Accepted** 2026-11-01: **AGPL-3.0-only** (K1 + K2 = A2, ADR-000). A2 memakai crate Hew yang AGPL-3.0-only, jadi pilihan GPL jalur B tidak berlaku.
 
 ## Keputusan
 - Jalur A: **AGPL-3.0-only** (wajib mengikuti Hew).

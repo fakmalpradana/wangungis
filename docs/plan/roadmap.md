@@ -1,6 +1,6 @@
 # Tahap 5 — Roadmap
 
-Status: draf 2026-10-29. Roadmap ini berbasis **milestone**. Setiap fase selesai bila semua kriteria keluarnya terpenuhi, bukan bila tanggalnya tiba. Waktu kerja manusia fleksibel, jadi estimasi ditulis dalam **jam manusia** (review, uji manual, keputusan, mengarahkan agen) lalu dikonversi ke bulan untuk beberapa ritme kerja.
+Status: draf 2026-10-29, dikoreksi 2026-11-01 untuk jalur A2. Roadmap ini berbasis **milestone**. Setiap fase selesai bila semua kriteria keluarnya terpenuhi, bukan bila tanggalnya tiba. Waktu kerja manusia fleksibel, jadi estimasi ditulis dalam **jam manusia** (review, uji manual, keputusan, mengarahkan agen) lalu dikonversi ke bulan untuk beberapa ritme kerja.
 
 Semua estimasi adalah **asumsi awal**. Koreksi setelah Fase 0 dengan data nyata (jam tercatat di log sesi).
 
@@ -30,6 +30,33 @@ Konversi kumulatif ke bulan kalender (likely; 1 bulan = 4,33 minggu):
 Rentang ekstrem: jalur A best @20 j/mgg = 3,5 bulan sampai v0.5; jalur B worst @5 j/mgg = 58,7 bulan. Selisih terbesar antara A dan B ada di v0.1, yaitu fondasi yang sudah dibangun Hew.
 
 Konteks jadwal manusia (dari profil): studi di Glasgow mulai September 2026. Ritme renggang (5 j/mgg) dianggap realistis selama semester. Ritme rapat cocok untuk masa libur.
+
+## Koreksi setelah K2 = A2 (2026-11-01)
+
+Jalur yang dipilih adalah **A2** (ADR-000). Tabel di atas memakai kolom jalur A dan B, jadi dibaca sebagai berikut.
+
+| Fase | Jalur A2: jam (best/likely/worst), **asumsi** | Dasar |
+|---|---|---|
+| F0 sisa | 30 / 50 / 80 | Shell egui + renderer wgpu ber-batching + RTC + origin proyek. Prototipe spike sudah ada (`research/spike-a2-*`). |
+| v0.1 | 100 / 140 / 200 | Seluruh tool UI ditulis ulang di atas kernel Hew. Estimasi ±140–200 dari `research/keputusan-k2.md`, dengan sisa F0 dipisah. |
+| v0.2–v0.5 | sama dengan kolom jalur A | Fitur geospasial/LOD tidak bergantung jalur. |
+
+Catatan:
+- **Jam manusia turun, risiko naik.** Pemilik tidak mereview kode kernel (ADR-000, K2). Jam manusia per fase didominasi keputusan dan uji perilaku, sehingga kemungkinan lebih rendah dari tabel. Gantinya, review silang agen (Gemini) dan test otomatis wajib di setiap PR. Uji beta oleh 3D engineer menjadi kriteria keluar tambahan sejak v0.1.
+- Retrospektif jam nyata Fase 0 belum bisa dihitung, karena jam manusia tidak tercatat di log sesi. Mulai F0 sisa, log sesi mencatat jam manusia.
+
+**Sisa pekerjaan F0 untuk A2:**
+1. Workspace Cargo: crate Hew `kernel`, `inference`, `tessellate` sebagai dependensi git yang dipin ke satu commit. CI `cargo test` + clippy di 3 OS.
+2. Shell egui/eframe dengan viewport wgpu: renderer ber-batching per tile, RTC, edge rendering (#31, #34, #36).
+3. Origin proyek: dokumen menyimpan CRS + origin `f64` di atribut `wangungis.*` (ADR-006). Koordinat kernel lokal ≤ ±1.000 km.
+4. Golden-image test: kotak di origin vs di UTM 49S harus identik dalam toleransi piksel (sisa kriteria S2).
+
+**Tiga fitur pertama v0.1** (dipilih 2026-11-01; ini yang pertama bisa diuji 3D engineer):
+1. Navigasi + seleksi: orbit/pan/zoom, zoom extents, pilih face/edge lewat picking `inference` per tile (#31, #32, #19).
+2. Gambar: Line + Rectangle dengan snapping endpoint/midpoint, inference sumbu, dan input angka VCB (#2, #3, #20, #22).
+3. Push/Pull + undo/redo lewat `kernel` Hew, dengan pratinjau langsung (#6, #17).
+
+Alasan: ketiganya cukup untuk tugas referensi v0.1 "kotak 5×4×3 m", dan masing-masing menguji satu risiko terukur dari spike (render, inference, kernel).
 
 ## Fase 0 — Fondasi dan spike
 

@@ -4,25 +4,27 @@ Sumber kebenaran tunggal. CLAUDE.md dan GEMINI.md hanya mengimpor file ini.
 Bagian bertanda `TODO` diisi setelah riset (Tahap 0) dan ADR selesai. Jangan menebak nilainya.
 
 ## 1. Proyek
-- Nama: **WangunGIS** (identifier: `wangungis`; folder repo lokal masih `citySketch`). Open source, lisensi: `TODO` (AGPL-3.0-only diterima, final di ADR-005 setelah spike).
+- Nama: **WangunGIS** (identifier: `wangungis`; folder repo lokal masih `citySketch`). Open source, lisensi: **AGPL-3.0-only** (ADR-005).
 - Tujuan: aplikasi pemodelan 3D desktop dengan UX dan fitur setara SketchUp, fokus awal pemodelan bangunan LOD1–LOD3 yang cepat dan presisi.
 - Platform: macOS, Windows, Linux. Satu basis kode. Dev utama di macOS (Apple Silicon).
-- Pelaksana: 1 manusia (pemilik/reviewer) + agen AI. Tidak ada tim lain, tidak ada budget uang.
+- Pelaksana: 1 manusia (pemilik, pengambil keputusan) + agen AI. Penguji beta: 3D engineer milik pemilik, menguji perilaku aplikasi dan memberi umpan balik langsung. Tidak ada budget uang.
+- Strategi: jalur **A2** (ADR-000, K2 2026-11-01). Crate inti Hew (`kernel`, `inference`, `tessellate`, `mesh-export`) dipakai sebagai library, dengan aplikasi native sendiri.
 - Clean-room: tiru alur kerja dan perilaku UX SketchUp, JANGAN salin kode, aset, ikon, nama, atau merek dagangnya.
 
 ## 2. Prinsip (urutan prioritas)
 1. Benar dan presisi sebelum cepat. Geometri yang salah merusak semuanya.
 2. Reuse library matang sebelum menulis sendiri (lihat §5).
-3. Sederhana, kecil, mudah dipahami manusia. Satu manusia harus sanggup mereview semuanya.
+3. Sederhana, kecil, mudah dipahami. Pemilik tidak mereview kode kernel baris per baris (K2, 2026-11-01). Karena itu kebenaran dijaga oleh test otomatis, review silang agen lain (§12), dan uji beta oleh 3D engineer. Ringkasan PR tetap wajib bisa dipahami pemilik.
 4. Setiap perilaku punya test otomatis. Tanpa test, fitur dianggap belum ada.
 5. Jangan mengarang. Jika tidak tahu, baca kode/dokumen, cari sumber, atau tanya manusia.
 
 ## 3. Stack
-- Bahasa inti: `TODO (Rust atau C++, putusan ADR-001)`
-- UI: `TODO (ADR-002)`
-- Rendering: `TODO (ADR-003)`
-- Kernel geometri: `TODO (ADR-004)`
-- Scripting/plugin: Python (utama), opsi WASM `TODO`
+- Bahasa inti: Rust (ADR-001)
+- UI: egui/eframe (ADR-002)
+- Rendering: wgpu, batching per tile, RTC (ADR-003)
+- Kernel geometri: crate `kernel` Hew, dependensi git dipin ke satu commit. Manifold opsional untuk boolean berat/LOD3 (ADR-004)
+- Format native: `.hew` + atribut `wangungis.*` (ADR-006)
+- Scripting/plugin: Python sebagai proses terpisah, mulai v0.5. WASM dipertimbangkan setelah v0.5 (ADR-007)
 - Build/CI: GitHub Actions (macOS, Windows, Linux), semua wajib hijau.
 
 ## 4. Struktur repo (target)
@@ -40,6 +42,8 @@ plugin-host/     API Python
 docs/            adr/, spec/, user/
 tests/           unit, property-based, golden-image, benchmark
 ```
+Jalur A2: `core-geometry` (half-edge, push/pull, boolean, toleransi), `commands` (undo/redo), dan `inference` disediakan crate Hew. Modul kita hanya membungkus atau menambah yang belum ada. Jangan menulis ulang yang sudah ada di Hew (§8 langkah 3a). Struktur final ditetapkan saat scaffold F0.
+
 Setiap modul punya `SPEC.md` (tujuan, API publik, invariant, non-goals). Ubah kode publik = ubah SPEC.md di PR yang sama.
 
 ## 5. Reuse vs tulis sendiri
@@ -96,7 +100,7 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 - Test satu modul: `TODO`
 - Lint/format: `TODO`
 - Benchmark: `TODO`
-- Validasi ekspor LOD (val3dity): `TODO`
+- Validasi ekspor LOD (val3dity): `python scripts/validate_lod.py` (butuh `cjval` dan `val3dity` di PATH)
 
 ## 10. Definisi selesai (semua wajib)
 - [ ] Test unit + property-based untuk perilaku baru lulus
@@ -124,7 +128,7 @@ Tulis di `docs/sessions/YYYY-MM-DD-<topik>.md` (gaya caveman, maks 15 baris): tu
 - PR: ringkasan 3–5 baris, risiko, test yang ditambah, hasil benchmark bila relevan.
 
 ## 14. Checkpoint manusia
-Wajib persetujuan manusia sebelum: menambah dependensi, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, atau perubahan lisensi. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
+Wajib persetujuan manusia sebelum: menambah dependensi, mengganti commit pin crate Hew, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, atau perubahan lisensi. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
 
 ## 15. Dilarang
 - Menyalin kode/aset/ikon/merek SketchUp atau software proprietary lain.

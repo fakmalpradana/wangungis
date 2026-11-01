@@ -1,6 +1,6 @@
 # ADR-007: Plugin dan scripting
 
-- Status: Proposed
+- Status: **Accepted** 2026-11-01 (tidak bergantung jalur; dikonfirmasi saat K2)
 
 ## Keputusan
 - API Python, dijalankan sebagai **proses terpisah** dengan API terdokumentasi (pendekatan yang juga direncanakan Hew). Embedding PyO3 hanya bila latensi proses terbukti terlalu tinggi.
