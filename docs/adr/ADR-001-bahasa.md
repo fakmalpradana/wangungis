@@ -18,3 +18,6 @@ Rust untuk semua modul inti. Python untuk plugin dan alur yang butuh IfcOpenShel
 ## Konsekuensi
 - CMake dan compiler C++ tetap dibutuhkan untuk binding (`manifold-csg`).
 - Library C++ besar tanpa binding matang (IfcOpenShell, GDAL penuh) dipakai lewat proses/plugin Python, bukan FFI.
+
+## Bila opsi A2 dipilih (ADR-000, menunggu K2)
+Tidak ada perubahan: Rust tetap dipakai. Crate `kernel`, `inference`, `tessellate`, dan `mesh-export` Hew dipakai sebagai dependensi git yang dipin ke satu commit. Sinkronisasi dijadwalkan per rilis Hew. Churn API publik terukur kecil (`research/keputusan-k2.md`).
