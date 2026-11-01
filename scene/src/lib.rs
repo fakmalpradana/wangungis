@@ -54,14 +54,24 @@ impl ProjectOrigin {
         let Some(ns) = dict.as_ref().and_then(|d| d.get(NS)) else {
             return Ok(None);
         };
-        let (Some(crs), Some(origin)) = (ns.get(KEY_CRS), ns.get(KEY_ORIGIN)) else {
-            return Ok(None);
+        let (crs, origin) = match (ns.get(KEY_CRS), ns.get(KEY_ORIGIN)) {
+            (None, None) => return Ok(None),
+            (Some(c), Some(o)) => (c, o),
+            _ => {
+                return Err(OriginError::Malformed(
+                    "crs and origin must both be present",
+                ));
+            }
         };
         let epsg = match crs {
             AttrValue::Text(t) => t
                 .strip_prefix("EPSG:")
+                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
                 .and_then(|n| n.parse().ok())
-                .ok_or(OriginError::Malformed("crs must be \"EPSG:<code>\""))?,
+                .filter(|&code: &u32| code > 0)
+                .ok_or(OriginError::Malformed(
+                    "crs must be \"EPSG:<positive code>\"",
+                ))?,
             _ => return Err(OriginError::Malformed("crs must be text")),
         };
         let origin = match origin {
@@ -85,6 +95,9 @@ impl ProjectOrigin {
         if self.origin.iter().any(|v| !v.is_finite()) {
             return Err(OriginError::Malformed("origin must be finite"));
         }
+        if self.epsg == 0 {
+            return Err(OriginError::Malformed("EPSG code must be positive"));
+        }
         let attr = |e| OriginError::Attr(format!("{e:?}"));
         doc.attr_set(
             AttrTarget::Document,
@@ -99,9 +112,10 @@ impl ProjectOrigin {
         Ok(())
     }
 
-    /// World (project CRS) to kernel-local. Rejects points outside ±[`PROJECT_BOUND_M`].
-    /// The subtraction rounds once, at most half an ulp of the world value
-    /// (≈ 9.3e-10 m at Y = 9.15e6).
+    /// World (project CRS) to project-local. Rejects points outside
+    /// ±[`PROJECT_BOUND_M`]. A world → local → world round trip is off by at
+    /// most 1 ulp of max(|world|, |origin|) per axis (≈ 1.9e-9 m at
+    /// Y = 9.15e6).
     pub fn to_local(&self, world: [f64; 3]) -> Result<Point3, OriginError> {
         let l = [
             world[0] - self.origin[0],
@@ -112,7 +126,7 @@ impl ProjectOrigin {
         Ok(Point3::new(l[0], l[1], l[2]))
     }
 
-    /// Kernel-local to world (project CRS).
+    /// Project-local to world (project CRS).
     pub fn to_world(&self, local: Point3) -> [f64; 3] {
         [
             local.x + self.origin[0],
@@ -122,7 +136,9 @@ impl ProjectOrigin {
     }
 }
 
-/// `Err` unless every component is finite and within ±[`PROJECT_BOUND_M`].
+/// Project-level check: `Err` unless every component is finite and within
+/// ±[`PROJECT_BOUND_M`]. This does NOT make a point safe for one Hew
+/// `Document`; geometry there must stay within [`KERNEL_FRAME_BOUND_M`].
 pub fn check_local(l: [f64; 3]) -> Result<(), OriginError> {
     if l.iter()
         .all(|v| v.is_finite() && v.abs() <= PROJECT_BOUND_M)
@@ -198,10 +214,43 @@ mod tests {
     }
 
     #[test]
-    fn non_finite_origin_is_refused() {
+    fn half_written_origin_is_an_error() {
+        let mut doc = Document::new();
+        doc.attr_set(
+            AttrTarget::Document,
+            NS,
+            KEY_CRS,
+            AttrValue::Text("EPSG:32749".into()),
+        )
+        .unwrap();
+        assert!(matches!(
+            ProjectOrigin::read(&doc),
+            Err(OriginError::Malformed(_))
+        ));
+        for bad in ["EPSG:", "EPSG:-1", "EPSG:+32749", "EPSG:0", "epsg:32749"] {
+            let mut doc = Document::new();
+            UTM49S.write(&mut doc).unwrap();
+            doc.attr_set(
+                AttrTarget::Document,
+                NS,
+                KEY_CRS,
+                AttrValue::Text(bad.into()),
+            )
+            .unwrap();
+            assert!(ProjectOrigin::read(&doc).is_err(), "{bad} accepted");
+        }
+    }
+
+    #[test]
+    fn non_finite_origin_or_zero_epsg_is_refused() {
         let bad = ProjectOrigin {
             epsg: 32749,
             origin: [f64::NAN, 0.0, 0.0],
+        };
+        assert!(bad.write(&mut Document::new()).is_err());
+        let bad = ProjectOrigin {
+            epsg: 0,
+            origin: [0.0; 3],
         };
         assert!(bad.write(&mut Document::new()).is_err());
     }
@@ -223,18 +272,43 @@ mod tests {
         assert!(check_local([0.0, f64::NAN, 0.0]).is_err());
     }
 
-    #[test]
-    fn world_local_world_is_within_one_ulp() {
-        let w = [431_234.567, 9_149_876.543, 7.25];
-        let back = UTM49S.to_world(UTM49S.to_local(w).unwrap());
-        for k in 0..3 {
-            let ulp = f64::from_bits(w[k].to_bits() + 1) - w[k];
-            assert!(
-                (back[k] - w[k]).abs() <= ulp,
-                "axis {k}: {} vs {}",
-                back[k],
-                w[k]
-            );
+    use proptest::prelude::*;
+
+    fn finite() -> impl Strategy<Value = f64> {
+        any::<f64>().prop_filter("finite", |v| v.is_finite())
+    }
+
+    fn ulp(x: f64) -> f64 {
+        let a = x.abs();
+        f64::from_bits(a.to_bits() + 1) - a
+    }
+
+    proptest! {
+        /// Any valid origin (incl. -0.0 and subnormals) survives save/load bit-exactly.
+        #[test]
+        fn any_origin_round_trips_bit_exactly(epsg in 1u32.., o in [finite(), finite(), finite()]) {
+            let mut doc = Document::new();
+            ProjectOrigin { epsg, origin: o }.write(&mut doc).unwrap();
+            let back = ProjectOrigin::read(&Document::load(&doc.save()).unwrap()).unwrap().unwrap();
+            prop_assert_eq!(back.epsg, epsg);
+            prop_assert_eq!(back.origin.map(f64::to_bits), o.map(f64::to_bits));
+        }
+
+        /// world -> local -> world is off by <= 1 ulp of max(|world|, |origin|).
+        #[test]
+        fn world_local_world_within_one_ulp(
+            o in [-1e7..1e7f64, -1e7..1e7f64, -1e4..1e4f64],
+            d in [-PROJECT_BOUND_M..PROJECT_BOUND_M, -PROJECT_BOUND_M..PROJECT_BOUND_M, -1e3..1e3f64],
+        ) {
+            let po = ProjectOrigin { epsg: 32749, origin: o };
+            let w = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+            // Rounding can push a point just past the bound; that is a refusal, not an error.
+            let Ok(l) = po.to_local(w) else { return Ok(()) };
+            let back = po.to_world(l);
+            for k in 0..3 {
+                let tol = ulp(w[k].abs().max(o[k].abs()));
+                prop_assert!((back[k] - w[k]).abs() <= tol, "axis {}: {} vs {}", k, back[k], w[k]);
+            }
         }
     }
 }

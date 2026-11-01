@@ -12,13 +12,15 @@ Menyimpan dan membaca **origin proyek** (kode EPSG + titik origin `f64`) di doku
   - `write(&mut Document)`
   - `to_local(world) -> Result<Point3, _>`
   - `to_world(local)`
-- `check_local([f64; 3])`, `OriginError { Malformed, OutOfBound, Attr }`.
+- `check_local([f64; 3])`: cek tingkat proyek (±`PROJECT_BOUND_M`). Cek ini **tidak** menjamin titik aman untuk satu `Document`.
+- `OriginError { Malformed, OutOfBound, Attr }`.
 
 ## Invariant
 - `write` lalu save/load menghasilkan nilai `read` yang **bit-identik**.
-- Atribut yang ada tetapi rusak menghasilkan `Err(Malformed)`, bukan nilai default.
+- Atribut yang ada tetapi rusak, atau hanya sebagian (`crs` tanpa `origin`), menghasilkan `Err(Malformed)`, bukan nilai default.
 - `to_local` menolak titik non-finite atau di luar ±`PROJECT_BOUND_M`.
-- `to_world(to_local(w))` sama dengan `w` dalam batas ≤ 1 ulp per sumbu.
+- `to_world(to_local(w))` sama dengan `w` dalam batas ≤ 1 ulp dari max(|w|, |origin|) per sumbu (property test).
+- `epsg` harus > 0; `"EPSG:<digit>"` saja, tanpa tanda.
 
 ## Batas kernel (K6)
 Diuji di `tests/kernel_bound.rs`:

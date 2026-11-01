@@ -21,8 +21,25 @@ fn p(x: f64, y: f64, z: f64) -> Point3 {
     Point3::new(x, y, z)
 }
 
-fn dot(a: Vec3, b: Vec3) -> f64 {
-    a.x * b.x + a.y * b.y + a.z * b.z
+/// True when `got` and `want` pair up one-to-one, each pair ≤ 1 mm apart.
+/// Expected corners are ≥ 1 cm apart, so greedy nearest matching is exact.
+fn same_corners(got: &[Point3], want: &[Point3]) -> bool {
+    if got.len() != want.len() {
+        return false;
+    }
+    let mut used = vec![false; got.len()];
+    want.iter().all(|w| {
+        let best = (0..got.len())
+            .filter(|&k| !used[k])
+            .min_by(|&a, &b| (got[a] - *w).length().total_cmp(&(got[b] - *w).length()));
+        match best {
+            Some(k) if (got[k] - *w).length() <= MM => {
+                used[k] = true;
+                true
+            }
+            _ => false,
+        }
+    })
 }
 
 fn verts(doc: &Document, o: ObjectId) -> Vec<Point3> {
@@ -65,11 +82,6 @@ impl Frame {
     }
     fn at(&self, a: f64, b: f64, z: f64) -> Point3 {
         self.o + self.u * a + self.v * b + Vec3::new(0.0, 0.0, z)
-    }
-    /// (a, b, z) of `q` in this frame.
-    fn local(&self, q: Point3) -> [f64; 3] {
-        let d = q - self.o;
-        [dot(d, self.u), dot(d, self.v), d.z]
     }
 }
 
@@ -130,9 +142,10 @@ fn far_cap(doc: &Document, o: ObjectId, n: Vec3, from: Point3) -> kernel::FaceId
 }
 
 /// A footprint corner inside one kernel frame: a point of the disk of radius
-/// BOUND - 40 m (shapes are at most 30 m wide), with the rim weighted in.
+/// BOUND - 45 m (the largest shape, the pocket box, reaches 30·√2 ≈ 42.4 m
+/// from its corner), with the rim weighted in.
 fn corner() -> impl Strategy<Value = (f64, f64)> {
-    let r = BOUND - 40.0;
+    let r = BOUND - 45.0;
     let radius = prop_oneof![3 => 0.0..r, 1 => Just(r)];
     (radius, 0.0..std::f64::consts::TAU).prop_map(|(d, a)| (d * a.cos(), d * a.sin()))
 }
@@ -170,12 +183,25 @@ fn far_rotated_boolean_is_refused() {
     assert_eq!(near, 0, "refusals inside the kernel frame");
 }
 
+/// The matcher itself must reject a moved corner and a duplicated one.
+#[test]
+fn same_corners_is_strict() {
+    let want = [p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(0.0, 1.0, 0.0)];
+    assert!(same_corners(&want, &want));
+    assert!(!same_corners(
+        &[want[0], want[1], p(0.0, 1.002, 0.0)],
+        &want
+    ));
+    assert!(!same_corners(&[want[0], want[1], want[1]], &want));
+    assert!(!same_corners(&want[..2], &want));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     /// Roof-like slab on a plane pitched 15–60°: extrude, then push/pull the
-    /// pitched cap. The slab must keep 8 vertices and its thickness must be
-    /// exactly h + d.
+    /// pitched cap. The slab must be exactly the 8 expected corners: the
+    /// sketch ring and the ring moved h + d along the plane normal.
     #[test]
     fn tilted_plane_push_pull(
         (ox, oy) in corner(), rot in 0.0..std::f64::consts::TAU,
@@ -196,17 +222,20 @@ proptest! {
         doc.apply_object_op(o, KernelOp::PushPull { face: cap, distance: dist })
             .map_err(|e| TestCaseError::fail(format!("push/pull refused at ({ox:.1}, {oy:.1}): {e:?}")))?;
         let vs = verts(&doc, o);
-        prop_assert_eq!(vs.len(), 8);
-        let proj: Vec<f64> = vs.iter().map(|q| dot(*q - base, n)).collect();
-        let span = proj.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - proj.iter().cloned().fold(f64::INFINITY, f64::min);
-        prop_assert!((span - (h + dist)).abs() <= MM, "thickness {span} vs {}", h + dist);
+        // The kernel picks the extrusion side; accept either, exactly.
+        let want = |side: f64| -> Vec<Point3> {
+            ring.iter().copied().chain(ring.iter().map(|q| *q + n * (side * (h + dist)))).collect()
+        };
+        prop_assert!(same_corners(&vs, &want(1.0)) || same_corners(&vs, &want(-1.0)), "slab corners off: {vs:?}");
     }
 
-    /// Faceted circle (48 segments) extruded, then its top pushed up. Every
-    /// vertex must stay on the circle and on z ∈ {0, h + d}.
+    /// Faceted circle (48 segments, random phase) extruded, then its top
+    /// pushed up. The solid must be exactly the bottom ring and the ring
+    /// raised to h + d.
     #[test]
     fn circle_extrude_push_pull(
         (ox, oy) in corner(), r in 0.5..10.0f64, h in 1.0..20.0f64, dist in 0.01..3.0f64,
+        phase in 0.0..std::f64::consts::TAU,
     ) {
         let f = Frame::new(ox, oy, 0.0);
         let c = f.at(0.0, 0.0, 0.0);
@@ -217,7 +246,7 @@ proptest! {
         let n = 48;
         let ring: Vec<Point3> = (0..n)
             .map(|i| {
-                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                let a = phase + std::f64::consts::TAU * i as f64 / n as f64;
                 c + Vec3::new(r * a.cos(), r * a.sin(), 0.0)
             })
             .collect();
@@ -232,12 +261,9 @@ proptest! {
         doc.apply_object_op(o, KernelOp::PushPull { face: top, distance: dist })
             .map_err(|e| TestCaseError::fail(format!("push/pull refused at ({ox:.1}, {oy:.1}): {e:?}")))?;
         let vs = verts(&doc, o);
-        prop_assert_eq!(vs.len(), 2 * n);
-        for q in vs {
-            let [a, b, z] = f.local(q);
-            prop_assert!(((a * a + b * b).sqrt() - r).abs() <= MM, "radius off at {q:?}");
-            prop_assert!(z.abs() <= MM || (z - (h + dist)).abs() <= MM, "z off at {q:?}");
-        }
+        let up = Vec3::new(0.0, 0.0, h + dist);
+        let want: Vec<Point3> = ring.iter().copied().chain(ring.iter().map(|q| *q + up)).collect();
+        prop_assert!(same_corners(&vs, &want), "cylinder vertices off: {} vertices", vs.len());
     }
 
     /// Boolean subtract: a pocket cut down from the top of a rotated box. The
@@ -257,13 +283,13 @@ proptest! {
         let (res, _) = doc.boolean(BooleanOp::Subtract, body, tool)
             .map_err(|e| TestCaseError::fail(format!("boolean refused at ({ox:.1}, {oy:.1}): {e:?}")))?;
         let vs = verts(&doc, res);
-        prop_assert_eq!(vs.len(), 16);
-        let near = |x: f64, set: &[f64]| set.iter().any(|s| (x - s).abs() <= MM);
-        for q in vs {
-            let [a, b, z] = f.local(q);
-            prop_assert!(near(a, &[0.0, w, a0, a0 + pw]), "a off at {q:?}");
-            prop_assert!(near(b, &[0.0, d, b0, b0 + pd]), "b off at {q:?}");
-            prop_assert!(near(z, &[0.0, h, z0]), "z off at {q:?}");
+        let mut want = Vec::new();
+        for (aa, bb) in [(0.0, 0.0), (w, 0.0), (w, d), (0.0, d)] {
+            want.extend([f.at(aa, bb, 0.0), f.at(aa, bb, h)]);
         }
+        for (aa, bb) in [(a0, b0), (a0 + pw, b0), (a0 + pw, b0 + pd), (a0, b0 + pd)] {
+            want.extend([f.at(aa, bb, z0), f.at(aa, bb, h)]);
+        }
+        prop_assert!(same_corners(&vs, &want), "pocket corners off: {} vertices", vs.len());
     }
 }
