@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["scene"]
+members = ["scene", "render"]
 
 [workspace.package]
 version = "0.0.0"
@@ -12,4 +12,8 @@ repository = "https://github.com/fakmalpradana/wangungis"
 # Changing this rev needs human approval (AGENTS.md §14).
 [workspace.dependencies]
 kernel = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
+tessellate = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
 proptest = "1"
