@@ -1,0 +1,4 @@
+# Same compiler as the pinned Hew commit, so Hew's crates build exactly as upstream tests them.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

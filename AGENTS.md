@@ -96,10 +96,10 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 8. Update SPEC.md/ADR bila perlu. Tulis log sesi (§11).
 
 ## 9. Perintah (isi setelah scaffold)
-- Build: `TODO`
-- Test semua: `TODO`
-- Test satu modul: `TODO`
-- Lint/format: `TODO`
+- Build: `cargo build --workspace`
+- Test semua: `cargo test --workspace` (CI juga menjalankan `--release`)
+- Test satu modul: `cargo test -p wangungis-<modul>` (mis. `wangungis-scene`)
+- Lint/format: `cargo fmt --all --check` dan `cargo clippy --workspace --all-targets -- -D warnings`
 - Benchmark: `TODO`
 - Validasi ekspor LOD (val3dity): `python scripts/validate_lod.py` (butuh `cjval` dan `val3dity` di PATH)
 

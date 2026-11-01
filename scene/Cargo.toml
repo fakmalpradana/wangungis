@@ -1,0 +1,11 @@
+[package]
+name = "wangungis-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kernel.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

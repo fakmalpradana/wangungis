@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["scene"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/fakmalpradana/wangungis"
+
+# Hew core crates (ADR-000 option A2), pinned to one commit: v1.3.1.
+# Changing this rev needs human approval (AGENTS.md §14).
+[workspace.dependencies]
+kernel = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
+proptest = "1"

@@ -142,4 +142,4 @@ Konsekuensi:
 - Celah yang sudah terukur dan wajib ditangani di F0/v0.1:
   - Renderer wgpu ber-batching + RTC (ADR-003).
   - Indeks inference per tile (prototipe 7,8 ms; snapping lintas tile belum).
-  - Origin proyek: koordinat kernel lokal ≤ ±50 km (ADR-004).
+  - Origin proyek + tile kernel 1 km: geometri ≤ 1,5 km dari frame `Document` (ADR-004; awalnya ±50 km, dikoreksi setelah property test).

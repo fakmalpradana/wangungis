@@ -18,7 +18,7 @@ Status: 2026-10-29. Nama produk: **WangunGIS** (K3, 2026-10-29). "citySketch" ad
 **Stack (ADR Accepted, jalur A2).**
 - Bahasa: Rust; Python untuk plugin (proses terpisah).
 - Geometri: crate `kernel` Hew; Manifold opsional; i_overlay untuk 2D.
-- Presisi: model `f64` lokal ≤ ±50 km dari origin proyek; render RTC.
+- Presisi: tile kernel 1 km (geometri ≤ 1,5 km dari frame `Document`), proyek ≤ ±50 km dari origin; render RTC.
 - Format dan validasi: `.hew` + atribut `wangungis`, PROJ, cjval/cjseq, tyler, val3dity di CI.
 - UI dan render: egui + wgpu ber-batching.
 
@@ -91,7 +91,7 @@ Asumsi ritme ±1–2 jam per hari. Setiap hari = satu sesi agen kecil + log sesi
 | K3 | Nama proyek (bebas merek "SketchUp"/"Sketch") | Hari 1–14 | **Diputuskan 2026-10-29: WangunGIS** (`docs/research/nama.md`). Cek merek PDKI/TMview masih harus dilakukan. |
 | K4 | Setujui usulan perubahan AGENTS.md, CLAUDE.md, dan pembuatan GEMINI.md | Hari 1 | Setujui (prompts.md §7) |
 | K5 | Ritme kerja per semester (5/10/20 jam per minggu) untuk mengunci estimasi | Hari 14 | Mulai dengan 5–10 jam dan ukur |
-| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | **Diputuskan 2026-11-01 (K2):** pakai toleransi Hew apa adanya (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m), dengan syarat koordinat kernel lokal ≤ ±50 km dari origin proyek; dikunci setelah property test bidang miring/lingkaran/boolean di F0 lulus (ADR-004) |
+| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | **Diputuskan 2026-11-01 (K2):** pakai toleransi Hew apa adanya (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m), dengan syarat geometri ≤ 1,5 km dari origin `Document`-nya. Proyek dipecah menjadi tile kernel 1 km; proyek ≤ ±50 km dari origin proyek (ADR-004). Dikunci 2026-11-01 oleh property test, karena boolean Hew ditolak mulai ±2,8 km |
 | K7 | Dataset uji Indonesia yang lisensinya jelas | Sebelum v0.2 | Mulai dengan 3D BAG; cari data terbuka DKI/BIG |
 | K8 | Perbaiki config agy `tier_pro` → "Gemini 4 Argon (High)" | Kapan saja | Ya; delegasi `--tier pro` sekarang gagal |
 

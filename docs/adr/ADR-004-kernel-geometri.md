@@ -21,9 +21,15 @@
 - Half-edge, push/pull, undo, dan boolean memakai `kernel` Hew.
 - Predikat: Hew baru memakai orientasi 2D eksak. Kebutuhan `robust` 3D dievaluasi ulang.
 - Manifold menjadi opsional, untuk boolean berat dan LOD3.
-- Toleransi: konstanta Hew (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m) dipertahankan (K6, 2026-11-01). Syaratnya, koordinat lokal kernel ≤ **±50 km** dari origin proyek. Batas ini cukup untuk satu kota: DKI Jakarta daratan berukuran ±45 km melintang (**asumsi**, tanpa Kepulauan Seribu).
-  - Sweep S2 tidak menolak satu operasi pun sampai ±2,1e6 m, tetapi hanya untuk kotak yang diputar pada sumbu z. Bidang miring (atap), lingkaran, dan boolean belum diuji pada jarak itu. Jadi ±1.000 km tidak dipakai.
-  - Di ±50 km, ulp `f64` = 2⁻³⁷ ≈ 7,3e-12 m, yaitu < 1% toleransi.
-  - Syarat F0: property test push/pull dan boolean dengan bidang miring dan lingkaran pada ±50 km harus lulus sebelum batas ini dikunci.
-  - Proyek yang lebih luas memakai lebih dari satu origin. Ini di luar scope v0.1–v0.2.
+- Toleransi: konstanta Hew (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m) dipertahankan (K6, **dikunci 2026-11-01** lewat `scene/tests/kernel_bound.rs`).
+  - **Satu `Document` Hew hanya memuat geometri dalam radius 1,5 km dari origin-nya** (`KERNEL_FRAME_BOUND_M`).
+    - Push/pull pada bidang miring dan ekstrusi lingkaran lulus sampai ±50 km.
+    - Tetapi boolean Hew pada kotak yang diputar mulai ditolak (`DegenerateContact`) antara 2,5 dan 2,8 km: 20/3.000 kasus di 2,79 km, 47/3.000 di 3 km, dan 63/72 rotasi di 10 km. Sampai 2,5 km tidak ada yang ditolak (0/3.000).
+    - Batas 1,5 km memberi margin ±40%.
+  - **Akibatnya, proyek dipecah menjadi tile kernel.** Satu `Document` Hew per tile 1 km, dengan frame di pusat tile.
+    - Bangunan masuk ke tile titik acuannya. Geometrinya tetap ≤ 1,5 km dari frame, karena pojok tile berjarak 0,71 km dan bangunan < 0,5 km.
+    - Posisi tile relatif terhadap origin proyek berupa `f64`, dengan batas ±`PROJECT_BOUND_M` = 50 km per sumbu.
+    - Tile kernel sejalan dengan tile render (RTC) dan tile inference.
+  - Component Hew tidak bisa menggantikan tile kernel. Mengedit component ("explode session") memindahkan geometri ke koordinat world (`document.rs`, `open_explode_session`), jadi koordinatnya kembali jauh dari origin.
+  - Operasi lintas tile (boolean antara dua bangunan di tile berbeda, atau bangunan yang dipindah keluar tile) dijalankan dengan memindahkan operand ke `Document` sementara di sekitar titik tengahnya. Rancangannya dibuat di v0.1.
   - Mengubah toleransi butuh persetujuan manusia (AGENTS.md §14).
