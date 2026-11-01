@@ -48,18 +48,19 @@ Setiap modul punya `SPEC.md` (tujuan, API publik, invariant, non-goals). Ubah ko
 
 ## 5. Reuse vs tulis sendiri
 Wajib pakai library matang (jangan tulis ulang):
-- Kernel/booleans/mesh ops: pilihan hasil ADR (CGAL / Manifold / OpenCascade / libigl / Clipper2)
+- Kernel/booleans/mesh ops: crate `kernel` Hew (ADR-004). Manifold opsional untuk boolean berat/LOD3; i_overlay/Clipper2 untuk poligon 2D.
 - CRS: PROJ. Raster/vektor: GDAL. Point cloud: PDAL. IFC: IfcOpenShell.
 - I/O mesh: assimp / glTF / OpenUSD. Validasi LOD: val3dity. CityJSON: cjio / citygml-tools sebagai referensi dan validator.
 
 Memang harus ditulis sendiri (inti diferensiasi):
-- Inference engine, tool interaksi gaya SketchUp, scene model Groups/Components, operasi Push/Pull dan Intersect di atas half-edge, LOD engine (roof fitting, template fasad).
+- Tool interaksi gaya SketchUp dan UI (egui), renderer wgpu, indeks inference per tile di atas crate `inference` Hew, origin proyek/CRS, LOD engine (roof fitting, template fasad), I/O geospasial.
+- Half-edge, Push/Pull, Intersect, undo, dan inference dasar **tidak** ditulis ulang: pakai crate Hew (ADR-000 A2). Kekurangannya ditambal lewat PR upstream atau patch kecil di fork.
 
 Menambah dependensi baru: tulis ADR singkat (lisensi kompatibel, ukuran, aktivitas proyek, alternatif). Dependensi proprietary/berbayar dilarang.
 
 ## 6. Aturan geometri
 - Koordinat world: double precision. Gunakan floating origin / origin shifting untuk koordinat UTM besar.
-- Predikat geometri kritis (orientasi, in-circle, bidang) memakai robust/exact predicates. Dilarang membandingkan float dengan `==` atau epsilon ad hoc. Toleransi dipusatkan di satu modul dan didokumentasikan.
+- Predikat geometri kritis (orientasi, in-circle, bidang) memakai robust/exact predicates. Kernel Hew baru memakai orientasi 2D eksak; kode kita mengikuti aturan ini, dan kebutuhan 3D dievaluasi ulang (ADR-004). Dilarang membandingkan float dengan `==` atau epsilon ad hoc. Toleransi dipusatkan di satu modul dan didokumentasikan.
 - Setiap operasi mengubah mesh wajib menjaga invariant: manifold, orientasi normal konsisten, tidak ada face degenerate. Tambahkan assert/validator dan test.
 - Operasi baru wajib punya property-based/fuzz test (input acak, pasti tidak merusak invariant).
 - Export LOD wajib lolos val3dity (uji otomatis di CI).
@@ -87,7 +88,7 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 1. Baca SPEC.md modul terkait dan test yang ada.
 2. Rencana 5 baris (caveman). Tugas > 1 sesi: pecah dulu.
 3. Tangga ponytail → implementasi minimal yang benar.
-   3a. Cek apakah fitur sudah ada di Hew (jalur A, ADR-000) atau di library terpilih sebelum menulis.
+   3a. Cek apakah fitur sudah ada di crate Hew (jalur A2, ADR-000) atau di library terpilih sebelum menulis.
 4. Tulis/ubah test dulu atau bersamaan. Jalankan test lokal.
 5. `ponytail-review` (bila ada) untuk over-engineering.
 6. Review silang agen lain khusus KEBENARAN (invariant, edge case, presisi), bukan hanya ukuran kode.

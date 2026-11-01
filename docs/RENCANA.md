@@ -13,16 +13,14 @@ Status: 2026-10-29. Nama produk: **WangunGIS** (K3, 2026-10-29). "citySketch" ad
 
 **Posisi produk.** Editor LOD gaya SketchUp yang menjadi pelengkap pipeline otomatis. Model valid sejak digambar dan bekerja langsung di koordinat UTM.
 
-**Keputusan yang sudah diambil.** Spike evaluasi Hew 1–2 minggu dengan 7 kriteria terukur (ADR-000). Hasilnya menentukan:
-- **Jalur A**: bangun di atas Hew, lisensi AGPL. Estimasi likely ±540 jam manusia sampai v0.5.
-- **Jalur B**: mulai dari nol, lisensi GPL-3.0-or-later. Estimasi likely ±740 jam.
+**Keputusan yang sudah diambil.** Spike evaluasi Hew (ADR-000) selesai, dan K2 (2026-11-01) memilih **jalur A2**. Crate Rust inti Hew dipakai sebagai library, dengan aplikasi native sendiri dan lisensi AGPL-3.0-only. Estimasi ada di `plan/roadmap.md` (bagian koreksi A2).
 
-**Stack yang direkomendasikan (ADR Proposed).**
+**Stack (ADR Accepted, jalur A2).**
 - Bahasa: Rust; Python untuk plugin (proses terpisah).
-- Geometri: half-edge + predikat `robust` + Manifold + i_overlay.
-- Presisi: model `f64`, render RTC.
-- Format dan validasi: PROJ, cjval/cjseq, tyler, val3dity di CI.
-- UI dan render: Tauri+React+three.js (jalur A) atau egui+wgpu (jalur B).
+- Geometri: crate `kernel` Hew; Manifold opsional; i_overlay untuk 2D.
+- Presisi: model `f64` lokal ≤ ±50 km dari origin proyek; render RTC.
+- Format dan validasi: `.hew` + atribut `wangungis`, PROJ, cjval/cjseq, tyler, val3dity di CI.
+- UI dan render: egui + wgpu ber-batching.
 
 **Distribusi gratis.**
 - macOS: panduan "Open Anyway" + tap Homebrew sendiri.
@@ -38,7 +36,7 @@ Status: 2026-10-29. Nama produk: **WangunGIS** (K3, 2026-10-29). "citySketch" ad
 - Kode agen yang tidak dipahami (R6).
 - Scope creep (R11).
 
-Keempat risiko pertama diuji di Fase 0.
+Keempat risiko pertama diuji di Fase 0. R6 sudah terjadi (pemilik tidak menilai kode kernel), sehingga mitigasinya beralih ke test, review silang agen, dan uji beta.
 
 ## 2. Indeks dokumen
 
@@ -93,7 +91,7 @@ Asumsi ritme ±1–2 jam per hari. Setiap hari = satu sesi agen kecil + log sesi
 | K3 | Nama proyek (bebas merek "SketchUp"/"Sketch") | Hari 1–14 | **Diputuskan 2026-10-29: WangunGIS** (`docs/research/nama.md`). Cek merek PDKI/TMview masih harus dilakukan. |
 | K4 | Setujui usulan perubahan AGENTS.md, CLAUDE.md, dan pembuatan GEMINI.md | Hari 1 | Setujui (prompts.md §7) |
 | K5 | Ritme kerja per semester (5/10/20 jam per minggu) untuk mengunci estimasi | Hari 14 | Mulai dengan 5–10 jam dan ukur |
-| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | **Diputuskan 2026-11-01 (K2):** pakai toleransi Hew apa adanya (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m), dengan syarat koordinat kernel lokal ≤ ±1.000 km dari origin proyek (ADR-004, data sweep S2) |
+| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | **Diputuskan 2026-11-01 (K2):** pakai toleransi Hew apa adanya (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m), dengan syarat koordinat kernel lokal ≤ ±50 km dari origin proyek; dikunci setelah property test bidang miring/lingkaran/boolean di F0 lulus (ADR-004) |
 | K7 | Dataset uji Indonesia yang lisensinya jelas | Sebelum v0.2 | Mulai dengan 3D BAG; cari data terbuka DKI/BIG |
 | K8 | Perbaiki config agy `tier_pro` → "Gemini 4 Argon (High)" | Kapan saja | Ya; delegasi `--tier pro` sekarang gagal |
 

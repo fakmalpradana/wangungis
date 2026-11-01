@@ -15,4 +15,4 @@
 - Golden-image test wajib membandingkan render pada origin vs pada koordinat UTM.
 
 ## Opsi A2 (dipilih, K2 2026-11-01)
-Keputusan untuk A2: wgpu dengan **batching** (buffer gabungan per tile) + RTC per tile ±5 km. Bukti spike (`research/spike-a2-native-render.md`): kota 1M face / 25 ribu Object = 203 FPS, sedangkan three.js Hew 8,6 FPS. Picking dan snapping memakai crate `inference` Hew yang di-shard per tile 100 m.
+Keputusan untuk A2: wgpu dengan **batching** (buffer gabungan per tile) + RTC per tile ±5 km. Bukti spike (`research/spike-a2-native-render.md`): kota 1M face / 25 ribu Object = 203 FPS, sedangkan three.js Hew 8,6 FPS. Spike itu memakai **satu buffer global di origin** (2 draw call). Buffer per tile, patch inkremental saat edit, dan RTC belum dibuktikan dan menjadi tugas F0. Picking dan snapping memakai crate `inference` Hew yang di-shard per tile 100 m.

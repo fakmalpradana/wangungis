@@ -1,6 +1,6 @@
 # ADR-004: Kernel geometri
 
-- Status: **Accepted** 2026-11-01 untuk A2: kernel Hew + bagian "Bila opsi A2 dipilih" di bawah (K2, ADR-000). Keputusan umum di atasnya berlaku bila tidak bertentangan dengan bagian A2.
+- Status: **Accepted** 2026-11-01 untuk A2: kernel Hew + bagian "Opsi A2" di bawah (K2, ADR-000). Keputusan umum di atasnya berlaku bila tidak bertentangan dengan bagian A2.
 
 ## Keputusan
 - Struktur utama: **half-edge** dengan face poligon planar (gaya SketchUp). Jalur A: milik Hew. Jalur B: ditulis sendiri (AGENTS.md §5).
@@ -21,4 +21,9 @@
 - Half-edge, push/pull, undo, dan boolean memakai `kernel` Hew.
 - Predikat: Hew baru memakai orientasi 2D eksak. Kebutuhan `robust` 3D dievaluasi ulang.
 - Manifold menjadi opsional, untuk boolean berat dan LOD3.
-- Toleransi: konstanta Hew (`POINT_MERGE` = 1e-9 m) dipertahankan. Syaratnya, koordinat lokal kernel ≤ ±1.000 km dari origin proyek (sweep S2: 0 penolakan sampai ±2,1e6 m). Mengubah toleransi butuh persetujuan manusia (AGENTS.md §14, K6).
+- Toleransi: konstanta Hew (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m) dipertahankan (K6, 2026-11-01). Syaratnya, koordinat lokal kernel ≤ **±50 km** dari origin proyek. Batas ini cukup untuk satu kota: DKI Jakarta daratan berukuran ±45 km melintang (**asumsi**, tanpa Kepulauan Seribu).
+  - Sweep S2 tidak menolak satu operasi pun sampai ±2,1e6 m, tetapi hanya untuk kotak yang diputar pada sumbu z. Bidang miring (atap), lingkaran, dan boolean belum diuji pada jarak itu. Jadi ±1.000 km tidak dipakai.
+  - Di ±50 km, ulp `f64` = 2⁻³⁷ ≈ 7,3e-12 m, yaitu < 1% toleransi.
+  - Syarat F0: property test push/pull dan boolean dengan bidang miring dan lingkaran pada ±50 km harus lulus sebelum batas ini dikunci.
+  - Proyek yang lebih luas memakai lebih dari satu origin. Ini di luar scope v0.1–v0.2.
+  - Mengubah toleransi butuh persetujuan manusia (AGENTS.md §14).

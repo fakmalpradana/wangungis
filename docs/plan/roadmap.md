@@ -39,24 +39,32 @@ Jalur yang dipilih adalah **A2** (ADR-000). Tabel di atas memakai kolom jalur A 
 |---|---|---|
 | F0 sisa | 30 / 50 / 80 | Shell egui + renderer wgpu ber-batching + RTC + origin proyek. Prototipe spike sudah ada (`research/spike-a2-*`). |
 | v0.1 | 100 / 140 / 200 | Seluruh tool UI ditulis ulang di atas kernel Hew. Estimasi ±140–200 dari `research/keputusan-k2.md`, dengan sisa F0 dipisah. |
-| v0.2–v0.5 | sama dengan kolom jalur A | Fitur geospasial/LOD tidak bergantung jalur. |
+| v0.2–v0.5 | **lebih tinggi** dari kolom jalur A; ditaksir ulang di retro v0.1 | Fitur geospasial/LOD tidak bergantung jalur. Tetapi fitur UI yang di jalur A sudah ada di Hew (mis. #35, #38–#40, #47, #53–#56) harus ditulis atau diport di A2. Atribut per face juga dibutuhkan sebelum v0.2. |
 
 Catatan:
 - **Jam manusia turun, risiko naik.** Pemilik tidak mereview kode kernel (ADR-000, K2). Jam manusia per fase didominasi keputusan dan uji perilaku, sehingga kemungkinan lebih rendah dari tabel. Gantinya, review silang agen (Gemini) dan test otomatis wajib di setiap PR. Uji beta oleh 3D engineer menjadi kriteria keluar tambahan sejak v0.1.
 - Retrospektif jam nyata Fase 0 belum bisa dihitung, karena jam manusia tidak tercatat di log sesi. Mulai F0 sisa, log sesi mencatat jam manusia.
 
 **Sisa pekerjaan F0 untuk A2:**
-1. Workspace Cargo: crate Hew `kernel`, `inference`, `tessellate` sebagai dependensi git yang dipin ke satu commit. CI `cargo test` + clippy di 3 OS.
+1. Workspace Cargo: crate Hew `kernel`, `inference`, `tessellate`, `mesh-export` sebagai dependensi git yang dipin ke satu commit. CI `cargo test` + clippy di 3 OS.
 2. Shell egui/eframe dengan viewport wgpu: renderer ber-batching per tile, RTC, edge rendering (#31, #34, #36).
 3. Origin proyek: dokumen menyimpan CRS + origin `f64` di atribut `wangungis.*` (ADR-006). Koordinat kernel lokal ≤ ±1.000 km.
 4. Golden-image test: kotak di origin vs di UTM 49S harus identik dalam toleransi piksel (sisa kriteria S2).
+5. Property test kernel di ±50 km dari origin: bidang miring, lingkaran, dan boolean (syarat mengunci K6, ADR-004).
 
-**Tiga fitur pertama v0.1** (dipilih 2026-11-01; ini yang pertama bisa diuji 3D engineer):
+**Tiga fitur pertama v0.1** (dipilih 2026-11-01; ini yang pertama bisa diuji 3D engineer). Sebagian item (#19, #20, #22, #31) sebenarnya F0. Di sini item itu dirakit menjadi alur yang bisa dipakai:
 1. Navigasi + seleksi: orbit/pan/zoom, zoom extents, pilih face/edge lewat picking `inference` per tile (#31, #32, #19).
 2. Gambar: Line + Rectangle dengan snapping endpoint/midpoint, inference sumbu, dan input angka VCB (#2, #3, #20, #22).
 3. Push/Pull + undo/redo lewat `kernel` Hew, dengan pratinjau langsung (#6, #17).
 
-Alasan: ketiganya cukup untuk tugas referensi v0.1 "kotak 5×4×3 m", dan masing-masing menguji satu risiko terukur dari spike (render, inference, kernel).
+Alasan: masing-masing menguji satu risiko terukur dari spike (render, inference, kernel). Ketiganya cukup untuk **uji asap** pertama 3D engineer: menggambar kotak 5×4×3 m lalu undo/redo.
+
+Ketiganya **belum** cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disalin 10× dalam array). Kriteria itu juga butuh:
+- Move + copy/array (#10).
+- Auto-split face (#14).
+- Jumlah array lewat VCB (#26).
+
+Ketiga fitur ini menjadi urutan berikutnya.
 
 ## Fase 0 — Fondasi dan spike
 
@@ -83,7 +91,7 @@ Rilis: tidak ada rilis publik; repo publik dengan README "pre-alpha".
 ## v0.1 — Modeling inti
 
 Fitur: matrix #1–#14, #17, #19–#28, #31–#34, #42–#46, #49, #83, #89–#90, #97, #100.
-Jalur A: sebagian besar sudah ada di Hew. Tugasnya: verifikasi dengan test kita, tambahkan CRS/origin di format, dan siapkan crate `lod`/`geo` sebagai titik ekstensi. Pekerjaan baru di jalur A: #14 auto-split face (tidak ada di Hew, kompleksitas L), ekspor OBJ (#90, Hew hanya STL), dan item `Hew: ?` yang belum terverifikasi. Estimasi 40 jam likely kemungkinan rendah; dikoreksi setelah spike S1.
+Jalur A2 (dipilih): semua tool UI ditulis di egui di atas kernel Hew; estimasi di bagian koreksi A2 di atas. Teks jalur A berikut adalah riwayat. Jalur A: sebagian besar sudah ada di Hew. Tugasnya: verifikasi dengan test kita, tambahkan CRS/origin di format, dan siapkan crate `lod`/`geo` sebagai titik ekstensi. Pekerjaan baru di jalur A: #14 auto-split face (tidak ada di Hew, kompleksitas L), ekspor OBJ (#90, Hew hanya STL), dan item `Hew: ?` yang belum terverifikasi. Estimasi 40 jam likely kemungkinan rendah; dikoreksi setelah spike S1.
 
 Kriteria keluar:
 - Tugas referensi "kotak 5×4×3 m dengan pintu, lalu salin 10× dalam array" selesai tanpa error di 3 OS.
