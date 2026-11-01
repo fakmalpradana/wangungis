@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["scene", "render"]
+members = ["scene", "render", "ui"]
 
 [workspace.package]
 version = "0.0.0"
@@ -11,9 +11,12 @@ repository = "https://github.com/fakmalpradana/wangungis"
 # Hew core crates (ADR-000 option A2), pinned to one commit: v1.3.1.
 # Changing this rev needs human approval (AGENTS.md §14).
 [workspace.dependencies]
+wangungis-scene = { path = "scene" }
+wangungis-render = { path = "render" }
 kernel = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
 tessellate = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
 wgpu = "30"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
 proptest = "1"
