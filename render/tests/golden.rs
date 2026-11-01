@@ -16,23 +16,26 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = [false, true].into_iter().find_map(|fallback| {
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    // Hardware first, then the software fallback; a device must come up too.
+    let found = [false, true].into_iter().find_map(|fallback| {
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             force_fallback_adapter: fallback,
             ..Default::default()
         }))
-        .ok()
+        .ok()?;
+        let info = adapter.get_info();
+        let dq = pollster::block_on(adapter.request_device(&Default::default())).ok()?;
+        eprintln!("adapter: {} ({:?})", info.name, info.backend);
+        Some(dq)
     });
-    let Some(adapter) = adapter else {
+    if found.is_none() {
         assert!(
             std::env::var_os("WANGUNGIS_REQUIRE_GPU").is_none(),
-            "no GPU adapter but WANGUNGIS_REQUIRE_GPU is set"
+            "no usable GPU device but WANGUNGIS_REQUIRE_GPU is set"
         );
-        eprintln!("SKIP: no GPU adapter");
-        return None;
-    };
-    eprintln!("adapter: {:?}", adapter.get_info());
-    pollster::block_on(adapter.request_device(&Default::default())).ok()
+        eprintln!("SKIP: no usable GPU device");
+    }
+    found
 }
 
 /// Axis-aligned 5 x 4.244 x 3 m box with its corner at (x, y, 0). Axis-aligned
@@ -184,18 +187,28 @@ fn far_tiles_render_like_the_origin() {
     assert_eq!(draws, 2);
     let cov = coverage(&reference);
     assert!(cov > 0.05, "box barely visible: coverage {cov}");
+    // The box near the tile frame and, for the worst case inside a kernel
+    // tile, ~1.6 km from it (f32 positions there resolve 0.12 mm).
+    let edge_of_tile = (1200.0, -1100.0);
+    let far_doc = box_doc(edge_of_tile.0, edge_of_tile.1);
     for origin in [
         [40_000.0, -40_000.0, 0.0],
         [430_000.123, 9_150_000.456, 12.0],
     ] {
-        let (img, _) = render(&dq, &[(origin, &doc)], &camera(origin));
-        let d = diff(&reference, &img);
-        eprintln!("DIFF tile at {origin:?}: {:.4}%", d * 100.0);
-        assert!(
-            d <= 0.001,
-            "tile at {origin:?}: {:.2}% pixels differ",
-            d * 100.0
-        );
+        for (in_tile, d) in [((0.0, 0.0), &doc), (edge_of_tile, &far_doc)] {
+            let at = [origin[0] + in_tile.0, origin[1] + in_tile.1, origin[2]];
+            let (img, _) = render(&dq, &[(origin, d)], &camera(at));
+            let diff = diff(&reference, &img);
+            eprintln!(
+                "DIFF tile at {origin:?}, box at {in_tile:?} in tile: {:.4}%",
+                diff * 100.0
+            );
+            assert!(
+                diff <= 0.001,
+                "tile {origin:?}, box {in_tile:?}: {:.2}% pixels differ",
+                diff * 100.0
+            );
+        }
     }
 }
 
@@ -206,9 +219,11 @@ fn without_rtc_utm_renders_wrong() {
     // Geometry baked at UTM in the tile's f32 buffer, tile frame at 0: no RTC.
     let (x, y) = (430_000.123, 9_150_000.456);
     let (img, _) = render(&dq, &[([0.0; 3], &box_doc(x, y))], &camera([x, y, 0.0]));
+    // Not blank: the box is drawn, just wrongly.
+    assert!(coverage(&img) > 0.05, "no-RTC render is blank");
     let d = diff(&reference, &img);
     eprintln!("DIFF without RTC: {:.4}%", d * 100.0);
-    // Measured 1.12% on Apple M4 (the 4.244 m depth snaps to the 1 m f32 grid
+    // Measured 1.1–1.2% on Apple M4 (the 4.244 m depth snaps to the 1 m f32 grid
     // at Y = 9.15e6); RTC renders differ by 0.00%. 0.5% separates the two.
     assert!(
         d > 0.005,
@@ -217,14 +232,22 @@ fn without_rtc_utm_renders_wrong() {
     );
 }
 
+/// Two tiles, both in view: 2 draws each, and the second tile's own uniform
+/// puts its box beside the first (more pixels covered than one tile alone).
 #[test]
-fn two_draws_per_tile() {
+fn two_tiles_two_draws_each() {
     let Some(dq) = gpu() else { return };
-    let (a, b) = (box_doc(0.0, 0.0), box_doc(20.0, 0.0));
-    let (_, draws) = render(
+    let doc = box_doc(0.0, 0.0);
+    let (one, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
+    let (two, draws) = render(
         &dq,
-        &[([0.0; 3], &a), ([1000.0, 0.0, 0.0], &b)],
+        &[([0.0; 3], &doc), ([7.0, 0.0, 0.0], &doc)],
         &camera([0.0; 3]),
     );
     assert_eq!(draws, 4);
+    let (c1, c2) = (coverage(&one), coverage(&two));
+    assert!(
+        c2 > c1 * 1.3,
+        "second tile not drawn where expected: {c1:.3} -> {c2:.3}"
+    );
 }

@@ -111,8 +111,14 @@ impl Camera {
     /// View rotation + projection with the eye at the origin (column-major):
     /// translation is left out and applied per tile as an `f64` offset.
     pub fn view_proj_at_eye(&self) -> [[f32; 4]; 4] {
-        let f = norm(sub(self.target, self.eye));
-        let s = norm(cross(f, [0.0, 0.0, 1.0]));
+        let f = norm_or(sub(self.target, self.eye), [0.0, 1.0, 0.0]);
+        // Z is up; looking straight up or down, take world Y as the up hint.
+        let up_hint = if f[2].abs() > 0.999 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        let s = norm_or(cross(f, up_hint), [1.0, 0.0, 0.0]);
         let up = cross(s, f);
         let c = |v: [f64; 3]| v.map(|x| x as f32);
         let (s, up, f) = (c(s), c(up), c(f));
@@ -146,9 +152,14 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
         a[0] * b[1] - a[1] * b[0],
     ]
 }
-fn norm(a: [f64; 3]) -> [f64; 3] {
+/// Unit vector along `a`, or `fallback` when `a` has (almost) no length.
+fn norm_or(a: [f64; 3], fallback: [f64; 3]) -> [f64; 3] {
     let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-    a.map(|x| x / l)
+    if l < 1e-12 {
+        fallback
+    } else {
+        a.map(|x| x / l)
+    }
 }
 
 struct Tile {
@@ -194,13 +205,21 @@ impl Renderer {
             bind_group_layouts: &[Some(&bgl)],
             ..Default::default()
         });
-        let depth = Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: Default::default(),
-            bias: Default::default(),
-        });
+        // Faces are pushed slightly back so coplanar edges win the depth test.
+        let depth = |write: bool, bias| {
+            Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(write),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias,
+            })
+        };
+        let face_bias = wgpu::DepthBiasState {
+            constant: 2,
+            slope_scale: 1.0,
+            clamp: 0.0,
+        };
         let target = [Some(wgpu::ColorTargetState {
             format,
             blend: None,
@@ -208,34 +227,38 @@ impl Renderer {
         })];
         let tri_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let edge_attrs = wgpu::vertex_attr_array![0 => Float32x3];
-        let pipeline =
-            |vs: &str, fs: &str, stride: u64, attrs: &[wgpu::VertexAttribute], primitive| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(vs),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &module,
-                        entry_point: Some(vs),
-                        compilation_options: Default::default(),
-                        buffers: &[Some(wgpu::VertexBufferLayout {
-                            array_stride: stride,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: attrs,
-                        })],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &module,
-                        entry_point: Some(fs),
-                        compilation_options: Default::default(),
-                        targets: &target,
-                    }),
-                    primitive,
-                    depth_stencil: depth.clone(),
-                    multisample: Default::default(),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            };
+        let pipeline = |vs: &str,
+                        fs: &str,
+                        stride: u64,
+                        attrs: &[wgpu::VertexAttribute],
+                        primitive,
+                        depth_stencil| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(vs),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(vs),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: stride,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: attrs,
+                    })],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &target,
+                }),
+                primitive,
+                depth_stencil,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let tri = pipeline(
             "vs",
             "fs",
@@ -245,6 +268,7 @@ impl Renderer {
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
+            depth(true, face_bias),
         );
         let edge = pipeline(
             "vs_edge",
@@ -255,6 +279,7 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::LineList,
                 ..Default::default()
             },
+            depth(false, Default::default()),
         );
         Renderer {
             tri,
@@ -321,25 +346,34 @@ impl Renderer {
             let u = Uniform {
                 view_proj,
                 offset: [o[0], o[1], o[2], 0.0],
-                light: [0.4, 0.3, 0.866, 0.0],
+                // Unit vector; lights the two walls facing -x and -y differently.
+                light: [-0.4, -0.6, 0.6928, 0.0],
             };
             queue.write_buffer(&t.ub, 0, bytemuck::bytes_of(&u));
         }
     }
 
-    /// Records the draws: 2 per tile (faces, edges). Returns the draw-call count.
+    /// Records the draws: up to 2 per tile (faces, edges); empty buffers are
+    /// skipped. Returns the number of draw calls issued.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) -> usize {
+        let mut calls = 0;
         for t in &self.tiles {
             pass.set_bind_group(0, &t.bg, &[]);
-            pass.set_pipeline(&self.tri);
-            pass.set_vertex_buffer(0, t.vb.slice(..));
-            pass.set_index_buffer(t.ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..t.n_idx, 0, 0..1);
-            pass.set_pipeline(&self.edge);
-            pass.set_vertex_buffer(0, t.eb.slice(..));
-            pass.draw(0..t.n_edge, 0..1);
+            if t.n_idx > 0 {
+                pass.set_pipeline(&self.tri);
+                pass.set_vertex_buffer(0, t.vb.slice(..));
+                pass.set_index_buffer(t.ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..t.n_idx, 0, 0..1);
+                calls += 1;
+            }
+            if t.n_edge > 0 {
+                pass.set_pipeline(&self.edge);
+                pass.set_vertex_buffer(0, t.eb.slice(..));
+                pass.draw(0..t.n_edge, 0..1);
+                calls += 1;
+            }
         }
-        2 * self.tiles.len()
+        calls
     }
 }
 
@@ -349,6 +383,39 @@ mod tests {
 
     fn clip(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
         std::array::from_fn(|r| (0..3).map(|c| m[c][r] * p[c]).sum::<f32>() + m[3][r])
+    }
+
+    #[test]
+    fn straight_down_and_degenerate_views_are_finite() {
+        let mut cam = Camera {
+            eye: [5.0, 5.0, 100.0],
+            target: [5.0, 5.0, 0.0],
+            fovy: 0.8,
+            aspect: 1.0,
+            near: 0.5,
+            far: 500.0,
+        };
+        assert!(
+            cam.view_proj_at_eye()
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite()),
+            "top-down view"
+        );
+        cam.target = cam.eye;
+        assert!(
+            cam.view_proj_at_eye()
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite()),
+            "eye == target"
+        );
+        cam.target = [5.0, 5.0, 0.0];
+        let c = clip(&cam.view_proj_at_eye(), [0.0, 0.0, -100.0]);
+        assert!(
+            c[3] > 0.0 && (c[0] / c[3]).abs() < 1e-5 && (c[1] / c[3]).abs() < 1e-5,
+            "top-down target not centered: {c:?}"
+        );
     }
 
     #[test]
