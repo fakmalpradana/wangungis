@@ -4,25 +4,27 @@ Sumber kebenaran tunggal. CLAUDE.md dan GEMINI.md hanya mengimpor file ini.
 Bagian bertanda `TODO` diisi setelah riset (Tahap 0) dan ADR selesai. Jangan menebak nilainya.
 
 ## 1. Proyek
-- Nama: **WangunGIS** (identifier: `wangungis`; folder repo lokal masih `citySketch`). Open source, lisensi: `TODO` (AGPL-3.0-only diterima, final di ADR-005 setelah spike).
+- Nama: **WangunGIS** (identifier: `wangungis`; folder repo lokal masih `citySketch`). Open source, lisensi: **AGPL-3.0-only** (ADR-005).
 - Tujuan: aplikasi pemodelan 3D desktop dengan UX dan fitur setara SketchUp, fokus awal pemodelan bangunan LOD1–LOD3 yang cepat dan presisi.
 - Platform: macOS, Windows, Linux. Satu basis kode. Dev utama di macOS (Apple Silicon).
-- Pelaksana: 1 manusia (pemilik/reviewer) + agen AI. Tidak ada tim lain, tidak ada budget uang.
+- Pelaksana: 1 manusia (pemilik, pengambil keputusan) + agen AI. Penguji beta: 3D engineer milik pemilik, menguji perilaku aplikasi dan memberi umpan balik langsung. Tidak ada budget uang.
+- Strategi: jalur **A2** (ADR-000, K2 2026-11-01). Crate inti Hew (`kernel`, `inference`, `tessellate`, `mesh-export`) dipakai sebagai library, dengan aplikasi native sendiri.
 - Clean-room: tiru alur kerja dan perilaku UX SketchUp, JANGAN salin kode, aset, ikon, nama, atau merek dagangnya.
 
 ## 2. Prinsip (urutan prioritas)
 1. Benar dan presisi sebelum cepat. Geometri yang salah merusak semuanya.
 2. Reuse library matang sebelum menulis sendiri (lihat §5).
-3. Sederhana, kecil, mudah dipahami manusia. Satu manusia harus sanggup mereview semuanya.
+3. Sederhana, kecil, mudah dipahami. Pemilik tidak mereview kode kernel baris per baris (K2, 2026-11-01). Karena itu kebenaran dijaga oleh test otomatis, review silang agen lain (§12), dan uji beta oleh 3D engineer. Ringkasan PR tetap wajib bisa dipahami pemilik.
 4. Setiap perilaku punya test otomatis. Tanpa test, fitur dianggap belum ada.
 5. Jangan mengarang. Jika tidak tahu, baca kode/dokumen, cari sumber, atau tanya manusia.
 
 ## 3. Stack
-- Bahasa inti: `TODO (Rust atau C++, putusan ADR-001)`
-- UI: `TODO (ADR-002)`
-- Rendering: `TODO (ADR-003)`
-- Kernel geometri: `TODO (ADR-004)`
-- Scripting/plugin: Python (utama), opsi WASM `TODO`
+- Bahasa inti: Rust (ADR-001)
+- UI: egui/eframe (ADR-002)
+- Rendering: wgpu, batching per tile, RTC (ADR-003)
+- Kernel geometri: crate `kernel` Hew, dependensi git dipin ke satu commit. Manifold opsional untuk boolean berat/LOD3 (ADR-004)
+- Format native: `.hew` + atribut `wangungis.*` (ADR-006)
+- Scripting/plugin: Python sebagai proses terpisah, mulai v0.5. WASM dipertimbangkan setelah v0.5 (ADR-007)
 - Build/CI: GitHub Actions (macOS, Windows, Linux), semua wajib hijau.
 
 ## 4. Struktur repo (target)
@@ -40,22 +42,25 @@ plugin-host/     API Python
 docs/            adr/, spec/, user/
 tests/           unit, property-based, golden-image, benchmark
 ```
+Jalur A2: `core-geometry` (half-edge, push/pull, boolean, toleransi), `commands` (undo/redo), dan `inference` disediakan crate Hew. Modul kita hanya membungkus atau menambah yang belum ada. Jangan menulis ulang yang sudah ada di Hew (§8 langkah 3a). Struktur final ditetapkan saat scaffold F0.
+
 Setiap modul punya `SPEC.md` (tujuan, API publik, invariant, non-goals). Ubah kode publik = ubah SPEC.md di PR yang sama.
 
 ## 5. Reuse vs tulis sendiri
 Wajib pakai library matang (jangan tulis ulang):
-- Kernel/booleans/mesh ops: pilihan hasil ADR (CGAL / Manifold / OpenCascade / libigl / Clipper2)
+- Kernel/booleans/mesh ops: crate `kernel` Hew (ADR-004). Manifold opsional untuk boolean berat/LOD3; i_overlay/Clipper2 untuk poligon 2D.
 - CRS: PROJ. Raster/vektor: GDAL. Point cloud: PDAL. IFC: IfcOpenShell.
 - I/O mesh: assimp / glTF / OpenUSD. Validasi LOD: val3dity. CityJSON: cjio / citygml-tools sebagai referensi dan validator.
 
 Memang harus ditulis sendiri (inti diferensiasi):
-- Inference engine, tool interaksi gaya SketchUp, scene model Groups/Components, operasi Push/Pull dan Intersect di atas half-edge, LOD engine (roof fitting, template fasad).
+- Tool interaksi gaya SketchUp dan UI (egui), renderer wgpu, indeks inference per tile di atas crate `inference` Hew, origin proyek/CRS, LOD engine (roof fitting, template fasad), I/O geospasial.
+- Half-edge, Push/Pull, Intersect, undo, dan inference dasar **tidak** ditulis ulang: pakai crate Hew (ADR-000 A2). Kekurangannya ditambal lewat PR upstream atau patch kecil di fork.
 
 Menambah dependensi baru: tulis ADR singkat (lisensi kompatibel, ukuran, aktivitas proyek, alternatif). Dependensi proprietary/berbayar dilarang.
 
 ## 6. Aturan geometri
 - Koordinat world: double precision. Gunakan floating origin / origin shifting untuk koordinat UTM besar.
-- Predikat geometri kritis (orientasi, in-circle, bidang) memakai robust/exact predicates. Dilarang membandingkan float dengan `==` atau epsilon ad hoc. Toleransi dipusatkan di satu modul dan didokumentasikan.
+- Predikat geometri kritis (orientasi, in-circle, bidang) memakai robust/exact predicates. Kernel Hew baru memakai orientasi 2D eksak; kode kita mengikuti aturan ini, dan kebutuhan 3D dievaluasi ulang (ADR-004). Dilarang membandingkan float dengan `==` atau epsilon ad hoc. Toleransi dipusatkan di satu modul dan didokumentasikan.
 - Setiap operasi mengubah mesh wajib menjaga invariant: manifold, orientasi normal konsisten, tidak ada face degenerate. Tambahkan assert/validator dan test.
 - Operasi baru wajib punya property-based/fuzz test (input acak, pasti tidak merusak invariant).
 - Export LOD wajib lolos val3dity (uji otomatis di CI).
@@ -83,7 +88,7 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 1. Baca SPEC.md modul terkait dan test yang ada.
 2. Rencana 5 baris (caveman). Tugas > 1 sesi: pecah dulu.
 3. Tangga ponytail → implementasi minimal yang benar.
-   3a. Cek apakah fitur sudah ada di Hew (jalur A, ADR-000) atau di library terpilih sebelum menulis.
+   3a. Cek apakah fitur sudah ada di crate Hew (jalur A2, ADR-000) atau di library terpilih sebelum menulis.
 4. Tulis/ubah test dulu atau bersamaan. Jalankan test lokal.
 5. `ponytail-review` (bila ada) untuk over-engineering.
 6. Review silang agen lain khusus KEBENARAN (invariant, edge case, presisi), bukan hanya ukuran kode.
@@ -96,7 +101,7 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 - Test satu modul: `TODO`
 - Lint/format: `TODO`
 - Benchmark: `TODO`
-- Validasi ekspor LOD (val3dity): `TODO`
+- Validasi ekspor LOD (val3dity): `python scripts/validate_lod.py` (butuh `cjval` dan `val3dity` di PATH)
 
 ## 10. Definisi selesai (semua wajib)
 - [ ] Test unit + property-based untuk perilaku baru lulus
@@ -124,7 +129,7 @@ Tulis di `docs/sessions/YYYY-MM-DD-<topik>.md` (gaya caveman, maks 15 baris): tu
 - PR: ringkasan 3–5 baris, risiko, test yang ditambah, hasil benchmark bila relevan.
 
 ## 14. Checkpoint manusia
-Wajib persetujuan manusia sebelum: menambah dependensi, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, atau perubahan lisensi. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
+Wajib persetujuan manusia sebelum: menambah dependensi, mengganti commit pin crate Hew, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, atau perubahan lisensi. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
 
 ## 15. Dilarang
 - Menyalin kode/aset/ikon/merek SketchUp atau software proprietary lain.

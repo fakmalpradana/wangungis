@@ -1,6 +1,6 @@
 # ADR-005: Lisensi proyek
 
-- Status: Proposed (bergantung ADR-000)
+- Status: **Accepted** 2026-11-01: **AGPL-3.0-only** (K1 + K2 = A2, ADR-000). A2 memakai crate Hew yang AGPL-3.0-only, jadi pilihan GPL jalur B tidak berlaku.
 
 ## Keputusan
 - Jalur A: **AGPL-3.0-only** (wajib mengikuti Hew).
@@ -9,7 +9,13 @@
 
 ## Catatan keputusan
 - 2026-10-29: manusia menerima AGPL-3.0-only (K1, kriteria #7 ADR-000). Bila spike memilih jalur A, ADR ini menjadi Accepted dengan AGPL-3.0-only.
-- Konsekuensi untuk jalur B: karena AGPL sudah diterima, jalur B juga boleh memakai AGPL-3.0-only. Dengan begitu kode Hew boleh disalin dengan atribusi (ADR-000, Konsekuensi). GPL-3.0-or-later tetap default jalur B; pilihan final diambil saat K2.
+- Konsekuensi untuk jalur B: karena AGPL sudah diterima, jalur B juga boleh memakai AGPL-3.0-only. Dengan begitu kode Hew boleh disalin dengan atribusi (ADR-000, Konsekuensi). (Riwayat: pilihan final diambil saat K2 2026-11-01, yaitu A2 dengan AGPL-3.0-only.)
+
+## Kewajiban AGPL-3.0-only untuk A2
+- File `LICENSE` berisi teks AGPL-3.0 ada di root repo.
+- Setiap binary rilis disertai tautan ke Corresponding Source lengkap untuk versi itu, yaitu tag repo kita. Isinya mencakup commit Hew yang dipin dan patch fork bila ada (`Cargo.lock` mengunci commit-nya).
+- Pertahankan pemberitahuan hak cipta dan lisensi Hew pada kode yang diport atau disalin. Cantumkan sumbernya di komentar file.
+- Hew Plugin API Exception hanya berlaku untuk antarmuka plugin milik Hew. Exception ini **tidak** otomatis berlaku untuk API Python kita (ADR-007). Status lisensi plugin pihak ketiga yang berbicara dengan WangunGIS lewat proses terpisah adalah **asumsi** (umumnya dianggap karya terpisah). Tinjau ulang sebelum v0.5.
 
 ## Alasan
 - Kompatibel dengan dependensi yang mungkin dipakai: CGAL paket GPL ([cgal.org](https://www.cgal.org/license.html)), Slint GPLv3, Qt LGPL, Manifold Apache-2.0, Clipper2 BSL-1.0.

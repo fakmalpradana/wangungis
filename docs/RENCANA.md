@@ -13,16 +13,14 @@ Status: 2026-10-29. Nama produk: **WangunGIS** (K3, 2026-10-29). "citySketch" ad
 
 **Posisi produk.** Editor LOD gaya SketchUp yang menjadi pelengkap pipeline otomatis. Model valid sejak digambar dan bekerja langsung di koordinat UTM.
 
-**Keputusan yang sudah diambil.** Spike evaluasi Hew 1–2 minggu dengan 7 kriteria terukur (ADR-000). Hasilnya menentukan:
-- **Jalur A**: bangun di atas Hew, lisensi AGPL. Estimasi likely ±540 jam manusia sampai v0.5.
-- **Jalur B**: mulai dari nol, lisensi GPL-3.0-or-later. Estimasi likely ±740 jam.
+**Keputusan yang sudah diambil.** Spike evaluasi Hew (ADR-000) selesai, dan K2 (2026-11-01) memilih **jalur A2**. Crate Rust inti Hew dipakai sebagai library, dengan aplikasi native sendiri dan lisensi AGPL-3.0-only. Estimasi ada di `plan/roadmap.md` (bagian koreksi A2).
 
-**Stack yang direkomendasikan (ADR Proposed).**
+**Stack (ADR Accepted, jalur A2).**
 - Bahasa: Rust; Python untuk plugin (proses terpisah).
-- Geometri: half-edge + predikat `robust` + Manifold + i_overlay.
-- Presisi: model `f64`, render RTC.
-- Format dan validasi: PROJ, cjval/cjseq, tyler, val3dity di CI.
-- UI dan render: Tauri+React+three.js (jalur A) atau egui+wgpu (jalur B).
+- Geometri: crate `kernel` Hew; Manifold opsional; i_overlay untuk 2D.
+- Presisi: model `f64` lokal ≤ ±50 km dari origin proyek; render RTC.
+- Format dan validasi: `.hew` + atribut `wangungis`, PROJ, cjval/cjseq, tyler, val3dity di CI.
+- UI dan render: egui + wgpu ber-batching.
 
 **Distribusi gratis.**
 - macOS: panduan "Open Anyway" + tap Homebrew sendiri.
@@ -38,14 +36,14 @@ Status: 2026-10-29. Nama produk: **WangunGIS** (K3, 2026-10-29). "citySketch" ad
 - Kode agen yang tidak dipahami (R6).
 - Scope creep (R11).
 
-Keempat risiko pertama diuji di Fase 0.
+Keempat risiko pertama diuji di Fase 0. R6 sudah terjadi (pemilik tidak menilai kode kernel), sehingga mitigasinya beralih ke test, review silang agen, dan uji beta.
 
 ## 2. Indeks dokumen
 
 | Tahap | Dokumen |
 |---|---|
 | 0 — Riset | [research/ringkasan.md](research/ringkasan.md) · [teknologi.md](research/teknologi.md) · [kompetitor.md](research/kompetitor.md) · [skill.md](research/skill.md) · bahan mentah [_raw-painpoints.md](research/_raw-painpoints.md) |
-| ADR | [adr/](adr/) — ADR-000 (Accepted) s.d. ADR-007 (Proposed) |
+| ADR | [adr/](adr/) — ADR-000 s.d. ADR-007 (Accepted, jalur A2) |
 | 1 — Produk | [plan/produk.md](plan/produk.md) |
 | 2 — Feature matrix | [plan/feature-matrix.md](plan/feature-matrix.md) (100 fitur) |
 | 3 — Arsitektur | [plan/arsitektur.md](plan/arsitektur.md) |
@@ -63,6 +61,7 @@ Keempat risiko pertama diuji di Fase 0.
   - #6: posting issue.
 - Tambahan di luar rencana: opsi **A2** dengan 4 prototipe pendukung.
 - Bahan keputusan Hari 12 (K2): [`research/keputusan-k2.md`](research/keputusan-k2.md).
+- 2026-11-01: K2 = **A2**. Hari 13 selesai: ADR-001..007 Accepted, `TODO` stack di AGENTS.md terisi. §9 menunggu scaffold.
 
 Asumsi ritme ±1–2 jam per hari. Setiap hari = satu sesi agen kecil + log sesi.
 
@@ -88,11 +87,11 @@ Asumsi ritme ±1–2 jam per hari. Setiap hari = satu sesi agen kecil + log sesi
 | # | Keputusan | Kapan | Rekomendasi |
 |---|---|---|---|
 | K1 | Apakah AGPL-3.0-only bisa diterima? (syarat jalur A) | Hari 1 | **Diputuskan 2026-10-29: Ya.** Kriteria spike #7 lulus. |
-| K2 | Jalur A atau B setelah spike | Hari 12 | Ikuti kriteria ADR-000 apa adanya |
+| K2 | Jalur A atau B setelah spike | Hari 12 | **Diputuskan 2026-11-01: A2** (didelegasikan manusia ke agen; ADR-000). Uji #4 tidak dijalankan; #6 ditunda. |
 | K3 | Nama proyek (bebas merek "SketchUp"/"Sketch") | Hari 1–14 | **Diputuskan 2026-10-29: WangunGIS** (`docs/research/nama.md`). Cek merek PDKI/TMview masih harus dilakukan. |
 | K4 | Setujui usulan perubahan AGENTS.md, CLAUDE.md, dan pembuatan GEMINI.md | Hari 1 | Setujui (prompts.md §7) |
 | K5 | Ritme kerja per semester (5/10/20 jam per minggu) untuk mengunci estimasi | Hari 14 | Mulai dengan 5–10 jam dan ukur |
-| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | Ditentukan dari data spike, bukan ditebak |
+| K6 | Toleransi geometri awal (`LENGTH_EPS`, `PLANARITY_EPS`) | Setelah spike S2 | **Diputuskan 2026-11-01 (K2):** pakai toleransi Hew apa adanya (`POINT_MERGE` = `PLANE_DIST` = 1e-9 m), dengan syarat koordinat kernel lokal ≤ ±50 km dari origin proyek; dikunci setelah property test bidang miring/lingkaran/boolean di F0 lulus (ADR-004) |
 | K7 | Dataset uji Indonesia yang lisensinya jelas | Sebelum v0.2 | Mulai dengan 3D BAG; cari data terbuka DKI/BIG |
 | K8 | Perbaiki config agy `tier_pro` → "Gemini 4 Argon (High)" | Kapan saja | Ya; delegasi `--tier pro` sekarang gagal |
 

@@ -1,6 +1,6 @@
 # ADR-001: Bahasa inti — Rust
 
-- Status: Proposed (berlaku untuk jalur A dan B)
+- Status: **Accepted** 2026-11-01 (K2 = A2, ADR-000)
 - Konteks: satu manusia mereview kode yang sebagian besar ditulis agen. Library wajib (AGENTS.md §5) harus terjangkau.
 
 ## Keputusan
@@ -19,5 +19,5 @@ Rust untuk semua modul inti. Python untuk plugin dan alur yang butuh IfcOpenShel
 - CMake dan compiler C++ tetap dibutuhkan untuk binding (`manifold-csg`).
 - Library C++ besar tanpa binding matang (IfcOpenShell, GDAL penuh) dipakai lewat proses/plugin Python, bukan FFI.
 
-## Bila opsi A2 dipilih (ADR-000, menunggu K2)
+## Opsi A2 (dipilih, K2 2026-11-01)
 Tidak ada perubahan: Rust tetap dipakai. Crate `kernel`, `inference`, `tessellate`, dan `mesh-export` Hew dipakai sebagai dependensi git yang dipin ke satu commit. Sinkronisasi dijadwalkan per rilis Hew. Churn API publik terukur kecil (`research/keputusan-k2.md`).

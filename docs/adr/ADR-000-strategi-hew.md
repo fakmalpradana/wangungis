@@ -1,6 +1,6 @@
 # ADR-000: Strategi terhadap Hew — spike evaluasi dulu
 
-- Status: **Accepted** (dipilih manusia 2026-10-28: jalur C)
+- Status: **Accepted** (dipilih manusia 2026-10-28: jalur C). Spike ditutup 2026-11-01 dengan keputusan K2 = **A2** (lihat bagian terakhir).
 - Konteks: [Hew](https://github.com/hew3d/hew) sudah menyediakan UX gaya SketchUp di atas kernel half-edge Rust (AGPL-3.0-only), tetapi tidak punya fitur geospasial/LOD. Rincian di `docs/research/teknologi.md` §0.
 
 ## Keputusan
@@ -25,7 +25,7 @@ Hasil sementara:
   - Test app (Vitest): 6.219 lulus di 282 file.
   - Clippy `-D warnings` bersih.
   - Catatan untuk kriteria #4: kode Rust di `crates/` berjumlah ±279 ribu baris.
-- #4 **menunggu manusia**. Penjelasan alur push/pull dan 5 pertanyaan uji ada di `docs/research/hew-kernel.md`. Lulus bila manusia bisa menjawab tanpa melihat dokumen.
+- #4 **tidak dijalankan** (lihat Keputusan K2). Penjelasan alur push/pull dan 5 pertanyaan uji ada di `docs/research/hew-kernel.md`. Lulus bila manusia bisa menjawab tanpa melihat dokumen.
 - #2 **gagal untuk skenario kota** (2026-10-29, `docs/research/hew-spike-fps.md`).
   - GPU sanggup: 1M face dalam 1.024 Object = 122 FPS.
   - Tetapi setiap Object = 2 draw call tanpa batching: 16,6 ribu Object = 14 FPS, 41,6 ribu = 5,6 FPS, dan 167 ribu Object membuat tab crash saat dimuat.
@@ -68,7 +68,7 @@ Keputusan: ≥ 6 dari 7 lulus, termasuk #3 dan #7 → A. Selain itu → B, denga
 - Kernel Hew dikompilasi ke WebAssembly (`wasm32-unknown-unknown`). Crate dengan dependensi C/C++ (`proj` dengan `bundled_proj`, `manifold-csg`) tidak bisa begitu saja masuk ke kernel WASM. Pada jalur A, crate ini kemungkinan harus berjalan di sisi native Tauri. Hal ini diuji sebagai bagian kriteria #5 (Hari 11). Ditemukan dalam review silang Gemini, 2026-10-29.
 - Kriteria #2 (≥ 30 FPS) adalah ambang minimum spike. Target produk tetap ≥ 60 FPS pada 1M face di v0.2 (`plan/produk.md`), jadi selisihnya harus ditutup sebelum v0.2.
 
-## Usulan opsi A2 dari hasil spike (2026-10-29, menunggu keputusan manusia K2)
+## Usulan opsi A2 dari hasil spike (2026-10-29; riwayat, sudah diputuskan di K2)
 
 Spike memperlihatkan hal-hal berikut:
 - Bagian Hew yang paling bernilai bagi kita adalah crate Rust murninya, dan semuanya tanpa dependensi UI:
@@ -105,9 +105,41 @@ Perbandingan dengan jalur A, untuk kebutuhan kita:
 
 **Bukti awal (2026-10-29, `docs/research/spike-a2-native-render.md`):** model 1M face / 167 ribu Object yang membuat web Hew crash berhasil dimuat native dalam 1,06 detik. Model itu dirender dengan wgpu ber-batching pada **233 FPS** (1920×1080, 2 draw call per frame, RSS 1,8 GB). Revisi dengan dokumen, buffer, dan indeks dimuat bersamaan: model kota 25 ribu × 40 face mencapai 203 FPS (web Hew 8,6 FPS), RSS 3,5 GB, dan waktu sampai interaktif 7,8 detik. Snap pertama setelah edit butuh 5,9 detik, masalah yang sama dengan jalur A. Mitigasi tanpa mengubah Hew (satu `InferenceScene` per tile 100 m) menurunkannya ke **7,8 ms**; snapping lintas tile belum ditangani (estimasi 10–20 jam, asumsi). UI belum diuji.
 
-**Usulan aturan keputusan tiga jalur** (menggantikan aturan biner A/B; menunggu persetujuan manusia):
+**Usulan aturan keputusan tiga jalur** (riwayat; tidak pernah disetujui, lihat Keputusan K2):
 - **A**: hanya bila #2 lulus setelah perbaikan yang diterima upstream, dan #4, #5, #6 lulus.
 - **A2**: bila #1, #3 (bagian kernel), dan #4 lulus, dan dependensi git ke crate inti Hew bisa dipin dan disinkronkan (kriteria ini belum diukur). Persetujuan pengelola (#6) hanya diperlukan untuk perubahan kernel seperti atribut per face dan indeks inkremental. Tanpa persetujuan itu, kita memelihara patch kecil di fork.
 - **B**: bila #4 gagal (kernel tidak bisa dipahami), atau bila sinkronisasi dengan Hew terbukti terlalu mahal.
 
-Ini usulan, bukan keputusan. Keputusan A, A2, atau B tetap diambil manusia di Hari 12 (K2), setelah #4 dan #6 selesai.
+Ini usulan, bukan keputusan. Keputusan akhirnya ada di bagian berikut.
+
+## Keputusan K2 (2026-11-01): jalur A2
+
+Manusia mendelegasikan keputusan kepada agen: "keputusan saya mengikuti rekomendasi terbaik anda, jadi lanjutkan" (2026-11-01). Agen memilih **A2**, sesuai rekomendasi di `research/keputusan-k2.md`.
+
+**K2 mengesampingkan kedua aturan keputusan di ADR ini, bukan mengikutinya:**
+- Aturan biner asli (≥ 6/7 lulus → A, selain itu → B) menghasilkan **B**, karena hanya #1 dan #7 yang lulus.
+- Usulan aturan tiga jalur mensyaratkan #4 lulus untuk A2. #4 tidak dijalankan, dan `keputusan-k2.md` sendiri menyebut A2 kehilangan alasannya bila #4 gagal.
+
+Alasan tetap memilih A2:
+- Bukti terukur di sisi kernel dan render: 203 FPS lawan 8,6 FPS, kernel lulus pada koordinat lokal, dan ekspor CityJSON lolos val3dity.
+- Pemilik mendelegasikan keputusan secara eksplisit.
+- Jalur B tidak mengatasi masalah #4. Bila pemilik tidak menilai kode kernel, kernel buatan sendiri juga tidak akan dinilainya, padahal biayanya lebih besar.
+
+Penyimpangan, dicatat apa adanya:
+- **#4 tidak diuji.** Manusia menyatakan belum bisa menilai kode kernel. Syarat "#4 lulus" untuk A2 tidak terpenuhi. Penggantinya (lihat `plan/risiko.md` R6):
+  - Review silang agen lain (Gemini) untuk kebenaran pada setiap PR.
+  - Test otomatis wajib.
+  - Uji perilaku oleh 3D engineer pada rilis beta. Umpan baliknya menjadi sumber utama perbaikan.
+- **#6 ditunda.** A2 bisa mulai tanpa persetujuan pengelola Hew. Ada tiga celah yang kelak butuh perubahan upstream atau patch fork:
+  - Atribut per face (semantik permukaan, ADR-006).
+  - Metrik ranking snap ("gravity") sebagai API publik. Tanpa ini, snapping per tile hanya 98% identik dengan scene global (`research/spike-a2-native-render.md`).
+  - Indeks inference inkremental. Draf issue tetap di `research/hew-issue-draft.md`. Draf itu diposting baru ketika kita butuh perubahan kernel (misalnya atribut per face), dan selalu dengan persetujuan eksplisit manusia karena tampil publik atas nama akunnya.
+- **Sinkronisasi crate Hew belum diukur.** Ini diukur pada pembaruan pin pertama. Bila terlalu mahal, pertimbangkan pindah ke B (aturan di atas).
+
+Konsekuensi:
+- ADR-001..005 dan ADR-007 menjadi Accepted untuk A2.
+- ADR-006 Accepted dengan format `.hew` + atribut namespace `wangungis.*`.
+- Celah yang sudah terukur dan wajib ditangani di F0/v0.1:
+  - Renderer wgpu ber-batching + RTC (ADR-003).
+  - Indeks inference per tile (prototipe 7,8 ms; snapping lintas tile belum).
+  - Origin proyek: koordinat kernel lokal ≤ ±50 km (ADR-004).
