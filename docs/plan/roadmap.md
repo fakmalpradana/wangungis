@@ -51,7 +51,7 @@ Catatan:
 3. Origin proyek: dokumen menyimpan CRS + origin `f64` di atribut `wangungis.*` (ADR-006). Proyek ≤ ±50 km dari origin; geometri ≤ 1,5 km dari frame `Document` (butir 5). **Selesai 2026-11-01** (`scene`).
 4. Golden-image test: kotak di origin vs di UTM 49S harus identik dalam toleransi piksel (sisa kriteria S2). **Selesai 2026-11-03:** 40 km dan UTM berbeda 0,00% piksel dari origin; kontrol negatif tanpa RTC berbeda 1,2%.
 5. Property test kernel: bidang miring, lingkaran, dan boolean. **Selesai 2026-11-01:** boolean ditolak mulai ±2,8 km, sehingga proyek dipecah menjadi tile kernel 1 km (ADR-004).
-6. Tile kernel: satu `Document` Hew per tile; buka dan simpan proyek multi-tile (format proyek, ADR-006). **Belum**: rencana berikut.
+6. Tile kernel: satu `Document` Hew per tile; buka dan simpan proyek multi-tile (format proyek, ADR-006). **Selesai 2026-11-03** (`scene::project` PR #8, `ui` PR #9): wadah `.wangun`; `.hew` besar dipecah otomatis (`city25k`: 9 tile dalam 4,1 dtk).
 
 **Tiga fitur pertama v0.1** (dipilih 2026-11-01; ini yang pertama bisa diuji 3D engineer). Sebagian item (#19, #20, #22, #31) sebenarnya F0. Di sini item itu dirakit menjadi alur yang bisa dipakai:
 1. Navigasi + seleksi: orbit/pan/zoom, zoom extents, pilih face/edge lewat picking `inference` per tile (#31, #32, #19).
