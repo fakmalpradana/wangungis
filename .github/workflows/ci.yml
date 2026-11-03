@@ -94,6 +94,9 @@ jobs:
 
   rust:
     name: rust (${{ matrix.os }})
+    env:
+      # Golden-image tests fail instead of skipping when no adapter is found.
+      WANGUNGIS_REQUIRE_GPU: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +106,10 @@ jobs:
       - uses: actions/checkout@v4
       # rust-toolchain.toml pins the compiler; rustup installs it on first use.
       - uses: Swatinem/rust-cache@v2
+      # Software Vulkan (lavapipe) for the golden-image render tests.
+      - name: GPU (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
