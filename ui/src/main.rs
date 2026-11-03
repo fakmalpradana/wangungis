@@ -143,6 +143,8 @@ impl App {
         self.error = None;
         self.adopt(empty_scene());
         self.source = Source::default();
+        // Simpan writes to this box next: it must not still name the old file.
+        self.path.clear();
         self.unsaved = false;
         self.split_on_open = false;
     }
@@ -181,6 +183,13 @@ impl App {
                 return;
             }
         };
+        if self.source.path.as_deref() != Some(&target) && target.exists() {
+            self.error = Some(format!(
+                "{} sudah ada dan bukan file yang sedang dibuka. Pakai nama lain.",
+                target.display()
+            ));
+            return;
+        }
         match write_atomic(&target, &project.save()) {
             Ok(()) => {
                 self.path = target.to_string_lossy().into_owned();
@@ -261,6 +270,7 @@ impl App {
         // Ids held by a gesture may be stale now.
         self.tool.reset();
         self.typed.clear();
+        self.last_pointer = None;
         self.sync_edits();
     }
 
@@ -290,16 +300,21 @@ impl App {
                 egui::Event::Key {
                     key,
                     pressed: true,
+                    repeat,
                     modifiers,
                     ..
-                } => self.handle_key(key, modifiers),
+                } => self.handle_key(key, modifiers, repeat),
                 _ => {}
             }
         }
     }
 
-    fn handle_key(&mut self, key: egui::Key, m: egui::Modifiers) {
+    fn handle_key(&mut self, key: egui::Key, m: egui::Modifiers, repeat: bool) {
         use egui::Key as K;
+        // Holding a key may repeat undo and backspace, nothing that ends a gesture.
+        if repeat && !matches!(key, K::Z | K::Backspace) {
+            return;
+        }
         if m.command {
             match (key, m.shift) {
                 (K::Z, false) => self.undo(),
@@ -635,9 +650,9 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("Nilai:");
                 ui.monospace(if self.typed.is_empty() {
-                    "—".to_string()
+                    "-"
                 } else {
-                    format!("{}▏", self.typed)
+                    &self.typed
                 });
                 ui.separator();
                 if let Some(hit) = self.tool.preview().snap {
@@ -723,15 +738,21 @@ impl App {
             } else {
                 self.orbit.orbit(d.x, d.y);
             }
-            self.overlay_shown = None;
+            self.camera_moved();
         }
         if resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 self.orbit.zoom(scroll / 50.0);
-                self.overlay_shown = None;
+                self.camera_moved();
             }
         }
+    }
+
+    /// The same pixel now means another ray, and the marker another size.
+    fn camera_moved(&mut self) {
+        self.overlay_shown = None;
+        self.last_pointer = None;
     }
 
     fn pointer_input(&mut self, resp: &egui::Response, rect: egui::Rect, size: egui::Vec2) {

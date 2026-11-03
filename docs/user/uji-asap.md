@@ -37,7 +37,7 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 6. Tetap di **P**, klik face atas, gerakkan kursor naik-turun, klik lagi. Tinggi berubah mengikuti kursor.
 7. **Cmd+Z** berkali-kali sampai kosong, lalu **Shift+Cmd+Z** sampai kotak kembali.
 8. Tekan **L**. Klik empat titik membentuk segi empat, lalu klik titik pertama lagi. Rantai berakhir sendiri. Dekatkan kursor ke sudut: penanda hijau muncul dan titik menempel.
-9. Isi path di kotak atas, misalnya `/tmp/uji.hew`. Tekan **Simpan**. Tekan **Baru**, isi path yang sama, tekan **Buka**: kotak yang sama muncul lagi.
+9. Isi path di kotak atas, misalnya `/tmp/uji.hew` (file yang belum ada). Tekan **Simpan**. Tekan **Baru**: layar kosong dan kotak path kosong. Isi path yang sama, tekan **Buka**: kotak yang sama muncul lagi. Simpan menolak menimpa file lain yang sudah ada.
 10. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
 
 ## Yang diketahui belum ada
