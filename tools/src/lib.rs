@@ -7,6 +7,9 @@
 //! when a ray first passes near them; results are merged across cells by the
 //! same priority Hew uses inside one scene.
 
+pub mod tool;
+pub mod vcb;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -497,6 +500,83 @@ impl Scene {
             direction: ray.direction.normalized().ok()?,
         };
         self.nearest_face(&unit)
+    }
+
+    /// A solid face's plane and outer boundary, project-local. `None` for a
+    /// stale id, a non-face element, or a face inside a component.
+    pub fn face_shape(&self, key: TileKey, source: SnapSource) -> Option<(Plane, Vec<Point3>)> {
+        let inference::ElementRef::Face(face) = source.element else {
+            return None;
+        };
+        if source.instance.is_some() {
+            return None;
+        }
+        let object = self.project.tiles.get(&key)?.object(source.object)?;
+        let f = object.faces().get(face)?;
+        let c = key.center();
+        let up = |p: Point3| Point3::new(p.x + c[0], p.y + c[1], p.z + c[2]);
+        let plane = Plane::from_point_normal(up(f.plane.point()), f.plane.normal()).ok()?;
+        Some((plane, object.loop_positions(f.outer_loop).map(up).collect()))
+    }
+
+    /// A sketch region's plane and outer boundary, project-local.
+    pub fn region_shape(
+        &self,
+        key: TileKey,
+        sketch: SketchId,
+        region: SketchRegionId,
+    ) -> Option<(Plane, Vec<Point3>)> {
+        let sk = self.project.tiles.get(&key)?.sketch(sketch)?;
+        let r = sk.regions().get(region)?;
+        let c = key.center();
+        let up = |p: Point3| Point3::new(p.x + c[0], p.y + c[1], p.z + c[2]);
+        let plane = Plane::from_point_normal(up(sk.plane().point()), sk.plane().normal()).ok()?;
+        Some((
+            plane,
+            r.outer
+                .iter()
+                .map(|v| up(sk.vertices()[*v].position))
+                .collect(),
+        ))
+    }
+
+    /// How many extrudable regions `sketch` has.
+    pub fn region_count(&self, key: TileKey, sketch: SketchId) -> usize {
+        self.project
+            .tiles
+            .get(&key)
+            .and_then(|d| d.extrudable_regions(sketch).ok())
+            .map_or(0, |r| r.len())
+    }
+
+    /// Lines to highlight a picked target, project-local.
+    pub fn outline(&self, target: tool::Target) -> Vec<(Point3, Point3)> {
+        let closed = |shape: Option<(Plane, Vec<Point3>)>| {
+            shape.map_or_else(Vec::new, |(_, p)| {
+                (0..p.len()).map(|k| (p[k], p[(k + 1) % p.len()])).collect()
+            })
+        };
+        match target {
+            tool::Target::Region {
+                tile,
+                sketch,
+                region,
+            } => closed(self.region_shape(tile, sketch, region)),
+            tool::Target::Solid { tile, source } => match source.element {
+                inference::ElementRef::Face(_) => closed(self.face_shape(tile, source)),
+                inference::ElementRef::Edge(edge) if source.instance.is_none() => {
+                    let c = tile.center();
+                    let up = |p: Point3| Point3::new(p.x + c[0], p.y + c[1], p.z + c[2]);
+                    self.project
+                        .tiles
+                        .get(&tile)
+                        .and_then(|d| d.object(source.object))
+                        .and_then(|o| o.edge_endpoints(edge))
+                        .map_or_else(Vec::new, |(a, b)| vec![(up(a), up(b))])
+                }
+                _ => Vec::new(),
+            },
+        }
     }
 
     /// Records a finished edit on `key` as one project undo step.

@@ -12,7 +12,28 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
-## Invariant (diuji di `tests/scene.rs`)
+## Tool (`tool`, `vcb`)
+Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, push_pull}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
+- Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`.
+- `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
+- `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
+- `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).
+- `Scene::{face_shape, region_shape, region_count, outline}` memberi bidang dan batas untuk tool.
+
+Perilaku:
+- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang.
+- **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Rantai baru selalu sketch baru, jadi tidak bisa menutup loop bersama rantai lama (ponytail).
+- **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
+- **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
+- **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
+- Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
+
+VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan.
+
+## Invariant (diuji di `tests/scene.rs` dan `tests/tools.rs`)
+- Menggerakkan kursor tidak pernah mengedit (property test, semua tool, sinar acak).
+- Esc tidak meninggalkan apa pun dan tidak mencatat langkah undo.
+- Alur uji asap lewat skrip input: kotak 5×4×3 m ≤ 1 mm, undo, redo, save/open.
 - Edit yang ditolak tidak mengubah proyek dan tidak meninggalkan langkah undo: batch gagal (diuji dulu pada salinan sketch), segmen di luar tile/proyek, Push/Pull yang melewati `KERNEL_FRAME_BOUND_M`.
 - Edit yang ditolak setelah sempat diterapkan kernel juga membersihkan redo proyek, supaya tidak bisa kembali lewat redo.
 - Undo hanya bisa mencapai edit pengguna, bukan metadata tile.
@@ -36,4 +57,4 @@ Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 51 ms
 - Tile kosong hasil undo tetap ada di proyek.
 
 ## Non-goals
-Tool dan VCB (PR berikutnya di crate ini), renderer, UI.
+Renderer, UI, auto-split face, Move/array.
