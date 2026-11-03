@@ -27,6 +27,11 @@
   - **Sebelum v0.2 wajib ada** penyimpanan semantik per face: lewat PR ke Hew (`EntityRef::Face`) atau patch kecil di fork (ADR-000, #6).
 - **Koreksi 2026-11-01 (ADR-004):** satu `.hew` hanya memuat satu tile kernel, yaitu geometri ≤ 1,5 km dari origin-nya.
   - Proyek kota menjadi wadah berisi banyak `.hew` (satu per tile) ditambah manifest proyek: origin, EPSG, dan daftar tile beserta offset `f64`.
-  - Bentuk wadahnya (zip atau folder) diputuskan saat tile kernel dibangun.
+  - **Diputuskan 2026-11-03:** wadahnya zip byte-stable berekstensi `.wangun`.
+    - Isi: `wangungis-project.json` (format, versi, EPSG, origin, ukuran tile 1.000 m, daftar tile) dan `tiles/<i>_<j>.hew`.
+    - Opsi entri sama dengan penulis `.hew` Hew sendiri (`Stored`, waktu tetap).
+    - Zip dipilih karena satu file lebih mudah disalin dan dikirim pengguna daripada folder. Akses acak per tile tetap mungkin, untuk lazy-load nanti.
+    - Ekstensi berbeda dari `.hew` karena Hew tidak bisa membuka wadah ini. Tile di dalamnya tetap `.hew` biasa yang bisa dibuka Hew.
+  - Dependensi langsung baru: `zip` 9, `serde`, `serde_json`, dengan fitur sama dengan yang dipakai `kernel`. Ketiganya sudah ada di pohon dependensi lewat Hew, jadi tidak menambah kode yang di-build. Lisensi MIT/Apache-2.0, kompatibel AGPL.
   - Proyek kecil, satu tile, tetap satu `.hew` biasa yang bisa dibuka Hew.
 - Ekstensi file: `.hew` sampai ada alasan untuk berbeda (**asumsi**: file kita tetap bisa dibuka Hew, dan itu menguntungkan).

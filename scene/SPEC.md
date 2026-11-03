@@ -34,6 +34,31 @@ Diuji di `tests/kernel_bound.rs`:
 
 Konsekuensinya, satu `Document` Hew tidak bisa memuat satu kota. Proyek dipecah menjadi tile kernel dengan frame di pusat tile (ADR-004).
 
+## Tile kernel dan proyek (`project`)
+Satu kota = `Project { origin, tiles }`. Satu tile = satu `Document` Hew, berukuran `TILE_SIZE_M` = 1.000 m.
+- `TileKey { i, j }`: `TileKey::of([x, y])` membulatkan koordinat lokal proyek ke pusat tile terdekat. `center()` = `(i·1000, j·1000, 0)`. Tile (0, 0) berpusat di origin proyek, sehingga `.hew` biasa = proyek satu tile.
+- `Project::from_document(doc)`:
+  - Bila geometri ≤ `KERNEL_FRAME_BOUND_M`, dokumen tetap satu tile dan hanya ditambah metadata tile.
+  - Bila lebih jauh, setiap node top-level dipindah ke tile milik jangkarnya (pusat bbox XY vertexnya). Pemindahan memakai `extract_item` + `insert_document` Hew, jadi lossless dan atribut ikut terbawa.
+  - Tile (0, 0) memakai dokumen sumber itu sendiri, sehingga sketch world, anotasi, scene, dan style tetap ada.
+- `Project::open(bytes)`: membuka wadah proyek, atau `.hew` biasa lewat `from_document`.
+- `Project::save()`: proyek satu tile disimpan sebagai `.hew` biasa. Selain itu disimpan sebagai wadah zip byte-stable berisi `wangungis-project.json` + `tiles/<i>_<j>.hew`.
+- `horizontal_reach(doc)`: jarak horizontal vertex objek world terjauh dari origin dokumen.
+- `ProjectError { Origin, Kernel, Container, TooFar }`.
+
+Invariant (diuji di `tests/project.rs`):
+- Setelah dipecah, setiap objek muncul tepat satu kali, di tile milik jangkarnya, dengan posisi world bergeser ≤ 1 mm dan atribut tetap (property test, kotak acak ±5 km).
+- Setiap tile memiliki jangkauan ≤ `KERNEL_FRAME_BOUND_M`. Objek yang lebih panjang dari ±1 km menghasilkan `Err(TooFar)`.
+- save → open → save menghasilkan byte identik.
+- Setiap tile menyimpan key-nya (`wangungis.tile`) dan origin miliknya sendiri (origin proyek + pusat tile). Satu tile yang dibuka sendirian, juga di Hew, tetap bergeoreferensi benar.
+- Wadah yang tidak cocok dengan yang ditulis crate ini ditolak, bukan ditebak. Contohnya: versi atau ukuran tile lain, origin tile ≠ manifest (> 1 mm), key ganda, tile hilang, atau nama entri salah.
+
+Ukuran nyata: `city25k.hew` (24.964 objek, jangkauan 2,7 km) dipecah dalam 2,7 dtk menjadi 9 tile. Save 1,1 dtk, open 1,1 dtk, dan ukuran file sama (139 MB). Diukur di Apple M4, release.
+
+Batas sengaja (ponytail):
+- Geometri instance komponen tidak dihitung dalam jangkauan; instance dipindah menurut titik penempatannya.
+- Semua tile dimuat sekaligus.
+- Objek yang melewati batas tile setelah diedit belum dipindah otomatis (v0.1, bersama tool Move).
+
 ## Non-goals
 - Transformasi CRS (PROJ): menyusul di v0.2, di `io`.
-- Manajemen tile kernel: menyusul di PR berikutnya, dibangun di atas crate ini.

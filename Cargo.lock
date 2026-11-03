@@ -2709,6 +2709,9 @@ version = "0.0.0"
 dependencies = [
  "kernel",
  "proptest",
+ "serde",
+ "serde_json",
+ "zip",
 ]
 
 [[package]]
