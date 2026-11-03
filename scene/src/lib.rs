@@ -8,6 +8,8 @@
 
 use kernel::{AttrTarget, AttrValue, Document, Point3};
 
+pub mod project;
+
 /// Attribute namespace for all WangunGIS data in a Hew document.
 pub const NS: &str = "wangungis";
 

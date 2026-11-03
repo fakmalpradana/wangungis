@@ -20,3 +20,7 @@ eframe = { version = "0.37", default-features = false, features = ["wgpu", "defa
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
 proptest = "1"
+# Already in the tree through `kernel`, with the same features (ADR-006).
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+zip = { version = "9", default-features = false }
