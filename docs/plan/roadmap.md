@@ -58,6 +58,8 @@ Catatan:
 2. Gambar: Line + Rectangle dengan snapping endpoint/midpoint, inference sumbu, dan input angka VCB (#2, #3, #20, #22).
 3. Push/Pull + undo/redo lewat `kernel` Hew, dengan pratinjau langsung (#6, #17).
 
+**Selesai 2026-11-03** (PR #10, #11, #12; crate `tools`). Checklist untuk 3D engineer: `docs/user/uji-asap.md`. Pratinjau Push/Pull masih berupa garis tepi, dan region belum punya isian.
+
 Alasan: masing-masing menguji satu risiko terukur dari spike (render, inference, kernel). Ketiganya cukup untuk **uji asap** pertama 3D engineer: menggambar kotak 5×4×3 m lalu undo/redo.
 
 Ketiganya **belum** cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disalin 10× dalam array). Kriteria itu juga butuh:
