@@ -10,7 +10,9 @@ use eframe::{egui, egui_wgpu};
 use wangungis_render::{DEPTH_FORMAT, Renderer, TileMesh};
 use wangungis_scene::{KERNEL_FRAME_BOUND_M, ProjectOrigin};
 
-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// egui-wgpu 0.37 `register_native_texture` requires Rgba8Unorm; the golden
+/// tests in `render` use the same format.
+const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn main() -> eframe::Result {
     let path = std::env::args().nth(1);
@@ -33,7 +35,8 @@ struct Model {
     name: String,
     objects: usize,
     triangles: usize,
-    origin: Option<ProjectOrigin>,
+    /// `Err` when the `wangungis` attributes exist but are malformed.
+    origin: Result<Option<ProjectOrigin>, String>,
     /// Some geometry lies farther than KERNEL_FRAME_BOUND_M from the document origin.
     outside_frame: bool,
 }
@@ -51,6 +54,8 @@ struct App {
     view: Option<Viewport>,
     orbit: Orbit,
     bounds: Option<([f64; 3], [f64; 3])>,
+    /// Zoom extents on the next frame, once the viewport aspect is known.
+    fit_pending: bool,
     path: String,
     model: Option<Model>,
     error: Option<String>,
@@ -69,6 +74,7 @@ impl App {
             view: None,
             orbit: Orbit::default(),
             bounds: None,
+            fit_pending: false,
             path: path.clone().unwrap_or_default(),
             model: None,
             error: None,
@@ -89,13 +95,9 @@ impl App {
                 self.bounds = mesh
                     .bounds()
                     .map(|(lo, hi)| (lo.map(f64::from), hi.map(f64::from)));
-                let outside_frame = self.bounds.is_some_and(|(lo, hi)| {
-                    let far = |k: usize| lo[k].abs().max(hi[k].abs());
-                    far(0).hypot(far(1)) > KERNEL_FRAME_BOUND_M
-                });
-                if let Some((lo, hi)) = self.bounds {
-                    self.orbit.fit(lo, hi);
-                }
+                let outside_frame = f64::from(mesh.horizontal_reach()) > KERNEL_FRAME_BOUND_M;
+                self.orbit = Orbit::default();
+                self.fit_pending = true;
                 self.model = Some(Model {
                     name: std::path::Path::new(&self.path)
                         .file_name()
@@ -106,7 +108,7 @@ impl App {
                         .filter(|o| doc.is_world_object(*o))
                         .count(),
                     triangles: mesh.triangle_count(),
-                    origin: ProjectOrigin::read(&doc).ok().flatten(),
+                    origin: ProjectOrigin::read(&doc).map_err(|e| format!("{e:?}")),
                     outside_frame,
                 });
             }
@@ -221,10 +223,8 @@ impl eframe::App for App {
                 if ui.button("Buka").clicked() || enter {
                     self.open();
                 }
-                if ui.button("Zoom extents").clicked()
-                    && let Some((lo, hi)) = self.bounds
-                {
-                    self.orbit.fit(lo, hi);
+                if ui.button("Zoom extents").clicked() {
+                    self.fit_pending = true;
                 }
             });
         });
@@ -239,11 +239,15 @@ impl eframe::App for App {
                     ));
                     ui.separator();
                     match &m.origin {
-                        Some(o) => ui.label(format!(
+                        Ok(Some(o)) => ui.label(format!(
                             "EPSG:{} · origin ({:.3}, {:.3}, {:.3})",
                             o.epsg, o.origin[0], o.origin[1], o.origin[2]
                         )),
-                        None => ui.label("Tanpa origin proyek (koordinat lokal)"),
+                        Ok(None) => ui.label("Tanpa origin proyek (koordinat lokal)"),
+                        Err(e) => ui.colored_label(
+                            egui::Color32::RED,
+                            format!("Atribut origin proyek rusak: {e}"),
+                        ),
                     };
                     if m.outside_frame {
                         ui.separator();
@@ -266,11 +270,14 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 let size = ui.available_size();
                 let ppp = ui.ctx().pixels_per_point();
-                let px = [
-                    (size.x * ppp).max(1.0) as u32,
-                    (size.y * ppp).max(1.0) as u32,
-                ];
+                let max = self.rs.device.limits().max_texture_dimension_2d as f32;
+                let px = [size.x, size.y].map(|v| (v * ppp).round().clamp(1.0, max) as u32);
                 self.ensure_view(px);
+                if std::mem::take(&mut self.fit_pending)
+                    && let Some((lo, hi)) = self.bounds
+                {
+                    self.orbit.fit(lo, hi, px[0] as f32 / px[1] as f32);
+                }
                 let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::drag());
                 let d = resp.drag_delta();
                 let pan = resp.dragged_by(egui::PointerButton::Middle)

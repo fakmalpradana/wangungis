@@ -11,6 +11,9 @@ pub struct Orbit {
     pub distance: f64,
     pub yaw: f64,
     pub pitch: f64,
+    /// Bounding sphere (center, radius) of the model, set by `fit`; keeps the
+    /// far plane behind the whole model when zoomed in close.
+    pub scene: Option<([f64; 3], f64)>,
 }
 
 impl Default for Orbit {
@@ -20,11 +23,14 @@ impl Default for Orbit {
             distance: 50.0,
             yaw: -2.2,
             pitch: 0.6,
+            scene: None,
         }
     }
 }
 
-const PITCH_LIMIT: f64 = 1.55;
+/// Below asin(0.999) ≈ 1.526, where `Camera::view_proj_at_eye` switches its up
+/// hint: past it the view would roll and `pan` would move along wrong axes.
+const PITCH_LIMIT: f64 = 1.5;
 const RAD_PER_PX: f64 = 0.008;
 
 impl Orbit {
@@ -70,21 +76,30 @@ impl Orbit {
         self.distance = (self.distance * 0.9f64.powf(steps as f64)).clamp(0.1, 1e6);
     }
 
-    /// Zoom extents: the bounding sphere of `lo..hi` fills the view.
-    pub fn fit(&mut self, lo: [f64; 3], hi: [f64; 3]) {
+    /// Zoom extents: the bounding sphere of `lo..hi` fits the narrower of the
+    /// vertical and horizontal fields of view.
+    pub fn fit(&mut self, lo: [f64; 3], hi: [f64; 3], aspect: f32) {
         self.target = std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0);
         let r = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt() / 2.0;
-        self.distance = (r.max(1.0) / (FOVY as f64 / 2.0).sin() * 1.1).clamp(0.1, 1e6);
+        let half = ((FOVY as f64 / 2.0).tan() * (aspect as f64).min(1.0)).atan();
+        self.distance = (r.max(1.0) / half.sin() * 1.1).clamp(0.1, 1e6);
+        self.scene = Some((self.target, r));
     }
 
     pub fn camera(&self, aspect: f32) -> Camera {
+        let eye = self.eye();
+        // ponytail: plain Depth32Float; far/near can reach 1e5 when zoomed in on
+        // a big tile. Switch to reversed-Z if distant faces z-fight.
+        let far = self.scene.map_or(0.0, |(c, r)| {
+            (0..3).map(|k| (eye[k] - c[k]).powi(2)).sum::<f64>().sqrt() + r
+        });
         Camera {
-            eye: self.eye(),
+            eye,
             target: self.target,
             fovy: FOVY,
             aspect,
             near: (self.distance * 0.01) as f32,
-            far: (self.distance * 100.0) as f32,
+            far: (self.distance * 100.0).max(far) as f32,
         }
     }
 }
@@ -97,6 +112,14 @@ mod tests {
         (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f64>().sqrt()
     }
 
+    /// World point to normalized device coordinates (x right, y up, z depth).
+    fn ndc(cam: &Camera, p: [f64; 3]) -> [f64; 3] {
+        let m = cam.view_proj_at_eye();
+        let v = [p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2], 1.0];
+        let c: [f64; 4] = std::array::from_fn(|r| (0..4).map(|k| m[k][r] as f64 * v[k]).sum());
+        [c[0] / c[3], c[1] / c[3], c[2] / c[3]]
+    }
+
     #[test]
     fn eye_sits_at_distance_from_target() {
         let o = Orbit {
@@ -104,54 +127,97 @@ mod tests {
             distance: 37.5,
             yaw: 1.0,
             pitch: 0.3,
+            scene: None,
         };
         assert!((dist(o.eye(), o.target) - 37.5).abs() < 1e-6);
+        // Positive pitch looks down on the target; the target is centered.
+        assert!(o.eye()[2] > o.target[2]);
+        let c = ndc(&o.camera(1.5), o.target);
+        assert!(c[0].abs() < 1e-6 && c[1].abs() < 1e-6, "{c:?}");
     }
 
     #[test]
-    fn orbit_clamps_pitch_and_keeps_distance() {
+    fn orbit_turns_yaw_and_clamps_pitch() {
         let mut o = Orbit::default();
+        let yaw0 = o.yaw;
         o.orbit(10.0, 10_000.0);
+        assert!(o.yaw != yaw0);
         assert_eq!(o.pitch, PITCH_LIMIT);
         o.orbit(0.0, -100_000.0);
         assert_eq!(o.pitch, -PITCH_LIMIT);
         assert!((dist(o.eye(), o.target) - o.distance).abs() < 1e-9);
     }
 
+    /// The point under the cursor follows the drag on screen, including at the
+    /// pitch limit (top-down view).
     #[test]
-    fn pan_moves_target_perpendicular_to_view() {
-        let mut o = Orbit::default();
-        let (t0, b) = (o.target, o.back());
-        o.pan(120.0, -45.0, 600.0);
-        let d: [f64; 3] = std::array::from_fn(|k| o.target[k] - t0[k]);
-        let along_view: f64 = (0..3).map(|k| d[k] * b[k]).sum();
-        assert!(dist(o.target, t0) > 1.0, "target did not move");
-        assert!(along_view.abs() < 1e-9, "pan changed depth by {along_view}");
+    fn pan_follows_the_cursor() {
+        let (w, h) = (800.0f32, 600.0f32);
+        for (yaw, pitch) in [
+            (-2.2, 0.6),
+            (0.7, PITCH_LIMIT),
+            (2.0, -PITCH_LIMIT),
+            (0.0, 0.0),
+        ] {
+            let mut o = Orbit {
+                target: [430_000.0, 9_150_000.0, 5.0],
+                distance: 80.0,
+                yaw,
+                pitch,
+                scene: None,
+            };
+            let p = o.target;
+            o.pan(40.0, -25.0, h);
+            let c = ndc(&o.camera(w / h), p);
+            // Screen pixels: +x right, +y down; NDC y is up.
+            let (sx, sy) = (c[0] * w as f64 / 2.0, -c[1] * h as f64 / 2.0);
+            assert!(
+                (sx - 40.0).abs() < 1e-3 && (sy + 25.0).abs() < 1e-3,
+                "yaw {yaw} pitch {pitch}: moved ({sx}, {sy})"
+            );
+        }
     }
 
     #[test]
-    fn zoom_in_reduces_distance_and_is_bounded() {
+    fn zoom_is_bounded_both_ways() {
         let mut o = Orbit::default();
         o.zoom(1.0);
         assert!(o.distance < 50.0);
+        o.zoom(-1.0);
+        assert!((o.distance - 50.0).abs() < 1e-9);
         o.zoom(10_000.0);
         assert_eq!(o.distance, 0.1);
+        o.zoom(-10_000.0);
+        assert_eq!(o.distance, 1e6);
     }
 
+    /// All 8 box corners land inside the clip volume, portrait and landscape,
+    /// and stay inside the far plane after zooming in on a corner.
     #[test]
-    fn fit_contains_the_bounding_sphere() {
-        let mut o = Orbit::default();
+    fn fit_shows_every_corner() {
         let (lo, hi) = ([-200.0, 10.0, 0.0], [300.0, 90.0, 45.0]);
-        o.fit(lo, hi);
-        let r = dist(lo, hi) / 2.0;
-        assert_eq!(o.target, [50.0, 50.0, 22.5]);
-        assert!(
-            o.distance * (FOVY as f64 / 2.0).sin() >= r,
-            "sphere not inside the view cone"
-        );
-        assert!(
-            o.camera(1.0).far as f64 > o.distance + r,
-            "far plane clips the model"
-        );
+        let corners = (0..8).map(|i| {
+            std::array::from_fn::<f64, 3, _>(|k| if i >> k & 1 == 0 { lo[k] } else { hi[k] })
+        });
+        for aspect in [0.4f32, 1.0, 2.5] {
+            let mut o = Orbit::default();
+            o.fit(lo, hi, aspect);
+            assert_eq!(o.target, [50.0, 50.0, 22.5]);
+            let cam = o.camera(aspect);
+            for p in corners.clone() {
+                let c = ndc(&cam, p);
+                assert!(
+                    c[0].abs() <= 1.0 && c[1].abs() <= 1.0 && (0.0..=1.0).contains(&c[2]),
+                    "aspect {aspect}: corner {p:?} at {c:?}"
+                );
+            }
+            // Zoomed in close on one end, the far end is still before the far plane.
+            o.target = lo;
+            o.distance = 0.5;
+            let cam = o.camera(aspect);
+            for p in corners.clone() {
+                assert!((dist(cam.eye, p) as f32) < cam.far, "far plane clips {p:?}");
+            }
+        }
     }
 }

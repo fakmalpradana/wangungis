@@ -251,3 +251,22 @@ fn two_tiles_two_draws_each() {
         "second tile not drawn where expected: {c1:.3} -> {c2:.3}"
     );
 }
+
+/// CPU only: reach is the farthest vertex, not the AABB corner.
+#[test]
+fn horizontal_reach_is_the_farthest_vertex() {
+    // Triangle prism: AABB corner (1100, 1100) is ~1556 m out, no vertex is
+    // farther than 1100 m.
+    let mut doc = Document::new();
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let ring = [p(1100.0, 0.0), p(0.0, 1100.0), p(10.0, 10.0)];
+    let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
+    let s = doc.sketch_mut(sk).unwrap();
+    for k in 0..3 {
+        s.add_segment(ring[k], ring[(k + 1) % 3]).unwrap();
+    }
+    let r = doc.extrudable_regions(sk).unwrap();
+    doc.extrude_region(sk, r[0], 3.0).unwrap();
+    let m = TileMesh::from_document(&doc).unwrap();
+    assert!((m.horizontal_reach() - 1100.0).abs() < 1e-3);
+}
