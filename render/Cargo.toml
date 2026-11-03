@@ -11,4 +11,5 @@ wgpu.workspace = true
 bytemuck.workspace = true
 
 [dev-dependencies]
+wangungis-scene.workspace = true
 pollster.workspace = true

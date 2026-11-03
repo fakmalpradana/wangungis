@@ -82,15 +82,6 @@ impl TileMesh {
         self.indices.len() / 3
     }
 
-    /// Largest horizontal distance `hypot(x, y)` of any vertex from the tile
-    /// frame, `0` when empty. Compare with the kernel frame bound.
-    pub fn horizontal_reach(&self) -> f32 {
-        self.verts
-            .iter()
-            .map(|v| v.pos[0].hypot(v.pos[1]))
-            .fold(0.0, f32::max)
-    }
-
     /// Axis-aligned bounds in the tile frame, `None` when empty.
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         let mut it = self.verts.iter().map(|v| v.pos);

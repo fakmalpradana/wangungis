@@ -5,7 +5,7 @@ Renderer wgpu ber-batching dengan RTC per tile (ADR-003). Satu tile kernel (satu
 
 ## API publik
 - `TileMesh::from_document(&Document)`: menggabungkan semua Object world yang terlihat menjadi satu buffer face dan satu buffer edge, dengan posisi `f32` di frame tile.
-- `TileMesh::triangle_count()`, `TileMesh::bounds()`, dan `TileMesh::horizontal_reach()` (jarak horizontal vertex terjauh dari frame tile, untuk dibandingkan dengan `KERNEL_FRAME_BOUND_M`).
+- `TileMesh::triangle_count()` dan `TileMesh::bounds()`.
 - `Camera { eye, target, fovy, aspect, near, far }`, dengan `eye`/`target` dalam `f64` lokal-proyek.
 - `Camera::view_proj_at_eye()`: rotasi view + proyeksi dengan mata di origin.
 - `Renderer::new(&Device, TextureFormat)`: depth `DEPTH_FORMAT` (Depth32Float).

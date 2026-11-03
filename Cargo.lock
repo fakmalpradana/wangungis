@@ -2700,6 +2700,7 @@ dependencies = [
  "kernel",
  "pollster",
  "tessellate",
+ "wangungis-scene",
  "wgpu",
 ]
 

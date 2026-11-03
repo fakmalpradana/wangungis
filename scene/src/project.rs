@@ -280,6 +280,11 @@ impl Project {
         Ok(p)
     }
 
+    /// True when `bytes` are a project container rather than a plain `.hew`.
+    pub fn is_container(bytes: &[u8]) -> bool {
+        zip::ZipArchive::new(Cursor::new(bytes)).is_ok_and(|z| z.index_for_name(MANIFEST).is_some())
+    }
+
     /// Opens a project container, or a plain `.hew` through
     /// [`Project::from_document`].
     pub fn open(bytes: &[u8]) -> Result<Self, ProjectError> {

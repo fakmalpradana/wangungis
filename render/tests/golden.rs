@@ -9,6 +9,7 @@
 
 use kernel::{Document, Plane, Point3};
 use wangungis_render::{Camera, DEPTH_FORMAT, Renderer, TileMesh};
+use wangungis_scene::project::Project;
 
 const W: u32 = 256;
 const H: u32 = 256;
@@ -51,6 +52,11 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
 /// negative control needs.
 fn box_doc(x: f64, y: f64) -> Document {
     let mut doc = Document::new();
+    add_box(&mut doc, x, y);
+    doc
+}
+
+fn add_box(doc: &mut Document, x: f64, y: f64) {
     let p = |a: f64, b: f64| Point3::new(x + a, y + b, 0.0);
     let ring = [p(0.0, 0.0), p(5.0, 0.0), p(5.0, 4.244), p(0.0, 4.244)];
     let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
@@ -60,7 +66,6 @@ fn box_doc(x: f64, y: f64) -> Document {
     }
     let r = doc.extrudable_regions(sk).unwrap();
     doc.extrude_region(sk, r[0], 3.0).unwrap();
-    doc
 }
 
 /// Camera looking at the box whose corner is at `at` (project-local).
@@ -263,21 +268,66 @@ fn two_tiles_two_draws_each() {
     );
 }
 
-/// CPU only: reach is the farthest vertex, not the AABB corner.
+/// End to end with `scene`: a document split into kernel tiles renders like
+/// the unsplit source, looking at the tile corner (500, 500) where four
+/// neighbouring boxes land in four different tiles.
 #[test]
-fn horizontal_reach_is_the_farthest_vertex() {
-    // Triangle prism: AABB corner (1100, 1100) is ~1556 m out, no vertex is
-    // farther than 1100 m.
+fn split_project_renders_like_the_source() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
     let mut doc = Document::new();
-    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
-    let ring = [p(1100.0, 0.0), p(0.0, 1100.0), p(10.0, 10.0)];
-    let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
-    let s = doc.sketch_mut(sk).unwrap();
-    for k in 0..3 {
-        s.add_segment(ring[k], ring[(k + 1) % 3]).unwrap();
+    // Box anchors (x + 2.5, y + 2.122): one per tile (0,0), (1,0), (0,1), (1,1).
+    for (x, y) in [
+        (490.0, 490.0),
+        (504.0, 490.0),
+        (490.0, 504.0),
+        (504.0, 504.0),
+    ] {
+        add_box(&mut doc, x, y);
     }
-    let r = doc.extrudable_regions(sk).unwrap();
-    doc.extrude_region(sk, r[0], 3.0).unwrap();
-    let m = TileMesh::from_document(&doc).unwrap();
-    assert!((m.horizontal_reach() - 1100.0).abs() < 1e-3);
+    // Pushes the reach past the kernel frame bound, so the document splits.
+    add_box(&mut doc, 3_000.0, 0.0);
+    let cam = Camera {
+        eye: [480.0, 470.0, 30.0],
+        target: [500.0, 500.0, 1.5],
+        fovy: 0.8,
+        aspect: W as f32 / H as f32,
+        near: 0.5,
+        far: 200.0,
+    };
+    let (source, _) = render(&dq, &[([0.0; 3], &doc)], &cam);
+    assert!(coverage(&source) > 0.05, "boxes barely visible");
+    let project = Project::from_document(doc).unwrap();
+    // Exactly one box per tile: a box copied but not removed would show here.
+    let per_tile: Vec<_> = project
+        .tiles
+        .iter()
+        .map(|(k, d)| ((k.i, k.j), d.top_level_nodes().len()))
+        .collect();
+    assert_eq!(
+        per_tile,
+        [
+            ((0, 0), 1),
+            ((0, 1), 1),
+            ((1, 0), 1),
+            ((1, 1), 1),
+            ((3, 0), 1)
+        ]
+    );
+    let tiles: Vec<_> = project.tiles.iter().map(|(k, d)| (k.center(), d)).collect();
+    let (img, draws) = render(&dq, &tiles, &cam);
+    assert_eq!(draws, 10);
+    let d = diff(&source, &img);
+    eprintln!("DIFF split vs source: {:.4}%", d * 100.0);
+    assert!(
+        d <= 0.001,
+        "split project renders {:.2}% differently",
+        d * 100.0
+    );
+    // The other tiles really contribute: tile (0, 0) alone looks different.
+    let (alone, _) = render(&dq, &tiles[..1], &cam);
+    assert!(
+        diff(&source, &alone) > 0.005,
+        "tiles beyond (0, 0) add nothing"
+    );
 }
