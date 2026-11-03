@@ -13,7 +13,9 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 
-use kernel::{AttrTarget, AttrValue, Document, InsertOptions, NodeId, Transform, Vec3};
+use kernel::{
+    AttrTarget, AttrValue, Document, EntityRef, InsertOptions, NodeId, Point3, Transform, Vec3,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{KERNEL_FRAME_BOUND_M, NS, OriginError, ProjectOrigin, check_local};
@@ -28,9 +30,8 @@ pub const MANIFEST: &str = "wangungis-project.json";
 const FORMAT: &str = "wangungis-project";
 const VERSION: u32 = 1;
 const KEY_TILE: &str = "tile";
-/// Largest tile entry read from a container: a guard against corrupt or
-/// hostile sizes, far above any real 1 km tile.
-const MAX_ENTRY_BYTES: u64 = 4 << 30;
+/// Transient marker: a moved root was user-hidden (see `copy_to_tile`).
+const KEY_HIDDEN: &str = "split-hidden";
 /// Manifest origin vs a tile's own stored origin.
 const ORIGIN_MATCH_M: f64 = 1e-3;
 
@@ -122,99 +123,157 @@ struct TileEntry {
     file: String,
 }
 
-/// Largest horizontal distance (m) of any visible world-object vertex from
-/// the document origin.
-// ponytail: instance geometry is not counted (Hew keeps definition expansion
-// private); instances move by their placement anchor only.
+/// Every world-space vertex under `node`: its world objects, plus every
+/// instance's definition geometry through the instance pose (the same walk
+/// Hew uses for its own placement anchor).
+fn node_points(doc: &Document, node: NodeId) -> Vec<Point3> {
+    let verts = |o: kernel::ObjectId| {
+        doc.object(o)
+            .into_iter()
+            .flat_map(|o| o.vertices().values().map(|v| v.position))
+    };
+    let mut points: Vec<Point3> = doc
+        .leaf_objects_under(node)
+        .into_iter()
+        .flat_map(verts)
+        .collect();
+    for inst in doc.leaf_instances_under(node) {
+        let (Some(def), Some(pose)) = (doc.instance_def(inst), doc.instance_pose(inst)) else {
+            continue;
+        };
+        for (member, local) in doc.expanded_def_placements(def) {
+            let t = local.then(&pose);
+            points.extend(verts(member).map(|p| t.apply_point(p)));
+        }
+    }
+    points
+}
+
+/// Largest horizontal distance (m) of any world-space vertex (objects and
+/// instance geometry) from the document origin.
 pub fn horizontal_reach(doc: &Document) -> f64 {
     doc.top_level_nodes()
         .into_iter()
-        .flat_map(|n| doc.leaf_objects_under(n))
-        .filter_map(|o| doc.object(o))
-        .flat_map(|o| {
-            o.vertices()
-                .values()
-                .map(|v| v.position.x.hypot(v.position.y))
-        })
+        .flat_map(|n| node_points(doc, n))
+        .map(|p| p.x.hypot(p.y))
         .fold(0.0, f64::max)
 }
 
-/// Where a top-level node belongs: the center of its vertices' XY bounds, or
-/// for vertex-less nodes (instances) the point Hew re-origins a copy to.
-fn anchor(doc: &Document, node: NodeId) -> Option<[f64; 2]> {
-    let mut lo = [f64::INFINITY; 2];
-    let mut hi = [f64::NEG_INFINITY; 2];
-    for o in doc.leaf_objects_under(node) {
-        for v in doc
-            .object(o)
-            .into_iter()
-            .flat_map(|o| o.vertices().values())
-        {
-            let p = [v.position.x, v.position.y];
-            for k in 0..2 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
+/// Where a top-level node belongs: the center of its points' XY bounds.
+/// `None` for a node with no points (an empty group).
+fn anchor(points: &[Point3]) -> Option<[f64; 2]> {
+    let (first, rest) = points.split_first()?;
+    let (lo, hi) = rest
+        .iter()
+        .fold(([first.x, first.y], [first.x, first.y]), |(lo, hi), p| {
+            (
+                [lo[0].min(p.x), lo[1].min(p.y)],
+                [hi[0].max(p.x), hi[1].max(p.y)],
+            )
+        });
+    Some([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0])
+}
+
+fn entity(node: NodeId) -> AttrTarget {
+    AttrTarget::Entity(match node {
+        NodeId::Object(id) => EntityRef::Object(id),
+        NodeId::Group(id) => EntityRef::Group(id),
+        NodeId::Instance(id) => EntityRef::Instance(id),
+    })
+}
+
+/// Copies `nodes` into a new document whose origin is `center`, as a pure
+/// translation. With the drawing axes at `center` Hew's `extract_item`
+/// re-expresses every node through them and skips its bottom-center
+/// re-origin, which would leave visibly hidden instances behind.
+fn copy_to_tile(
+    doc: &mut Document,
+    nodes: &[NodeId],
+    center: [f64; 3],
+) -> Result<Document, ProjectError> {
+    doc.set_axes(
+        Point3::new(center[0], center[1], center[2]),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .map_err(kernel)?;
+    // extract_item makes the item's roots visible; a marker attribute (which
+    // is copied) carries the user-hidden state across.
+    for &n in nodes {
+        if doc.node_user_hidden(n) {
+            doc.attr_set(entity(n), NS, KEY_HIDDEN, AttrValue::Bool(true))
+                .map_err(kernel)?;
         }
     }
-    if lo[0] <= hi[0] {
-        return Some([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
+    let item = doc.extract_item(nodes, false).map_err(kernel)?;
+    let mut tile = Document::new();
+    tile.insert_document(
+        &item,
+        &InsertOptions {
+            pose: Transform::IDENTITY,
+            provenance: None,
+        },
+    )
+    .map_err(kernel)?;
+    for root in tile.top_level_nodes() {
+        let dict = tile.attr_get(&entity(root)).map_err(kernel)?;
+        if dict
+            .as_ref()
+            .and_then(|d| d.get(NS))
+            .and_then(|ns| ns.get(KEY_HIDDEN))
+            .is_some()
+        {
+            tile.attr_delete(entity(root), NS, Some(KEY_HIDDEN))
+                .map_err(kernel)?;
+            tile.set_node_user_hidden(root, true);
+        }
     }
-    if doc.axes() != kernel::AxesFrame::IDENTITY {
-        return None;
-    }
-    let t = doc.extract_placement(&[node])?.to_affine();
-    Some([t[3], t[7]])
+    Ok(tile)
 }
 
 impl Project {
     /// A project from one document. Within [`KERNEL_FRAME_BOUND_M`] it stays a
     /// single tile, untouched apart from tile metadata. Otherwise every
-    /// top-level node moves, losslessly (Hew extract + insert, attributes
-    /// included), to the tile holding its anchor. Tile (0, 0) keeps the
-    /// source document itself, so world sketches, annotations, scenes and
-    /// styles stay there.
+    /// top-level node moves, losslessly (Hew extract + insert as a pure
+    /// translation; attributes, hidden state and tags included), to the tile
+    /// holding its anchor. Tile (0, 0) keeps the source document itself, so
+    /// world sketches, annotations, guides, scenes and styles stay there.
+    /// Every point must lie within the project bound.
     pub fn from_document(mut doc: Document) -> Result<Self, ProjectError> {
         let origin = ProjectOrigin::read(&doc)?;
+        let mut moves: BTreeMap<TileKey, Vec<NodeId>> = BTreeMap::new();
+        let mut reach = 0.0f64;
+        for node in doc.top_level_nodes() {
+            let points = node_points(&doc, node);
+            for p in &points {
+                check_local([p.x, p.y, p.z])?;
+                reach = reach.max(p.x.hypot(p.y));
+            }
+            if let Some(key) = anchor(&points).map(TileKey::of)
+                && key != TileKey::ORIGIN
+            {
+                moves.entry(key).or_default().push(node);
+            }
+        }
         let mut tiles = BTreeMap::new();
-        if horizontal_reach(&doc) > KERNEL_FRAME_BOUND_M {
-            let mut moves: BTreeMap<TileKey, Vec<NodeId>> = BTreeMap::new();
-            for node in doc.top_level_nodes() {
-                let Some(a) = anchor(&doc, node) else {
-                    continue;
-                };
-                check_local([a[0], a[1], 0.0])?;
-                let key = TileKey::of(a);
-                if key != TileKey::ORIGIN {
-                    moves.entry(key).or_default().push(node);
-                }
-            }
+        let split = reach > KERNEL_FRAME_BOUND_M;
+        if split {
+            let axes = doc.axes();
             for (key, nodes) in &moves {
-                let item = doc.extract_item(nodes, false).map_err(kernel)?;
-                // extract_item re-origins the copy; this puts it back in world
-                // coordinates, then into the tile frame.
-                let place = doc
-                    .extract_placement(nodes)
-                    .ok_or_else(|| container("moved nodes have no visible content"))?;
-                let c = key.center();
-                let pose = place.then(&Transform::translation(Vec3::new(-c[0], -c[1], 0.0)));
-                let mut tile = Document::new();
-                tile.insert_document(
-                    &item,
-                    &InsertOptions {
-                        pose,
-                        provenance: None,
-                    },
-                )
-                .map_err(kernel)?;
-                tiles.insert(*key, tile);
+                tiles.insert(*key, copy_to_tile(&mut doc, nodes, key.center())?);
             }
+            doc.set_axes(axes.origin, axes.x, axes.y).map_err(kernel)?;
             let moved: Vec<NodeId> = moves.into_values().flatten().collect();
             doc.delete_selection(&moved).map_err(kernel)?;
         }
         tiles.insert(TileKey::ORIGIN, doc);
         for (key, tile) in &mut tiles {
             write_tile_meta(tile, *key, origin)?;
+            if split {
+                // Drops the split's undo steps: undoing the delete in tile
+                // (0, 0) would duplicate every moved node.
+                *tile = Document::load(&tile.save()).map_err(kernel)?;
+            }
         }
         let p = Project { origin, tiles };
         p.check_reach()?;
@@ -225,7 +284,9 @@ impl Project {
     /// [`Project::from_document`].
     pub fn open(bytes: &[u8]) -> Result<Self, ProjectError> {
         match zip::ZipArchive::new(Cursor::new(bytes)) {
-            Ok(mut zip) if zip.index_for_name(MANIFEST).is_some() => Self::load(&mut zip),
+            Ok(mut zip) if zip.index_for_name(MANIFEST).is_some() => {
+                Self::load(&mut zip, bytes.len() as u64)
+            }
             _ => Self::from_document(Document::load(bytes).map_err(kernel)?),
         }
     }
@@ -279,8 +340,14 @@ impl Project {
         zip.finish().expect("in-memory zip").into_inner()
     }
 
-    fn load(zip: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Self, ProjectError> {
-        let m: Manifest = serde_json::from_slice(&read_entry(zip, MANIFEST)?)
+    /// `budget`: total bytes all entries may yield. Entries are stored, not
+    /// compressed, so an honest container never reads more than its own size;
+    /// overlapping or oversized entries are refused.
+    fn load(
+        zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+        mut budget: u64,
+    ) -> Result<Self, ProjectError> {
+        let m: Manifest = serde_json::from_slice(&read_entry(zip, MANIFEST, &mut budget)?)
             .map_err(|e| container(format!("{MANIFEST}: {e}")))?;
         if m.format != FORMAT || m.version != VERSION {
             return Err(container(format!(
@@ -304,6 +371,17 @@ impl Project {
         if m.tiles.is_empty() {
             return Err(container("no tiles"));
         }
+        if m.tiles.len() == 1 && (m.tiles[0].i, m.tiles[0].j) == (0, 0) {
+            // `save` writes such a project as a plain .hew.
+            return Err(container("a single-tile project must be a plain .hew"));
+        }
+        if zip.len() != m.tiles.len() + 1 {
+            return Err(container(format!(
+                "{} entries for {} tiles",
+                zip.len(),
+                m.tiles.len()
+            )));
+        }
         let mut tiles = BTreeMap::new();
         for e in &m.tiles {
             let key = TileKey { i: e.i, j: e.j };
@@ -311,7 +389,7 @@ impl Project {
             if e.file != key.file() {
                 return Err(container(format!("tile {key:?} stored as {:?}", e.file)));
             }
-            let doc = Document::load(&read_entry(zip, &e.file)?).map_err(kernel)?;
+            let doc = Document::load(&read_entry(zip, &e.file, &mut budget)?).map_err(kernel)?;
             check_tile_meta(&doc, key, origin)?;
             if tiles.insert(key, doc).is_some() {
                 return Err(container(format!("tile {key:?} listed twice")));
@@ -339,20 +417,19 @@ impl Project {
 fn read_entry(
     zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
     name: &str,
+    budget: &mut u64,
 ) -> Result<Vec<u8>, ProjectError> {
     let entry = zip
         .by_name(name)
         .map_err(|e| container(format!("{name}: {e}")))?;
     let mut buf = Vec::new();
     entry
-        .take(MAX_ENTRY_BYTES + 1)
+        .take(*budget + 1)
         .read_to_end(&mut buf)
         .map_err(|e| container(format!("{name}: {e}")))?;
-    if buf.len() as u64 > MAX_ENTRY_BYTES {
-        return Err(container(format!(
-            "{name}: larger than {MAX_ENTRY_BYTES} bytes"
-        )));
-    }
+    *budget = budget
+        .checked_sub(buf.len() as u64)
+        .ok_or_else(|| container(format!("{name}: entries exceed the container size")))?;
     Ok(buf)
 }
 

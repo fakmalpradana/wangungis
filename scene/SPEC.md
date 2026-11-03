@@ -39,11 +39,14 @@ Satu kota = `Project { origin, tiles }`. Satu tile = satu `Document` Hew, beruku
 - `TileKey { i, j }`: `TileKey::of([x, y])` membulatkan koordinat lokal proyek ke pusat tile terdekat. `center()` = `(i·1000, j·1000, 0)`. Tile (0, 0) berpusat di origin proyek, sehingga `.hew` biasa = proyek satu tile.
 - `Project::from_document(doc)`:
   - Bila geometri ≤ `KERNEL_FRAME_BOUND_M`, dokumen tetap satu tile dan hanya ditambah metadata tile.
-  - Bila lebih jauh, setiap node top-level dipindah ke tile milik jangkarnya (pusat bbox XY vertexnya). Pemindahan memakai `extract_item` + `insert_document` Hew, jadi lossless dan atribut ikut terbawa.
-  - Tile (0, 0) memakai dokumen sumber itu sendiri, sehingga sketch world, anotasi, scene, dan style tetap ada.
+  - Bila lebih jauh, setiap node top-level dipindah ke tile milik jangkarnya (pusat bbox XY vertexnya, termasuk geometri definisi instance).
+  - Pemindahan memakai `extract_item` + `insert_document` Hew sebagai translasi murni: axes gambar dipasang sementara di pusat tile, sehingga Hew tidak memakai re-origin bottom-center-nya. Atribut, tag, status user-hidden, grup, dan instance ikut terbawa. Axes asli dikembalikan.
+  - Dokumen hasil pecah di-round-trip lewat save/load, sehingga langkah undo dari proses pecah tidak tersisa.
+  - Setiap vertex (x, y, z) wajib berada di dalam ±`PROJECT_BOUND_M`; bila tidak, hasilnya `Err`.
+  - Tile (0, 0) memakai dokumen sumber itu sendiri, sehingga sketch world, anotasi, guide, scene, dan style tetap ada (tidak digeser). Anotasi yang menempel pada node yang dipindah ikut terlepas; definisi komponen yang hanya dipakai node yang dipindah tetap tersimpan di tile (0, 0).
 - `Project::open(bytes)`: membuka wadah proyek, atau `.hew` biasa lewat `from_document`.
 - `Project::save()`: proyek satu tile disimpan sebagai `.hew` biasa. Selain itu disimpan sebagai wadah zip byte-stable berisi `wangungis-project.json` + `tiles/<i>_<j>.hew`.
-- `horizontal_reach(doc)`: jarak horizontal vertex objek world terjauh dari origin dokumen.
+- `horizontal_reach(doc)`: jarak horizontal vertex world terjauh (objek dan geometri instance) dari origin dokumen.
 - `ProjectError { Origin, Kernel, Container, TooFar }`.
 
 Invariant (diuji di `tests/project.rs`):
@@ -51,12 +54,11 @@ Invariant (diuji di `tests/project.rs`):
 - Setiap tile memiliki jangkauan ≤ `KERNEL_FRAME_BOUND_M`. Objek yang lebih panjang dari ±1 km menghasilkan `Err(TooFar)`.
 - save → open → save menghasilkan byte identik.
 - Setiap tile menyimpan key-nya (`wangungis.tile`) dan origin miliknya sendiri (origin proyek + pusat tile). Satu tile yang dibuka sendirian, juga di Hew, tetap bergeoreferensi benar.
-- Wadah yang tidak cocok dengan yang ditulis crate ini ditolak, bukan ditebak. Contohnya: versi atau ukuran tile lain, origin tile ≠ manifest (> 1 mm), key ganda, tile hilang, atau nama entri salah.
+- Wadah yang tidak cocok dengan yang ditulis crate ini ditolak, bukan ditebak. Contohnya: versi atau ukuran tile lain, origin tile ≠ manifest (> 1 mm), key ganda, tile hilang, entri tambahan, wadah berisi satu tile (0, 0) yang semestinya `.hew` biasa, atau nama entri salah. Total byte yang dibaca dari semua entri tidak boleh melebihi ukuran wadah.
 
-Ukuran nyata: `city25k.hew` (24.964 objek, jangkauan 2,7 km) dipecah dalam 2,7 dtk menjadi 9 tile. Save 1,1 dtk, open 1,1 dtk, dan ukuran file sama (139 MB). Diukur di Apple M4, release.
+Ukuran nyata: `city25k.hew` (24.964 objek, jangkauan 2,7 km) dipecah dalam 4,1 dtk menjadi 9 tile. Open 1,1 dtk, dan ukuran file sama (139 MB). Diukur di Apple M4, release.
 
 Batas sengaja (ponytail):
-- Geometri instance komponen tidak dihitung dalam jangkauan; instance dipindah menurut titik penempatannya.
 - Semua tile dimuat sekaligus.
 - Objek yang melewati batas tile setelah diedit belum dipindah otomatis (v0.1, bersama tool Move).
 

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 
-use kernel::{AttrTarget, AttrValue, Document, EntityRef, ObjectId, Plane, Point3};
+use kernel::{AttrTarget, AttrValue, Document, EntityRef, NodeId, ObjectId, Plane, Point3, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::project::{MANIFEST, Project, ProjectError, TileKey, horizontal_reach};
 use wangungis_scene::{KERNEL_FRAME_BOUND_M, NS, ProjectOrigin};
@@ -162,6 +162,73 @@ fn object_longer_than_a_tile_is_refused() {
     }
 }
 
+#[test]
+fn point_outside_the_project_is_refused() {
+    let mut doc = Document::new();
+    add_box(&mut doc, 49_990.0, 0.0, 20.0, 4.0, 1);
+    assert!(matches!(
+        Project::from_document(doc),
+        Err(ProjectError::Origin(
+            wangungis_scene::OriginError::OutOfBound(_)
+        ))
+    ));
+}
+
+/// Moved drawing axes, a user-hidden root, a group, and a visibly hidden
+/// instance inside that group: each lands in place, hidden state kept.
+#[test]
+fn split_keeps_axes_hidden_state_groups_and_instances() {
+    let mut doc = Document::new();
+    add_box(&mut doc, 0.0, 0.0, 5.0, 4.0, 1);
+    let hidden = add_box(&mut doc, 2_000.0, 0.0, 5.0, 4.0, 2);
+    doc.set_node_user_hidden(NodeId::Object(hidden), true);
+    let a = add_box(&mut doc, 3_000.0, 0.0, 5.0, 4.0, 3);
+    let b = add_box(&mut doc, 3_010.0, 0.0, 5.0, 4.0, 4);
+    let (_, inst, _) = doc.make_component(&[NodeId::Object(b)]).unwrap();
+    doc.set_node_user_hidden(NodeId::Instance(inst), true);
+    let want_pose = doc.instance_pose(inst).unwrap().to_affine();
+    doc.group_nodes(&[NodeId::Object(a), NodeId::Instance(inst)])
+        .unwrap();
+    let (s, c) = 0.3f64.sin_cos();
+    doc.set_axes(
+        Point3::new(17.0, -4.0, 0.0),
+        Vec3::new(c, s, 0.0),
+        Vec3::new(-s, c, 0.0),
+    )
+    .unwrap();
+    let axes = doc.axes();
+    let src = Document::load(&doc.save()).unwrap();
+
+    let p = Project::open(&Project::from_document(doc).unwrap().save()).unwrap();
+    assert_eq!(
+        p.tiles[&TileKey::ORIGIN].axes(),
+        axes,
+        "source axes restored"
+    );
+    // Objects 1..3; object 4 is definition geometry now, checked by its pose.
+    assert_lossless(&src, &p, true);
+    let two = &p.tiles[&TileKey { i: 2, j: 0 }];
+    let roots = two.top_level_nodes();
+    assert_eq!(roots.len(), 1);
+    assert!(two.node_user_hidden(roots[0]), "hidden root became visible");
+    let three = &p.tiles[&TileKey { i: 3, j: 0 }];
+    let insts: Vec<_> = three
+        .top_level_nodes()
+        .into_iter()
+        .flat_map(|n| three.leaf_instances_under(n))
+        .collect();
+    assert_eq!(insts.len(), 1);
+    assert!(three.node_user_hidden(NodeId::Instance(insts[0])));
+    let got = three.instance_pose(insts[0]).unwrap().to_affine();
+    for (k, &t) in [3usize, 7, 11].iter().enumerate() {
+        let shift = TileKey { i: 3, j: 0 }.center()[k];
+        assert!(
+            (got[t] + shift - want_pose[t]).abs() <= MM,
+            "instance moved: {got:?} vs {want_pose:?}"
+        );
+    }
+}
+
 fn split_city() -> Project {
     let mut doc = Document::new();
     UTM49S.write(&mut doc).unwrap();
@@ -301,6 +368,18 @@ fn tampered_containers_are_refused() {
             tamper(&good, |e| {
                 let name = e.keys().find(|n| n.starts_with("tiles/")).unwrap().clone();
                 e.remove(&name);
+            }),
+        ),
+        (
+            "extra entry",
+            tamper(&good, |e| {
+                e.insert("tiles/99_99.hew".into(), b"x".to_vec());
+            }),
+        ),
+        (
+            "single-tile container",
+            edit_manifest(&good, |m| {
+                m["tiles"] = serde_json::json!([{"i": 0, "j": 0, "file": "tiles/0_0.hew"}]);
             }),
         ),
         (
