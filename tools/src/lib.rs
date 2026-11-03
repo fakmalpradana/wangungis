@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use inference::{InferenceScene, PickRay, Snap, SnapQuery, SnapSource};
+use inference::{InferenceScene, PickRay, Snap, SnapKind, SnapQuery, SnapSource};
 use kernel::{
     Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchRegionId, Transform, Vec3,
 };
@@ -112,8 +112,9 @@ impl Cell {
     }
 
     /// Whether the tile-local unit ray passes near the bounds: within the
-    /// height range, close enough in plan view for the pick cone to reach.
-    fn near(&self, origin: Point3, dir: Vec3, aperture: f64) -> bool {
+    /// height range, close enough in plan view for a pick cone of `cone_tan`
+    /// (tangent of its half-angle) to reach, measured at the bounds' far side.
+    fn near(&self, origin: Point3, dir: Vec3, cone_tan: f64) -> bool {
         let Some(lo) = self.lo else { return false };
         let hi = self.hi;
         let c = [
@@ -121,12 +122,11 @@ impl Cell {
             (lo[1] + hi[1]) / 2.0,
             (lo[2] + hi[2]) / 2.0,
         ];
+        let half = (hi[0] - lo[0]).hypot(hi[1] - lo[1]).hypot(hi[2] - lo[2]) / 2.0;
         let dist = (origin.x - c[0])
             .hypot(origin.y - c[1])
             .hypot(origin.z - c[2]);
-        // The cone widens with distance, named points by up to
-        // POINT_SNAP_REACH apertures; a little extra costs one query.
-        let m = 4.0 * aperture * dist + 1e-3;
+        let m = cone_tan * (dist + half) + 1e-3;
         // Ray span inside the height range.
         let (mut t0, mut t1) = (0.0f64, 1e7f64);
         if dir.z.abs() > 1e-12 {
@@ -171,6 +171,10 @@ fn offset(p: Point3, c: [f64; 3]) -> Point3 {
     Point3::new(p.x - c[0], p.y - c[1], p.z - c[2])
 }
 
+fn onset(p: Point3, c: [f64; 3]) -> Point3 {
+    Point3::new(p.x + c[0], p.y + c[1], p.z + c[2])
+}
+
 fn shifted_plane(plane: Plane, c: [f64; 3]) -> Result<Plane, kernel::MathError> {
     Plane::from_point_normal(offset(plane.point(), c), plane.normal())
 }
@@ -200,7 +204,7 @@ fn partition(doc: &Document) -> Cells {
             cell.nodes.push(node);
         }
     }
-    for id in doc.sketch_ids() {
+    for id in doc.visible_sketch_ids() {
         let Some(sk) = doc.sketch(id) else { continue };
         let points = sk
             .edges()
@@ -231,10 +235,14 @@ fn build_cell(doc: &Document, cell: &Cell) -> InferenceScene {
             let (Some(def), Some(pose)) = (doc.instance_def(inst), doc.instance_pose(inst)) else {
                 continue;
             };
-            for (m, local) in doc.expanded_def_placements(def) {
-                if let Some(obj) = doc.object(m) {
+            if doc.node_user_hidden(NodeId::Instance(inst)) {
+                continue;
+            }
+            let shown = doc.expanded_def_placements_shown(def);
+            for ((m, local), shown) in doc.expanded_def_placements(def).into_iter().zip(shown) {
+                if shown && let Some(obj) = doc.object(m) {
                     if !s.has_def_member(m) {
-                        s.set_def_member_deferred(m, obj);
+                        s.set_def_member(m, obj);
                     }
                     s.add_placement(inst, m, &local.then(&pose));
                 }
@@ -309,7 +317,7 @@ impl Scene {
     }
 
     /// Tiles whose geometry can lie near the ray in plan view.
-    fn tiles_near(&self, ray: &PickRay, aperture: f64) -> Vec<TileKey> {
+    fn tiles_near(&self, ray: &PickRay, cone_tan: f64) -> Vec<TileKey> {
         let o = [ray.origin.x, ray.origin.y];
         let d = [ray.direction.x, ray.direction.y];
         let dd = d[0] * d[0] + d[1] * d[1];
@@ -326,7 +334,8 @@ impl Scene {
                     0.0
                 };
                 let gap = (v[0] - t * d[0]).hypot(v[1] - t * d[1]);
-                gap <= KERNEL_FRAME_BOUND_M + 4.0 * aperture * v[0].hypot(v[1])
+                let far = v[0].hypot(v[1]) + KERNEL_FRAME_BOUND_M;
+                gap <= KERNEL_FRAME_BOUND_M + cone_tan * far
             })
             .collect()
     }
@@ -336,15 +345,15 @@ impl Scene {
     fn for_cells_near(
         &mut self,
         ray: &PickRay,
-        aperture: f64,
+        cone_tan: f64,
         mut visit: impl FnMut(TileKey, &InferenceScene),
     ) {
-        for key in self.tiles_near(ray, aperture) {
+        for key in self.tiles_near(ray, cone_tan) {
             let doc = &self.project.tiles[&key];
             let origin = offset(ray.origin, key.center());
             let cells = self.cells.entry(key).or_insert_with(|| partition(doc));
             for cell in cells.values_mut() {
-                if cell.near(origin, ray.direction, aperture) {
+                if cell.near(origin, ray.direction, cone_tan) {
                     if cell.scene.is_none() {
                         cell.scene = Some(build_cell(doc, cell));
                     }
@@ -354,46 +363,57 @@ impl Scene {
         }
     }
 
-    /// Hew's snap resolve across tiles. `query` is project-local.
+    /// Hew's snap resolve across tiles. `query` is project-local, cone aperture.
+    ///
+    /// Each cell's answer is already right about that cell; what crosses cells
+    /// is the choice between answers and occlusion. Answers rank as Hew ranks
+    /// inside one scene (group, then weighted angle, then kind, then depth),
+    /// except that Hew's "reach never steals" guard is not visible from outside.
     pub fn snap(&mut self, query: &SnapQuery) -> Option<Hit> {
         let dir = query.ray.direction.normalized().ok()?;
         let ray = PickRay {
             origin: query.ray.origin,
             direction: dir,
         };
-        let wall = if query.see_through_points {
-            f64::INFINITY
-        } else {
-            self.nearest_face(&ray).map_or(f64::INFINITY, |f| f.depth)
-        };
-        let mut best: Option<(u8, f64, f64, Hit)> = None;
+        let reach = [
+            SnapKind::Endpoint,
+            SnapKind::Center,
+            SnapKind::Quadrant,
+            SnapKind::Midpoint,
+            SnapKind::OnEdge,
+            SnapKind::OnFace,
+        ]
+        .map(|k| query.weights.reach(k, 1.0))
+        .into_iter()
+        .fold(1.0, f64::max);
+        let cone_tan = (query.aperture * reach).min(1.5).tan();
+
+        let mut found: Vec<(u8, f64, f64, Hit, Point3)> = Vec::new();
+        let locked = query.lock.is_some();
         let mut offer = |key: TileKey, mut snap: Snap| {
             let c = key.center();
-            snap.position = Point3::new(
-                snap.position.x + c[0],
-                snap.position.y + c[1],
-                snap.position.z + c[2],
-            );
-            let to = snap.position - ray.origin;
+            snap.position = onset(snap.position, c);
+            snap.projected_from = snap.projected_from.map(|p| onset(p, c));
+            // Under a lock the position is on the line; what the cursor aimed
+            // at is where it was projected from.
+            let aim = snap.projected_from.unwrap_or(snap.position);
+            let to = aim - ray.origin;
             let depth = to.dot(dir);
-            // A face in another cell may hide what this cell could not see.
-            if depth > wall + (1e-6 * wall).max(1e-3) {
-                return;
-            }
-            let angle = to.cross(dir).length().atan2(depth);
-            let rank = snap.kind.rank_group();
-            if best
-                .as_ref()
-                .is_none_or(|b| (rank, angle, depth) < (b.0, b.1, b.2))
-            {
-                best = Some((rank, angle, depth, Hit { tile: key, snap }));
-            }
+            let angle = to.cross(dir).length().atan2(depth) / query.weights.weight(snap.kind);
+            // Every scene answers a lock with its bare line when it has nothing:
+            // that answer must not beat real geometry from another cell.
+            let rank = if locked && snap.projected_from.is_none() {
+                u8::MAX
+            } else {
+                snap.kind.rank_group()
+            };
+            found.push((rank, angle, depth, Hit { tile: key, snap }, aim));
         };
         let unit = SnapQuery { ray, ..*query };
         if let Some(snap) = self.base.resolve(&unit) {
             offer(TileKey::ORIGIN, snap);
         }
-        self.for_cells_near(&ray, query.aperture, |key, scene| {
+        self.for_cells_near(&ray, cone_tan, |key, scene| {
             let c = key.center();
             let plane = query
                 .constraint_plane
@@ -411,7 +431,40 @@ impl Scene {
                 offer(key, snap);
             }
         });
-        best.map(|b| b.3)
+        found.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.total_cmp(&b.1))
+                .then(a.3.snap.kind.cmp(&b.3.snap.kind))
+                .then(a.2.total_cmp(&b.2))
+        });
+        for (rank, _, _, hit, aim) in found {
+            let free = query.see_through_points
+                || rank == u8::MAX
+                || hit.snap.kind == SnapKind::OnAxis
+                || !self.is_occluded(ray.origin, aim);
+            if free {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    /// Whether a solid face in any cell stands between `eye` and `point`. Each
+    /// cell judges its own faces too, but a face in another cell it cannot see.
+    // ponytail: sketch regions do not occlude across cells; they are flat
+    // drawings on the way to becoming solids.
+    fn is_occluded(&mut self, eye: Point3, point: Point3) -> bool {
+        let to = point - eye;
+        let dist = to.length();
+        let Ok(direction) = to.normalized() else {
+            return false;
+        };
+        let ray = PickRay {
+            origin: eye,
+            direction,
+        };
+        self.nearest_face(&ray)
+            .is_some_and(|f| f.depth < dist - (1e-6 * dist).max(1e-3))
     }
 
     fn nearest_face(&mut self, ray: &PickRay) -> Option<FaceHit> {
@@ -482,6 +535,21 @@ impl Scene {
             local.push((offset(*a, c), offset(*b, c)));
         }
         let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        // A dry run on a copy: a batch the kernel refuses leaves no sketch, no
+        // tile and no undo step behind.
+        let mut probe = match target {
+            Some((k, s)) => self
+                .project
+                .tiles
+                .get(&k)
+                .and_then(|d| d.sketch(s))
+                .ok_or(EditError::Kernel("sketch hilang".into()))?
+                .clone(),
+            None => kernel::Sketch::on_plane(plane),
+        };
+        for (a, b) in &local {
+            probe.add_segment(*a, *b).map_err(kernel_err)?;
+        }
         let doc = self.project.tile_mut(key)?;
         let sketch = match target {
             Some((_, s)) => s,
@@ -491,25 +559,25 @@ impl Scene {
         let sk = doc
             .sketch_mut(sketch)
             .ok_or(EditError::Kernel("sketch hilang".into()))?;
-        let failed = local.iter().find_map(|(a, b)| sk.add_segment(*a, *b).err());
-        let change = doc.end_sketch_gesture(sketch).map_err(kernel_err)?;
-        if let Some(e) = failed {
-            // Earlier segments of this batch went in: one recorded step to drop.
-            if !change.sketches_touched.is_empty() {
-                doc.undo().map_err(kernel_err)?;
-            }
-            return Err(kernel_err(e));
+        for (a, b) in &local {
+            sk.add_segment(*a, *b)
+                .expect("the same segments passed on an identical copy");
         }
+        doc.end_sketch_gesture(sketch).map_err(kernel_err)?;
         self.record(key);
         Ok((key, sketch))
     }
 
-    /// Undoes `op` when it pushed the tile past the kernel frame bound.
+    /// Undoes the op just applied when it pushed the tile past the kernel
+    /// frame bound.
     fn guard_reach(&mut self, key: TileKey) -> Result<(), EditError> {
         let doc = self.project.tile_mut(key)?;
         let reach_m = horizontal_reach(doc);
         if reach_m > KERNEL_FRAME_BOUND_M {
             doc.undo().map_err(kernel_err)?;
+            // The op wiped the document's redo and the undo left itself there:
+            // redoing from here would bring the refused edit back.
+            self.redo.clear();
             return Err(EditError::OutOfTile { tile: key, reach_m });
         }
         Ok(())

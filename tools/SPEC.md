@@ -13,7 +13,8 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Invariant (diuji di `tests/scene.rs`)
-- Edit yang ditolak tidak mengubah proyek dan tidak meninggalkan langkah undo: batch gagal di tengah, segmen di luar tile/proyek, Push/Pull yang melewati `KERNEL_FRAME_BOUND_M`.
+- Edit yang ditolak tidak mengubah proyek dan tidak meninggalkan langkah undo: batch gagal (diuji dulu pada salinan sketch), segmen di luar tile/proyek, Push/Pull yang melewati `KERNEL_FRAME_BOUND_M`.
+- Edit yang ditolak setelah sempat diterapkan kernel juga membersihkan redo proyek, supaya tidak bisa kembali lewat redo.
 - Undo hanya bisa mencapai edit pengguna, bukan metadata tile.
 - Kotak di mana pun dalam ±5 km berada ≤ 1 mm dari yang diminta, tetap solid (`health_report`), dan bertahan melewati undo, redo, dan save/open (property test).
 - Snap benar melintasi batas tile; titik di belakang face di tile lain tidak menang, walau `Endpoint` berperingkat lebih tinggi dari `OnFace`.
@@ -23,12 +24,14 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - Sel menyimpan node dan sketch menurut pusat bounds-nya, plus bounds gabungan untuk menolak sinar secara murah.
 - Indeks sel dibuat saat sinar pertama kali lewat di dekatnya. Edit membuang sel seluruh tile, lalu hanya sel yang dilewati sinar yang dibangun lagi.
 - Scene `base` tanpa geometri menjawab snap arah murni (sumbu proyek, kunci sumbu).
-- Hasil digabung menurut `SnapKind::rank_group`, lalu sudut ke sinar, lalu kedalaman. Ini mendekati, tetapi tidak identik dengan, satu scene global: Hew tidak membuka jarak ternormalisasinya (`docs/research/spike-a2-native-render.md`).
+- Hasil digabung menurut `SnapKind::rank_group`, lalu sudut berbobot ke sinar, lalu jenis, lalu kedalaman. Jawaban "garis kunci kosong" berperingkat terakhir.
+- Oklusi lintas sel: sinar dari mata ke titik snap harus bebas dari face solid di sel mana pun (seperti `is_occluded` Hew). Region sketch tidak menutup lintas sel.
+- Ini mendekati, tetapi tidak identik dengan, satu scene global: aturan "reach never steals" Hew tidak terlihat dari luar (`docs/research/spike-a2-native-render.md`).
 
-Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 55 ms (5,1 dtk bila satu indeks per tile); snap setelah edit 42 ms (324 ms); snap berikutnya 51 µs; sinar menyapu seluruh kota 473 ms pada kali pertama; draw/extrude/undo < 1 ms.
+Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 51 ms (5,1 dtk bila satu indeks per tile); snap setelah edit 42 ms (324 ms); snap berikutnya ±80 µs; dari ketinggian 5 km, kursor menyapu kota ±78 ms per hover pada kali pertama dan ±18 ms setelahnya; draw/extrude/undo < 1 ms.
 
 ## Batas sengaja (ponytail)
-- Objek yang disembunyikan lewat tag tetap bisa di-snap (Hew tidak membuka statusnya); user-hidden tidak.
+- Objek top-level yang disembunyikan lewat tag tetap bisa di-snap (Hew tidak membuka statusnya); user-hidden tidak, begitu juga anggota definisi yang tersembunyi.
 - Push/Pull di dalam komponen menghasilkan `Unsupported`.
 - Tile kosong hasil undo tetap ada di proyek.
 

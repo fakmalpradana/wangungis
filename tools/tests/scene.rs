@@ -412,6 +412,165 @@ fn axis_lock_works_in_an_empty_project() {
     assert!((p.x - 20.0).abs() <= 1.0, "{p:?}");
 }
 
+/// Undo, then a refused edit: the refused edit must not come back through redo.
+#[test]
+fn refused_edit_cannot_return_through_redo() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let wall = |s: &mut Scene| {
+        s.pick_face(&PickRay {
+            origin: Point3::new(100.0, 2.0, 1.5),
+            direction: Vec3::new(-1.0, 0.0, 0.0),
+        })
+        .unwrap()
+    };
+    let w = wall(&mut s);
+    s.push_pull(w.tile, w.source, 1.0).unwrap();
+    s.undo().unwrap();
+    assert!(s.can_redo());
+    let w = wall(&mut s);
+    assert!(matches!(
+        s.push_pull(w.tile, w.source, 2_000.0),
+        Err(EditError::OutOfTile { .. })
+    ));
+    assert_eq!(
+        s.redo().unwrap(),
+        None,
+        "redo must not re-apply the refusal"
+    );
+    assert_box(s.project(), [0.0, 0.0, 0.0], [5.0, 4.0, 3.0]);
+    // Undo still walks back through the real edits.
+    s.undo().unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+}
+
+/// A refused first segment leaves no sketch and no new tile.
+#[test]
+fn refused_drawing_leaves_no_sketch_or_tile() {
+    let mut s = scene();
+    let far = Point3::new(3_000.0, 0.0, 0.0);
+    assert!(s.draw(None, ground(), &[(far, far)]).is_err());
+    assert_eq!(s.project().tiles.len(), 1, "no tile created");
+    assert!(s.project().tiles[&TileKey::ORIGIN].sketch_ids().is_empty());
+    assert!(!s.can_undo());
+    // A sketch that does not exist in that tile is refused too.
+    let (key, sk) = s
+        .draw(None, ground(), &rect_segments(0.0, 0.0, 2.0, 2.0))
+        .unwrap();
+    let elsewhere = TileKey { i: 5, j: 5 };
+    let seg = (far, Point3::new(3_001.0, 0.0, 0.0));
+    assert!(s.draw(Some((elsewhere, sk)), ground(), &[seg]).is_err());
+    assert_eq!(s.project().tiles.len(), 1);
+    let _ = key;
+}
+
+/// Hovering beside a corner, on the far side of the cursor along the face: the
+/// corner is farther than the face under the cursor but not hidden by it.
+#[test]
+fn corner_beyond_the_cursor_is_not_hidden_by_its_own_face() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let hit = s
+        .snap(&query([-20.0, -30.0, 40.0], [4.9, 3.9, 3.0]))
+        .expect("a snap");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint, "{hit:?}");
+    let miss = (hit.snap.position - Point3::new(5.0, 4.0, 3.0)).length();
+    assert!(miss <= MM, "{:?}", hit.snap.position);
+}
+
+/// A nearly level ray from inside a cell, low over a drawing 50 m away.
+#[test]
+fn low_level_ray_from_inside_a_cell_finds_the_drawing() {
+    let mut s = scene();
+    s.draw(None, ground(), &rect_segments(50.0, 0.0, 4.0, 4.0))
+        .unwrap();
+    s.draw(None, ground(), &rect_segments(0.0, 60.0, 4.0, 4.0))
+        .unwrap();
+    let hit = s
+        .snap(&query([1.0, 1.0, 0.05], [50.0, 0.0, 0.0]))
+        .expect("a snap");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint);
+}
+
+/// A lock projects real geometry onto the line; the bare line of an empty scene
+/// must not win over it.
+#[test]
+fn locked_snap_prefers_geometry_over_the_bare_line() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let hit = s
+        .snap(&SnapQuery {
+            anchor: Some(Point3::new(0.0, -5.0, 3.0)),
+            lock: Some(inference::SnapLock::Axis(inference::Axis::X)),
+            ..query([-20.0, -30.0, 40.0], [5.0, 4.0, 3.0])
+        })
+        .expect("a snap");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint, "{hit:?}");
+    let p = hit.snap.position;
+    assert!((p.x - 5.0).abs() <= MM && (p.y + 5.0).abs() <= MM, "{p:?}");
+    let from = hit.snap.projected_from.expect("projected");
+    assert!(
+        (from - Point3::new(5.0, 4.0, 3.0)).length() <= MM,
+        "{from:?}"
+    );
+}
+
+fn instance_scene(hide: bool) -> Scene {
+    let mut doc = kernel::Document::new();
+    let p = |a: f64, b: f64| Point3::new(a, b, 0.0);
+    let ring = [
+        p(1000.0, 0.0),
+        p(1005.0, 0.0),
+        p(1005.0, 4.0),
+        p(1000.0, 4.0),
+    ];
+    let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
+    let sketch = doc.sketch_mut(sk).unwrap();
+    for k in 0..4 {
+        sketch.add_segment(ring[k], ring[(k + 1) % 4]).unwrap();
+    }
+    let r = doc.extrudable_regions(sk).unwrap();
+    doc.extrude_region(sk, r[0], 3.0).unwrap();
+    let node = doc.top_level_nodes()[0];
+    let (_, inst, _) = doc.make_component(&[node]).unwrap();
+    if hide {
+        doc.set_node_user_hidden(kernel::NodeId::Instance(inst), true);
+    }
+    // Reaches 1 km from the document origin, so it stays one tile.
+    let project = Project::from_document(doc).unwrap();
+    assert_eq!(project.tiles.len(), 1);
+    Scene::new(project)
+}
+
+/// Component instances snap and pick like solids; hidden ones do not.
+#[test]
+fn instances_snap_and_pick_unless_hidden() {
+    let eye = [990.0, -20.0, 25.0];
+    let corner = [1000.0, 0.0, 3.0];
+    let mut s = instance_scene(false);
+    let hit = s.snap(&query(eye, corner)).expect("a snap");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint);
+    assert!(hit.snap.source.expect("source").instance.is_some());
+    let down = PickRay {
+        origin: Point3::new(1002.0, 2.0, 50.0),
+        direction: Vec3::new(0.0, 0.0, -1.0),
+    };
+    assert!(s.pick_face(&down).is_some());
+    // Editing inside a component is refused, not misapplied.
+    let f = s.pick_face(&down).unwrap();
+    assert!(matches!(
+        s.push_pull(f.tile, f.source, 1.0),
+        Err(EditError::Unsupported(_))
+    ));
+
+    let mut s = instance_scene(true);
+    assert_ne!(
+        s.snap(&query(eye, corner)).map(|h| h.snap.kind),
+        Some(SnapKind::Endpoint)
+    );
+    assert!(s.pick_face(&down).is_none());
+}
+
 /// Every object health-checks as a solid, in every tile.
 fn all_solid(p: &Project) -> bool {
     p.tiles
