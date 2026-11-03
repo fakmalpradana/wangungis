@@ -20,7 +20,9 @@ use inference::{
 use kernel::{
     Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchRegionId, Transform, Vec3,
 };
-use wangungis_scene::project::{Project, ProjectError, TileKey, horizontal_reach, node_points};
+use wangungis_scene::project::{
+    Project, ProjectError, TileKey, horizontal_reach, node_points, node_visible,
+};
 use wangungis_scene::{KERNEL_FRAME_BOUND_M, PROJECT_BOUND_M, check_local};
 
 /// Edge of an inference cell (m). An edit rebuilds only the cells a ray then
@@ -204,7 +206,7 @@ fn place(cells: &mut Cells, points: Vec<Point3>) -> Option<&mut Cell> {
 fn partition(doc: &Document) -> Cells {
     let mut cells = Cells::new();
     for node in doc.top_level_nodes() {
-        if !doc.node_user_hidden(node)
+        if node_visible(doc, node)
             && let Some(cell) = place(&mut cells, node_points(doc, node))
         {
             cell.nodes.push(node);
@@ -232,7 +234,7 @@ fn build_cell(doc: &Document, cell: &Cell) -> InferenceScene {
     for &node in &cell.nodes {
         for o in doc.leaf_objects_under(node) {
             if let Some(obj) = doc.object(o)
-                && !doc.node_user_hidden(NodeId::Object(o))
+                && node_visible(doc, NodeId::Object(o))
             {
                 s.add_object(o, obj, &Transform::IDENTITY);
             }
@@ -241,7 +243,7 @@ fn build_cell(doc: &Document, cell: &Cell) -> InferenceScene {
             let (Some(def), Some(pose)) = (doc.instance_def(inst), doc.instance_pose(inst)) else {
                 continue;
             };
-            if doc.node_user_hidden(NodeId::Instance(inst)) {
+            if !node_visible(doc, NodeId::Instance(inst)) {
                 continue;
             }
             let shown = doc.expanded_def_placements_shown(def);

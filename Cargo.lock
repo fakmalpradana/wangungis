@@ -2695,9 +2695,11 @@ name = "wangungis"
 version = "0.0.0"
 dependencies = [
  "eframe",
+ "inference",
  "kernel",
  "wangungis-render",
  "wangungis-scene",
+ "wangungis-tools",
  "wgpu",
 ]
 

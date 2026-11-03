@@ -9,6 +9,7 @@
 //! Port of spike `wangungis-spikes/s6-native-render`.
 
 use bytemuck::{Pod, Zeroable};
+use wangungis_scene::project::node_visible;
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -28,6 +29,8 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   return u.view_proj * vec4<f32>(pos + u.offset.xyz, 1.0);
 }
 @fragment fn fs_edge() -> @location(0) vec4<f32> { return vec4<f32>(0.1, 0.1, 0.1, 1.0); }
+// Overlay lines carry their flat color in the `light` slot of the uniform.
+@fragment fn fs_overlay() -> @location(0) vec4<f32> { return vec4<f32>(u.light.xyz, 1.0); }
 "#;
 
 #[repr(C)]
@@ -54,37 +57,92 @@ pub struct TileMesh {
 }
 
 impl TileMesh {
-    /// Merges every visible world Object of `doc` (the tile's kernel document).
+    /// Merges `doc`'s visible geometry (the tile's kernel document): world
+    /// Objects, component instances through their poses, and sketch lines.
+    // ponytail: closed sketch regions have no fill yet, only their edges.
     pub fn from_document(doc: &kernel::Document) -> Result<Self, tessellate::TessellateError> {
         let palette = kernel::MaterialPalette::default();
         let mut m = TileMesh::default();
-        for oid in doc.live_object_ids() {
-            if !doc.is_world_object(oid) {
+        for node in doc.top_level_nodes() {
+            if !node_visible(doc, node) {
                 continue;
             }
-            let Some(obj) = doc.object(oid) else { continue };
-            let t = tessellate::tessellate(obj, &palette)?;
-            let base = m.verts.len() as u32;
-            for (p, n) in t.positions.chunks(3).zip(t.normals.chunks(3)) {
-                m.verts.push(Vertex {
-                    pos: [p[0], p[1], p[2]],
-                    nrm: [n[0], n[1], n[2]],
-                });
+            for oid in doc.leaf_objects_under(node) {
+                if !node_visible(doc, kernel::NodeId::Object(oid)) {
+                    continue;
+                }
+                if let Some(obj) = doc.object(oid) {
+                    m.push(&tessellate::tessellate(obj, &palette)?, None);
+                }
             }
-            m.indices.extend(t.indices.iter().map(|i| i + base));
-            m.edges
-                .extend(t.edge_positions.chunks(3).map(|p| [p[0], p[1], p[2]]));
+            for inst in doc.leaf_instances_under(node) {
+                let (Some(def), Some(pose)) = (doc.instance_def(inst), doc.instance_pose(inst))
+                else {
+                    continue;
+                };
+                if !node_visible(doc, kernel::NodeId::Instance(inst)) {
+                    continue;
+                }
+                let shown = doc.expanded_def_placements_shown(def);
+                for ((member, local), shown) in
+                    doc.expanded_def_placements(def).into_iter().zip(shown)
+                {
+                    if shown && let Some(obj) = doc.object(member) {
+                        let t = tessellate::tessellate(obj, &palette)?;
+                        m.push(&t, Some(local.then(&pose)));
+                    }
+                }
+            }
+        }
+        for id in doc.visible_sketch_ids() {
+            let Some(sk) = doc.sketch(id) else { continue };
+            for e in sk.edges().values() {
+                for v in [e.from, e.to] {
+                    let p = sk.vertices()[v].position;
+                    m.edges.push([p.x as f32, p.y as f32, p.z as f32]);
+                }
+            }
         }
         Ok(m)
+    }
+
+    /// Appends a tessellated Object, baked through `pose` when it has one.
+    fn push(&mut self, t: &tessellate::RenderMesh, pose: Option<kernel::Transform>) {
+        let at = |p: &[f32]| match &pose {
+            None => [p[0], p[1], p[2]],
+            Some(x) => {
+                let q = x.apply_point(kernel::Point3::new(p[0].into(), p[1].into(), p[2].into()));
+                [q.x as f32, q.y as f32, q.z as f32]
+            }
+        };
+        let base = self.verts.len() as u32;
+        for (p, n) in t.positions.chunks(3).zip(t.normals.chunks(3)) {
+            let nrm = match &pose {
+                None => [n[0], n[1], n[2]],
+                Some(x) => {
+                    let q =
+                        x.apply_vector(kernel::Vec3::new(n[0].into(), n[1].into(), n[2].into()));
+                    [q.x as f32, q.y as f32, q.z as f32]
+                }
+            };
+            self.verts.push(Vertex { pos: at(p), nrm });
+        }
+        self.indices.extend(t.indices.iter().map(|i| i + base));
+        self.edges.extend(t.edge_positions.chunks(3).map(at));
     }
 
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
 
-    /// Axis-aligned bounds in the tile frame, `None` when empty.
+    /// Axis-aligned bounds in the tile frame, sketch lines included. `None`
+    /// when empty.
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        let mut it = self.verts.iter().map(|v| v.pos);
+        let mut it = self
+            .verts
+            .iter()
+            .map(|v| v.pos)
+            .chain(self.edges.iter().copied());
         let first = it.next()?;
         Some(it.fold((first, first), |(lo, hi), p| {
             (
@@ -173,11 +231,29 @@ struct Tile {
     bg: wgpu::BindGroup,
 }
 
+/// Tool feedback drawn over the model: one flat color, project-local.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OverlayLines {
+    pub color: [f32; 3],
+    pub lines: Vec<([f64; 3], [f64; 3])>,
+}
+
+struct Overlay {
+    origin: [f64; 3],
+    color: [f32; 3],
+    vb: wgpu::Buffer,
+    n: u32,
+    ub: wgpu::Buffer,
+    bg: wgpu::BindGroup,
+}
+
 pub struct Renderer {
     tri: wgpu::RenderPipeline,
     edge: wgpu::RenderPipeline,
+    over: wgpu::RenderPipeline,
     bgl: wgpu::BindGroupLayout,
     tiles: Vec<Tile>,
+    overlays: Vec<Overlay>,
 }
 
 impl Renderer {
@@ -281,25 +357,38 @@ impl Renderer {
             },
             depth(false, Default::default()),
         );
+        // Always on top: a rubber band must stay visible inside a solid.
+        let over = pipeline(
+            "vs_edge",
+            "fs_overlay",
+            12,
+            &edge_attrs,
+            wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+        );
         Renderer {
             tri,
             edge,
+            over,
             bgl,
             tiles: Vec::new(),
+            overlays: Vec::new(),
         }
     }
 
-    /// Uploads one tile whose frame sits at `origin` (project-local `f64`).
-    pub fn add_tile(&mut self, device: &wgpu::Device, origin: [f64; 3], mesh: &TileMesh) {
-        let buf = |contents: &[u8], usage| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents,
-                usage,
-            })
-        };
+    /// One uniform buffer and its bind group.
+    fn uniform(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::BindGroup) {
         let ub = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tile uniform"),
+            label: Some("uniform"),
             size: std::mem::size_of::<Uniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -312,6 +401,54 @@ impl Renderer {
                 resource: ub.as_entire_binding(),
             }],
         });
+        (ub, bg)
+    }
+
+    /// Replaces what the overlay draws. Each group is one draw call, positions
+    /// relative to its own first point, so precision holds at UTM.
+    pub fn set_overlay(&mut self, device: &wgpu::Device, groups: &[OverlayLines]) {
+        self.overlays = groups
+            .iter()
+            .filter(|g| !g.lines.is_empty())
+            .map(|g| {
+                let origin = g.lines[0].0;
+                let verts: Vec<[f32; 3]> = g
+                    .lines
+                    .iter()
+                    .flat_map(|(a, b)| [sub(*a, origin), sub(*b, origin)])
+                    .map(|p| p.map(|x| x as f32))
+                    .collect();
+                let (ub, bg) = self.uniform(device);
+                Overlay {
+                    origin,
+                    color: g.color,
+                    vb: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("overlay"),
+                        contents: bytemuck::cast_slice(&verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    n: verts.len() as u32,
+                    ub,
+                    bg,
+                }
+            })
+            .collect();
+    }
+
+    /// Uploads the tile whose frame sits at `origin` (project-local `f64`),
+    /// replacing the one already there. Origins are computed, never typed, so
+    /// the same tile has the same bits.
+    pub fn add_tile(&mut self, device: &wgpu::Device, origin: [f64; 3], mesh: &TileMesh) {
+        self.tiles
+            .retain(|t| t.origin.map(f64::to_bits) != origin.map(f64::to_bits));
+        let buf = |contents: &[u8], usage| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents,
+                usage,
+            })
+        };
+        let (ub, bg) = self.uniform(device);
         self.tiles.push(Tile {
             origin,
             vb: buf(
@@ -351,10 +488,20 @@ impl Renderer {
             };
             queue.write_buffer(&t.ub, 0, bytemuck::bytes_of(&u));
         }
+        for o in &self.overlays {
+            let d = sub(o.origin, camera.eye).map(|x| x as f32);
+            let c = o.color;
+            let u = Uniform {
+                view_proj,
+                offset: [d[0], d[1], d[2], 0.0],
+                light: [c[0], c[1], c[2], 0.0],
+            };
+            queue.write_buffer(&o.ub, 0, bytemuck::bytes_of(&u));
+        }
     }
 
-    /// Records the draws: up to 2 per tile (faces, edges); empty buffers are
-    /// skipped. Returns the number of draw calls issued.
+    /// Records the draws: up to 2 per tile (faces, edges), then one per overlay
+    /// group; empty buffers are skipped. Returns the number of draw calls issued.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) -> usize {
         let mut calls = 0;
         for t in &self.tiles {
@@ -372,6 +519,13 @@ impl Renderer {
                 pass.draw(0..t.n_edge, 0..1);
                 calls += 1;
             }
+        }
+        for o in &self.overlays {
+            pass.set_pipeline(&self.over);
+            pass.set_bind_group(0, &o.bg, &[]);
+            pass.set_vertex_buffer(0, o.vb.slice(..));
+            pass.draw(0..o.n, 0..1);
+            calls += 1;
         }
         calls
     }

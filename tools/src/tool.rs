@@ -299,6 +299,11 @@ impl Tool {
         )
     }
 
+    /// Whether `other` is the same tool, whatever state each is in.
+    pub fn same_kind(&self, other: &Tool) -> bool {
+        std::mem::discriminant(&self.state) == std::mem::discriminant(&other.state)
+    }
+
     pub fn set_aperture(&mut self, aperture: f64) {
         self.aperture = aperture;
     }

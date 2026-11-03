@@ -6,10 +6,10 @@ license.workspace = true
 
 [dependencies]
 kernel.workspace = true
+wangungis-scene.workspace = true
 tessellate.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 
 [dev-dependencies]
-wangungis-scene.workspace = true
 pollster.workspace = true
