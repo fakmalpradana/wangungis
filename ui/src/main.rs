@@ -1,14 +1,17 @@
-//! WangunGIS desktop shell (F0): open a `.hew`, orbit/pan/zoom, zoom extents.
+//! WangunGIS desktop shell (F0): open a `.hew` or `.wangun` project, orbit/pan/zoom,
+//! zoom extents. A `.hew` reaching past the kernel frame bound is split into
+//! kernel tiles on open and can be saved as `.wangun`.
 //! The 3D view renders into an offscreen texture shown as an egui image, so
 //! the renderer owns its depth buffer and knows nothing about egui.
-//! Usage: wangungis [file.hew]
+//! Usage: wangungis [file.hew | file.wangun]
 
 mod camera;
 
 use camera::Orbit;
 use eframe::{egui, egui_wgpu};
 use wangungis_render::{DEPTH_FORMAT, Renderer, TileMesh};
-use wangungis_scene::{KERNEL_FRAME_BOUND_M, ProjectOrigin};
+use wangungis_scene::ProjectOrigin;
+use wangungis_scene::project::{Project, TileKey};
 
 /// egui-wgpu 0.37 `register_native_texture` requires Rgba8Unorm; the golden
 /// tests in `render` use the same format.
@@ -35,10 +38,10 @@ struct Model {
     name: String,
     objects: usize,
     triangles: usize,
-    /// `Err` when the `wangungis` attributes exist but are malformed.
-    origin: Result<Option<ProjectOrigin>, String>,
-    /// Some geometry lies farther than KERNEL_FRAME_BOUND_M from the document origin.
-    outside_frame: bool,
+    origin: Option<ProjectOrigin>,
+    tiles: usize,
+    /// Opened as one `.hew` and split into kernel tiles in memory.
+    split: bool,
 }
 
 struct Viewport {
@@ -58,6 +61,7 @@ struct App {
     fit_pending: bool,
     path: String,
     model: Option<Model>,
+    project: Option<Project>,
     error: Option<String>,
 }
 
@@ -77,6 +81,7 @@ impl App {
             fit_pending: false,
             path: path.clone().unwrap_or_default(),
             model: None,
+            project: None,
             error: None,
         };
         if path.is_some() {
@@ -88,31 +93,57 @@ impl App {
     fn open(&mut self) {
         self.error = None;
         match load(&self.path) {
-            Ok((doc, mesh)) => {
+            Ok((project, meshes)) => {
                 self.renderer.clear_tiles();
-                // F0: one document = one tile whose frame is the project origin.
-                self.renderer.add_tile(&self.rs.device, [0.0; 3], &mesh);
-                self.bounds = mesh
-                    .bounds()
-                    .map(|(lo, hi)| (lo.map(f64::from), hi.map(f64::from)));
-                let outside_frame = f64::from(mesh.horizontal_reach()) > KERNEL_FRAME_BOUND_M;
+                let mut placed = Vec::new();
+                for (key, mesh) in &meshes {
+                    self.renderer.add_tile(&self.rs.device, key.center(), mesh);
+                    placed.push((key.center(), mesh.bounds()));
+                }
+                self.bounds = union_bounds(&placed);
                 self.orbit = Orbit::default();
                 self.fit_pending = true;
+                let is_container = project.single().is_none();
                 self.model = Some(Model {
                     name: std::path::Path::new(&self.path)
                         .file_name()
                         .map_or(self.path.clone(), |n| n.to_string_lossy().into_owned()),
-                    objects: doc
-                        .live_object_ids()
-                        .into_iter()
-                        .filter(|o| doc.is_world_object(*o))
-                        .count(),
-                    triangles: mesh.triangle_count(),
-                    origin: ProjectOrigin::read(&doc).map_err(|e| format!("{e:?}")),
-                    outside_frame,
+                    objects: project
+                        .tiles
+                        .values()
+                        .map(|d| {
+                            d.live_object_ids()
+                                .into_iter()
+                                .filter(|o| d.is_world_object(*o))
+                                .count()
+                        })
+                        .sum(),
+                    triangles: meshes.iter().map(|(_, m)| m.triangle_count()).sum(),
+                    origin: project.origin,
+                    tiles: project.tiles.len(),
+                    split: is_container && !self.path.ends_with(".wangun"),
                 });
+                self.project = Some(project);
             }
             Err(e) => self.error = Some(e),
+        }
+    }
+
+    /// Writes the split project next to the opened `.hew`, never over it.
+    fn save_project(&mut self) {
+        let Some(p) = &self.project else { return };
+        let target = std::path::Path::new(&self.path).with_extension("wangun");
+        self.error = std::fs::write(&target, p.save())
+            .map(|()| self.path = target.to_string_lossy().into_owned())
+            .err()
+            .map(|e| format!("Tidak bisa menyimpan {}: {e}", target.display()));
+        if let Some(m) = &mut self.model
+            && self.error.is_none()
+        {
+            m.split = false;
+            m.name = target
+                .file_name()
+                .map_or(String::new(), |n| n.to_string_lossy().into_owned());
         }
     }
 
@@ -205,19 +236,52 @@ impl App {
     }
 }
 
-fn load(path: &str) -> Result<(kernel::Document, TileMesh), String> {
+type TileMeshes = Vec<(TileKey, TileMesh)>;
+
+fn load(path: &str) -> Result<(Project, TileMeshes), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Tidak bisa membaca {path}: {e}"))?;
-    let doc =
-        kernel::Document::load(&bytes).map_err(|e| format!("Bukan file .hew yang valid: {e:?}"))?;
-    let mesh = TileMesh::from_document(&doc).map_err(|e| format!("Gagal membuat mesh: {e:?}"))?;
-    Ok((doc, mesh))
+    let project = Project::open(&bytes).map_err(|e| format!("Tidak bisa membuka proyek: {e:?}"))?;
+    let meshes = project
+        .tiles
+        .iter()
+        .map(|(key, doc)| {
+            TileMesh::from_document(doc)
+                .map(|m| (*key, m))
+                .map_err(|e| format!("Gagal membuat mesh tile {key:?}: {e:?}"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok((project, meshes))
+}
+
+/// Project-local bounds of all tiles: each tile's own bounds shifted by its
+/// center. `None` when every tile is empty.
+/// Tile center plus that tile's own bounds (`TileMesh::bounds`).
+type PlacedBounds = ([f64; 3], Option<([f32; 3], [f32; 3])>);
+
+fn union_bounds(tiles: &[PlacedBounds]) -> Option<([f64; 3], [f64; 3])> {
+    tiles
+        .iter()
+        .filter_map(|(c, b)| {
+            b.map(|(lo, hi)| {
+                (
+                    std::array::from_fn(|k| c[k] + f64::from(lo[k])),
+                    std::array::from_fn(|k| c[k] + f64::from(hi[k])),
+                )
+            })
+        })
+        .reduce(|(alo, ahi): ([f64; 3], [f64; 3]), (blo, bhi)| {
+            (
+                std::array::from_fn(|k| alo[k].min(blo[k])),
+                std::array::from_fn(|k| ahi[k].max(bhi[k])),
+            )
+        })
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label("File .hew:");
+                ui.label("File .hew / .wangun:");
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(480.0));
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Buka").clicked() || enter {
@@ -225,6 +289,11 @@ impl eframe::App for App {
                 }
                 if ui.button("Zoom extents").clicked() {
                     self.fit_pending = true;
+                }
+                if self.model.as_ref().is_some_and(|m| m.split)
+                    && ui.button("Simpan proyek (.wangun)").clicked()
+                {
+                    self.save_project();
                 }
             });
         });
@@ -234,30 +303,29 @@ impl eframe::App for App {
                     ui.colored_label(egui::Color32::RED, e);
                 } else if let Some(m) = &self.model {
                     ui.label(format!(
-                        "{} · {} objek · {} segitiga",
-                        m.name, m.objects, m.triangles
+                        "{} · {} tile · {} objek · {} segitiga",
+                        m.name, m.tiles, m.objects, m.triangles
                     ));
                     ui.separator();
                     match &m.origin {
-                        Ok(Some(o)) => ui.label(format!(
+                        Some(o) => ui.label(format!(
                             "EPSG:{} · origin ({:.3}, {:.3}, {:.3})",
                             o.epsg, o.origin[0], o.origin[1], o.origin[2]
                         )),
-                        Ok(None) => ui.label("Tanpa origin proyek (koordinat lokal)"),
-                        Err(e) => ui.colored_label(
-                            egui::Color32::RED,
-                            format!("Atribut origin proyek rusak: {e}"),
-                        ),
+                        None => ui.label("Tanpa origin proyek (koordinat lokal)"),
                     };
-                    if m.outside_frame {
+                    if m.split {
                         ui.separator();
                         ui.colored_label(
                             egui::Color32::from_rgb(200, 120, 0),
-                            "Geometri > 1,5 km dari origin dokumen: edit kernel bisa ditolak",
+                            format!(
+                                "Dipecah menjadi {} tile kernel 1 km (belum disimpan)",
+                                m.tiles
+                            ),
                         );
                     }
                 } else {
-                    ui.label("Belum ada file. Ketik path .hew lalu tekan Buka.");
+                    ui.label("Belum ada file. Ketik path .hew atau .wangun lalu tekan Buka.");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dt = ui.input(|i| i.stable_dt);
@@ -300,5 +368,22 @@ impl eframe::App for App {
                     egui::Image::new((v.id, size)).paint_at(ui, rect);
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_union_shifts_each_tile_by_its_center() {
+        let b = Some(([-1.0f32, -2.0, 0.0], [1.0f32, 2.0, 3.0]));
+        let got = union_bounds(&[
+            ([0.0; 3], b),
+            ([2_000.0, -1_000.0, 0.0], b),
+            ([9_000.0, 9_000.0, 0.0], None),
+        ]);
+        assert_eq!(got, Some(([-1.0, -1_002.0, 0.0], [2_001.0, 2.0, 3.0])));
+        assert_eq!(union_bounds(&[([5.0; 3], None)]), None);
     }
 }
