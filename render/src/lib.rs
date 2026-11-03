@@ -9,6 +9,7 @@
 //! Port of spike `wangungis-spikes/s6-native-render`.
 
 use bytemuck::{Pod, Zeroable};
+use wangungis_scene::project::node_visible;
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -63,11 +64,11 @@ impl TileMesh {
         let palette = kernel::MaterialPalette::default();
         let mut m = TileMesh::default();
         for node in doc.top_level_nodes() {
-            if doc.node_user_hidden(node) {
+            if !node_visible(doc, node) {
                 continue;
             }
             for oid in doc.leaf_objects_under(node) {
-                if doc.node_user_hidden(kernel::NodeId::Object(oid)) {
+                if !node_visible(doc, kernel::NodeId::Object(oid)) {
                     continue;
                 }
                 if let Some(obj) = doc.object(oid) {
@@ -79,7 +80,7 @@ impl TileMesh {
                 else {
                     continue;
                 };
-                if doc.node_user_hidden(kernel::NodeId::Instance(inst)) {
+                if !node_visible(doc, kernel::NodeId::Instance(inst)) {
                     continue;
                 }
                 let shown = doc.expanded_def_placements_shown(def);

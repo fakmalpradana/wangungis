@@ -613,6 +613,59 @@ fn lock_without_anchor_ranks_normally() {
     assert_eq!(hit.snap.kind, SnapKind::Endpoint, "{hit:?}");
 }
 
+/// What a tag hides cannot be snapped to or picked.
+#[test]
+fn tag_hidden_objects_do_not_snap() {
+    let eye = [-20.0, -30.0, 40.0];
+    let corner = [5.0, 4.0, 3.0];
+    let tagged = |hide: bool| {
+        let mut doc = kernel::Document::new();
+        let p = |a: f64, b: f64| Point3::new(a, b, 0.0);
+        let ring = [p(0.0, 0.0), p(5.0, 0.0), p(5.0, 4.0), p(0.0, 4.0)];
+        let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
+        let sketch = doc.sketch_mut(sk).unwrap();
+        for k in 0..4 {
+            sketch.add_segment(ring[k], ring[(k + 1) % 4]).unwrap();
+        }
+        let r = doc.extrudable_regions(sk).unwrap();
+        doc.extrude_region(sk, r[0], 3.0).unwrap();
+        let node = doc.top_level_nodes()[0];
+        let tag = vec!["Lantai".to_string()];
+        doc.add_node_tag(node, tag.clone()).unwrap();
+        doc.set_tag_hidden(tag, hide);
+        Scene::new(Project::from_document(doc).unwrap())
+    };
+    let hit = tagged(false).snap(&query(eye, corner)).map(|h| h.snap.kind);
+    assert_eq!(hit, Some(SnapKind::Endpoint));
+    let mut hidden = tagged(true);
+    assert_ne!(hidden.snap(&query(eye, corner)).map(|h| h.snap.kind), hit);
+    let down = PickRay {
+        origin: Point3::new(2.5, 2.0, 50.0),
+        direction: Vec3::new(0.0, 0.0, -1.0),
+    };
+    assert!(hidden.pick_face(&down).is_none());
+}
+
+/// An edit undone in a new tile leaves a blank document: not saved, not counted,
+/// and redo still brings the edit back.
+#[test]
+fn blank_tile_after_undo_is_not_saved() {
+    let mut s = scene();
+    add_box(&mut s, 1_000.0, 0.0, 5.0, 4.0, 3.0);
+    assert!(s.project().single().is_none());
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(s.project().tiles.len(), 2, "kept in memory for redo");
+    assert_eq!(s.project().occupied().count(), 1);
+    assert!(s.project().single().is_some(), "saves as a plain .hew");
+    let reopened = Project::open(&s.project().save()).unwrap();
+    assert_eq!(reopened.tiles.len(), 1);
+    s.redo().unwrap();
+    s.redo().unwrap();
+    assert_eq!(s.project().occupied().count(), 2);
+    assert_eq!(Project::open(&s.project().save()).unwrap().tiles.len(), 2);
+}
+
 /// Every object health-checks as a solid, in every tile.
 fn all_solid(p: &Project) -> bool {
     p.tiles

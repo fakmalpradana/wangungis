@@ -52,9 +52,8 @@ VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4
 Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 51 ms (5,1 dtk bila satu indeks per tile); snap setelah edit 42 ms (324 ms); snap berikutnya ±80 µs; dari ketinggian 5 km, kursor menyapu kota ±78 ms per hover pada kali pertama dan ±18 ms setelahnya; draw/extrude/undo < 1 ms.
 
 ## Batas sengaja (ponytail)
-- Objek top-level yang disembunyikan lewat tag tetap bisa di-snap (Hew tidak membuka statusnya); user-hidden tidak, begitu juga anggota definisi yang tersembunyi.
 - Push/Pull di dalam komponen menghasilkan `Unsupported`.
-- Tile kosong hasil undo tetap ada di proyek.
+- Tile kosong hasil undo tetap ada di memori untuk redo, tetapi tidak ikut disimpan (`Project::occupied`).
 
 ## Non-goals
 Renderer, UI, auto-split face, Move/array.

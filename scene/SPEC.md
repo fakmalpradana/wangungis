@@ -47,6 +47,8 @@ Satu kota = `Project { origin, tiles }`. Satu tile = satu `Document` Hew, beruku
 - `Project::open(bytes)`: membuka wadah proyek, atau `.hew` biasa lewat `from_document`.
 - `Project::new(origin)`: proyek kosong berisi tile (0, 0).
 - `Project::tile_mut(key)`: dokumen tile, dibuat kosong bila belum ada. Pusat tile wajib di dalam batas proyek.
+- `node_visible(doc, node)`: node dan grup di sekitarnya tidak user-hidden dan tidak pada tag tersembunyi. Dipakai `render` dan `tools`, sehingga yang tidak terlihat tidak bisa di-snap.
+- `Project::occupied()`: tile yang berisi. Tile kosong sisa undo tetap di memori untuk redo, tetapi tidak disimpan dan tidak dihitung `single()`.
 - `node_points(doc, node)`: semua vertex world di bawah node, termasuk geometri definisi instance.
 - `Project::is_container(bytes)`: `true` bila bytes berupa wadah proyek, bukan `.hew` biasa.
 - `Project::save()`: proyek satu tile disimpan sebagai `.hew` biasa. Selain itu disimpan sebagai wadah zip byte-stable berisi `wangungis-project.json` + `tiles/<i>_<j>.hew`.

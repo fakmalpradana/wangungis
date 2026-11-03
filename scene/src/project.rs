@@ -149,6 +149,22 @@ pub fn node_points(doc: &Document, node: NodeId) -> Vec<Point3> {
     points
 }
 
+/// Whether `node` can be seen: neither it nor a group around it is user-hidden
+/// or on a hidden tag. Rendering and snapping share this, so what cannot be seen
+/// cannot be snapped to.
+pub fn node_visible(doc: &Document, node: NodeId) -> bool {
+    let shown =
+        |n: NodeId| !doc.node_user_hidden(n) && !doc.node_tags(n).iter().any(|t| doc.tag_hidden(t));
+    let mut cursor = Some(node);
+    while let Some(n) = cursor {
+        if !shown(n) {
+            return false;
+        }
+        cursor = doc.node_parent(n).map(NodeId::Group);
+    }
+    true
+}
+
 /// Largest horizontal distance (m) of any world-space vertex (objects and
 /// instance geometry) from the document origin.
 pub fn horizontal_reach(doc: &Document) -> f64 {
@@ -314,10 +330,20 @@ impl Project {
         }
     }
 
+    /// The tiles that hold anything. An edit undone in a new tile leaves an
+    /// empty document behind, kept for redo but not part of the saved project.
+    /// Tile (0, 0) always counts: it carries the project's own metadata.
+    pub fn occupied(&self) -> impl Iterator<Item = (&TileKey, &Document)> {
+        self.tiles
+            .iter()
+            .filter(|(k, d)| **k == TileKey::ORIGIN || !is_blank(d))
+    }
+
     /// The one document of a single-tile project, which saves as plain `.hew`.
     pub fn single(&self) -> Option<&Document> {
-        match (self.tiles.len(), self.tiles.get(&TileKey::ORIGIN)) {
-            (1, Some(doc)) => Some(doc),
+        let mut occupied = self.occupied();
+        match (occupied.next(), occupied.next()) {
+            (Some((k, doc)), None) if *k == TileKey::ORIGIN => Some(doc),
             _ => None,
         }
     }
@@ -335,9 +361,8 @@ impl Project {
             origin: self.origin.map(|o| o.origin),
             tile_size_m: TILE_SIZE_M as u32,
             tiles: self
-                .tiles
-                .keys()
-                .map(|k| TileEntry {
+                .occupied()
+                .map(|(k, _)| TileEntry {
                     i: k.i,
                     j: k.j,
                     file: k.file(),
@@ -357,7 +382,7 @@ impl Project {
             MANIFEST,
             &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
         );
-        for (key, doc) in &self.tiles {
+        for (key, doc) in self.occupied() {
             add(&key.file(), &doc.save());
         }
         zip.finish().expect("in-memory zip").into_inner()
@@ -463,6 +488,16 @@ fn tile_origin(project: ProjectOrigin, key: TileKey) -> ProjectOrigin {
         epsg: project.epsg,
         origin: std::array::from_fn(|k| project.origin[k] + c[k]),
     }
+}
+
+/// No node and no drawn line: nothing a user could see or would miss.
+fn is_blank(doc: &Document) -> bool {
+    doc.top_level_nodes().is_empty()
+        && doc
+            .sketch_ids()
+            .iter()
+            .filter_map(|s| doc.sketch(*s))
+            .all(|s| s.edges().is_empty())
 }
 
 /// An empty tile. The round trip drops the metadata's undo steps, so the

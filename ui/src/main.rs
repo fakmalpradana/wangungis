@@ -130,7 +130,7 @@ impl App {
         self.stats.clear();
         self.tool.reset();
         self.typed.clear();
-        self.overlay_shown = None;
+        self.camera_moved();
         let keys: Vec<TileKey> = self.scene.project().tiles.keys().copied().collect();
         for key in keys {
             self.upload(key);
@@ -249,6 +249,8 @@ impl App {
         self.tool = make(0.01);
         self.typed.clear();
         self.error = None;
+        // The parked pointer has something to tell the new tool.
+        self.last_pointer = None;
     }
 
     fn undo(&mut self) {
@@ -285,7 +287,14 @@ impl App {
 
     /// Keys and typed text, unless a text box has them.
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // Tab can park focus on a button, where keys would stop reaching the
+        // tools and Enter would press it. Only a text box keeps the keyboard.
+        if !ctx.text_edit_focused()
+            && let Some(id) = ctx.memory(|m| m.focused())
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        if ctx.text_edit_focused() {
             return;
         }
         for ev in ctx.input(|i| i.events.clone()) {
@@ -530,18 +539,18 @@ fn typed_accepts(typed: &str, ch: char) -> bool {
     }
 }
 
-/// Where Simpan writes. A single-tile project is a plain `.hew`, anything else
-/// a `.wangun`. A file is overwritten only when it already holds that kind, so
-/// a `.hew` that was split or grew tiles is never replaced by a container.
+/// Where Simpan writes: the path box, or the opened file when the box is empty.
+/// A single-tile project is a plain `.hew`, anything else a `.wangun`. The opened
+/// file is overwritten only when it already holds that kind, so a `.hew` that
+/// was split or grew tiles is never replaced by a container.
 fn save_target(source: &Source, path_box: &str, single: bool) -> Result<PathBuf, String> {
+    let boxed = path_box.trim();
     let base: PathBuf = match &source.path {
+        _ if !boxed.is_empty() => boxed.into(),
         Some(p) => p.clone(),
-        None if path_box.trim().is_empty() => {
-            return Err("Isi path file di kotak atas dulu, lalu tekan Simpan.".into());
-        }
-        None => path_box.trim().into(),
+        None => return Err("Isi path file di kotak atas dulu, lalu tekan Simpan.".into()),
     };
-    let same_kind = source.path.is_some() && source.container != single;
+    let same_kind = source.path.as_ref() == Some(&base) && source.container != single;
     Ok(if same_kind {
         base
     } else if single {
@@ -554,9 +563,28 @@ fn save_target(source: &Source, path_box: &str, single: bool) -> Result<PathBuf,
 /// Writes through a temporary file, so a failed write cannot damage `target`.
 fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = target.as_os_str().to_owned();
-    tmp.push(".tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, target)
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    // create_new: never clobber a file that happens to have this name.
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| {
+            std::io::Write::write_all(&mut f, bytes)?;
+            f.sync_all()
+        });
+    match written.and_then(|()| std::fs::rename(&tmp, target)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Removes only our own partial file; a pre-existing one failed
+            // create_new above and keeps its name.
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            Err(e)
+        }
+    }
 }
 
 /// `kota.hew` (any case) to `kota.wangun`; other names get `.wangun` appended.
@@ -670,7 +698,7 @@ impl eframe::App for App {
                         .as_deref()
                         .and_then(Path::file_name)
                         .map_or("Proyek baru".into(), |n| n.to_string_lossy()),
-                    self.stats.len(),
+                    self.scene.project().occupied().count(),
                     self.stats.values().map(|s| s.objects).sum::<usize>(),
                     self.stats.values().map(|s| s.triangles).sum::<usize>(),
                 ));
@@ -706,15 +734,22 @@ impl eframe::App for App {
                 let ppp = ui.ctx().pixels_per_point();
                 let max = self.rs.device.limits().max_texture_dimension_2d as f32;
                 let px = [size.x, size.y].map(|v| (v * ppp).round().clamp(1.0, max) as u32);
+                if self.view.as_ref().is_some_and(|v| v.size != px) {
+                    self.camera_moved();
+                }
                 self.ensure_view(px);
                 if std::mem::take(&mut self.fit_pending)
                     && let Some((lo, hi)) = self.bounds()
                 {
                     self.orbit.fit(lo, hi, px[0] as f32 / px[1] as f32);
+                    self.camera_moved();
                 }
                 let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
                 self.navigate(ui, &resp, size);
-                self.pointer_input(&resp, rect, size);
+                // The panels above were drawn before this input: show it now.
+                if self.pointer_input(&resp, rect, size) {
+                    ui.ctx().request_repaint();
+                }
                 self.refresh_overlay(size.y);
                 self.render();
                 if let Some(v) = &self.view {
@@ -755,7 +790,9 @@ impl App {
         self.last_pointer = None;
     }
 
-    fn pointer_input(&mut self, resp: &egui::Response, rect: egui::Rect, size: egui::Vec2) {
+    /// Feeds the tool. Returns whether it got anything.
+    fn pointer_input(&mut self, resp: &egui::Response, rect: egui::Rect, size: egui::Vec2) -> bool {
+        let mut fed = false;
         // The cone tracks the view: SNAP_REACH units at any window height.
         let t = (camera::FOVY as f64 / 2.0).tan();
         self.tool
@@ -772,6 +809,7 @@ impl App {
         {
             self.last_pointer = Some(p);
             self.feed(Input::Hover(ray_at(&self.orbit, p)));
+            fed = true;
         }
         let navigating = resp.ctx.input(|i| i.modifiers.alt);
         if resp.clicked_by(egui::PointerButton::Primary)
@@ -780,7 +818,9 @@ impl App {
         {
             self.error = None;
             self.feed(Input::Click(ray_at(&self.orbit, p)));
+            fed = true;
         }
+        fed
     }
 }
 
@@ -832,10 +872,23 @@ mod tests {
             t(&on_disk("/d/a.wangun", true), "", false),
             PathBuf::from("/d/a.wangun")
         );
+        assert_eq!(
+            t(&on_disk("/d/a.hew", false), "/d/a.hew", true),
+            PathBuf::from("/d/a.hew")
+        );
         // A .hew that was split or grew tiles goes beside it.
         assert_eq!(
-            t(&on_disk("/d/a.hew", false), "/d/other", false),
+            t(&on_disk("/d/a.hew", false), "/d/a.hew", false),
             PathBuf::from("/d/a.wangun")
+        );
+        // A name typed in the box is a Save As.
+        assert_eq!(
+            t(&on_disk("/d/a.hew", false), "/d/other.hew", true),
+            PathBuf::from("/d/other.hew")
+        );
+        assert_eq!(
+            t(&on_disk("/d/a.wangun", true), "/d/other", false),
+            PathBuf::from("/d/other.wangun")
         );
         // Never saved: the path box decides, the kind decides the extension.
         let new = Source::default();

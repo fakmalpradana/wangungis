@@ -437,6 +437,22 @@ fn mesh_holds_instances_and_sketches_but_not_hidden_nodes() {
         "hidden inside a group"
     );
 
+    // Hidden through a tag: the object itself, and a whole group around it.
+    let mut doc = box_doc(0.0, 0.0);
+    let node = doc.top_level_nodes()[0];
+    let tag = vec!["Lantai".to_string()];
+    doc.add_node_tag(node, tag.clone()).unwrap();
+    doc.set_tag_hidden(tag.clone(), true);
+    assert_eq!(TileMesh::from_document(&doc).unwrap().triangle_count(), 0);
+    doc.set_tag_hidden(tag.clone(), false);
+    assert_eq!(TileMesh::from_document(&doc).unwrap().triangle_count(), 12);
+    doc.remove_node_tag(node, &tag).unwrap();
+    let group = doc.group_nodes(&[node]).unwrap().0;
+    doc.add_node_tag(kernel::NodeId::Group(group), tag.clone())
+        .unwrap();
+    doc.set_tag_hidden(tag, true);
+    assert_eq!(TileMesh::from_document(&doc).unwrap().triangle_count(), 0);
+
     // A drawing with no solid has bounds, so zoom extents can find it.
     let mut doc = Document::new();
     let ring = [

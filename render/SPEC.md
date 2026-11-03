@@ -4,7 +4,7 @@
 Renderer wgpu ber-batching dengan RTC per tile (ADR-003). Satu tile kernel (satu `Document` Hew, ADR-004) menjadi satu tile render dengan dua draw call: face dan edge.
 
 ## API publik
-- `TileMesh::from_document(&Document)`: menggabungkan geometri yang terlihat menjadi satu buffer face dan satu buffer edge, dengan posisi `f32` di frame tile. Isinya Object world, instance komponen lewat pose-nya, dan garis sketch. Node user-hidden dilewati. Region sketch tertutup belum punya isian (ponytail).
+- `TileMesh::from_document(&Document)`: menggabungkan geometri yang terlihat menjadi satu buffer face dan satu buffer edge, dengan posisi `f32` di frame tile. Isinya Object world, instance komponen lewat pose-nya, dan garis sketch. Node yang tidak terlihat (`scene::project::node_visible`: user-hidden atau tag tersembunyi, termasuk lewat grup) dilewati. Region sketch tertutup belum punya isian (ponytail).
 - `TileMesh::triangle_count()` dan `TileMesh::bounds()`.
 - `Camera { eye, target, fovy, aspect, near, far }`, dengan `eye`/`target` dalam `f64` lokal-proyek.
 - `Camera::view_proj_at_eye()`: rotasi view + proyeksi dengan mata di origin.
