@@ -307,6 +307,84 @@ fn escape_leaves_nothing_behind() {
     assert!(!s.can_undo(), "cancel recorded a step");
 }
 
+/// A shallow drag must not collapse onto the axis through the first corner.
+#[test]
+fn shallow_rectangle_keeps_its_area() {
+    let mut s = scene();
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [15.0, 10.2, 0.0]);
+    click(&mut r, &mut s, [15.0, 10.2, 0.0]);
+    assert!(!r.busy(), "rectangle done");
+    assert_eq!(edges(&s), 4);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 10.1, 0.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 10.2, 1.0]);
+}
+
+/// A click right beside a wall's edge still draws on the wall, not on a
+/// horizontal plane through the snap.
+#[test]
+fn click_near_a_wall_edge_draws_on_the_wall() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+
+    // From the east, aimed at a point just below the wall's top edge.
+    let east = |y: f64, z: f64| PickRay {
+        origin: Point3::new(60.0, y, z),
+        direction: Point3::new(15.0, y, z) - Point3::new(60.0, y, z),
+    };
+    let mut r = Tool::rectangle(APERTURE);
+    r.handle(&mut s, Input::Click(east(12.0, 2.95))).unwrap();
+    assert!(r.busy());
+    r.handle(&mut s, Input::Hover(east(13.0, 1.0))).unwrap();
+    typed(&mut r, &mut s, "1;1").unwrap();
+    let doc = s.project().tiles.values().next().unwrap();
+    let on_wall = doc
+        .sketch_ids()
+        .iter()
+        .filter_map(|i| doc.sketch(*i))
+        .any(|k| {
+            !k.edges().is_empty()
+                && k.edges()
+                    .values()
+                    .all(|e| (k.vertices()[e.from].position.x - 15.0).abs() <= MM)
+        });
+    assert!(on_wall, "no drawing on the wall");
+}
+
+/// A ray exactly on a face's edge still arms Push/Pull.
+#[test]
+fn push_pull_arms_from_a_click_right_on_an_edge() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    click(&mut p, &mut s, [12.5, 14.0, 3.0]);
+    assert!(p.busy(), "the edge's face is picked");
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_eq!(bounds(&s).len(), 1);
+}
+
+/// With the cursor exactly on the first corner, a typed size goes the plus way.
+#[test]
+fn typed_size_with_no_cursor_span_goes_plus() {
+    let mut s = scene();
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    typed(&mut r, &mut s, "2;3").unwrap();
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [11.0, 11.0, 0.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [12.0, 13.0, 1.0]);
+}
+
 #[test]
 fn meaningless_clicks_change_nothing() {
     let mut s = scene();

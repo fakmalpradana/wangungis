@@ -21,10 +21,10 @@ Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle
 - `Scene::{face_shape, region_shape, region_count, outline}` memberi bidang dan batas untuk tool.
 
 Perilaku:
-- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor, atau bidang horizontal melalui titik snap lain, atau tanah z = 0.
-- **Line:** klik berantai pada bidang yang sama. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo.
-- **Rectangle:** dua klik, atau klik lalu ketik ukuran. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
-- **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Pick memakai kerucut sempit, supaya sudut tidak merebut klik dari face. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
+- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang.
+- **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Rantai baru selalu sketch baru, jadi tidak bisa menutup loop bersama rantai lama (ponytail).
+- **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
+- **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
 - **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 

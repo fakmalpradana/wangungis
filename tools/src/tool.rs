@@ -133,22 +133,33 @@ fn along_line(ray: &PickRay, at: Point3, along: Vec3) -> Option<f64> {
     let w = at - ray.origin;
     let uv = along.dot(v);
     let denom = 1.0 - uv * uv;
-    (denom > 1e-9).then(|| (uv * v.dot(w) - along.dot(w)) / denom)
+    if denom <= 1e-9 {
+        return None;
+    }
+    let t = (uv * v.dot(w) - along.dot(w)) / denom;
+    // The nearest point must be in front of the eye.
+    let s = v.dot(w) + uv * t;
+    (s >= 0.0).then_some(t)
 }
 
-/// In-plane directions: world X and Y on a horizontal plane, otherwise
-/// horizontal and upward along the plane.
+/// In-plane directions: world X projected onto a near-horizontal plane,
+/// otherwise horizontal and upward along the plane.
 fn plane_axes(plane: &Plane) -> (Vec3, Vec3) {
     let n = plane.normal();
     let u = if n.z.abs() > 0.999 {
-        Vec3::new(1.0, 0.0, 0.0)
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        (x - n * n.dot(x)).normalized()
     } else {
-        Vec3::new(0.0, 0.0, 1.0)
-            .cross(n)
-            .normalized()
-            .expect("n is not vertical")
-    };
+        Vec3::new(0.0, 0.0, 1.0).cross(n).normalized()
+    }
+    .expect("n is unit and not parallel to the reference");
     (u, n.cross(u))
+}
+
+/// `p` moved onto `plane`: snaps land within rounding of it, and the kernel
+/// takes only exact sketch points.
+fn on_plane(p: Point3, plane: &Plane) -> Point3 {
+    p - plane.normal() * plane.signed_distance(p)
 }
 
 /// A first click: the point and the plane the drawing will lie on. The face
@@ -171,24 +182,38 @@ fn first_point(
         .snap
         .sketch_region_source
         .and_then(|(sk, r)| scene.region_shape(hit.tile, sk, r));
+    // A corner or edge outranks the face it bounds: the face under the ray
+    // still gives the plane when the snap lies on it.
     let plane = match on_face.or(on_region) {
         Some((plane, _)) => plane,
-        None => Plane::from_point_normal(p, Vec3::new(0.0, 0.0, 1.0)).ok()?,
+        None => {
+            let beneath = scene
+                .pick_face(&ray)
+                .and_then(|f| scene.face_shape(f.tile, f.source))
+                .map(|shape| shape.0)
+                .filter(|plane| plane.signed_distance(p).abs() <= ON_PLANE);
+            match beneath {
+                Some(plane) => plane,
+                None => Plane::from_point_normal(p, Vec3::new(0.0, 0.0, 1.0)).ok()?,
+            }
+        }
     };
-    Some((p, plane, Some(hit)))
+    Some((on_plane(p, &plane), plane, Some(hit)))
 }
 
-/// A later point of a gesture, kept on `plane`.
+/// A later point of a gesture, kept on `plane`. `anchor` turns on axis inference
+/// from that point; a rectangle passes none, as a corner pulled onto an axis
+/// through the first corner would leave it no area.
 fn next_point(
     scene: &mut Scene,
     ray: PickRay,
-    anchor: Point3,
+    anchor: Option<Point3>,
     plane: &Plane,
     lock: Option<Axis>,
     aperture: f64,
 ) -> Option<(Point3, Option<Hit>)> {
     let q = SnapQuery {
-        anchor: Some(anchor),
+        anchor,
         lock: lock.map(SnapLock::Axis),
         constraint_plane: Some(*plane),
         ..query(ray, aperture)
@@ -197,14 +222,14 @@ fn next_point(
     if let Some(h) = hit
         && plane.signed_distance(h.snap.position).abs() <= ON_PLANE
     {
-        return Some((h.snap.position, hit));
+        return Some((on_plane(h.snap.position, plane), hit));
     }
-    let point = match lock {
-        Some(axis) => {
+    let point = match (lock, anchor) {
+        (Some(axis), Some(a)) => {
             let u = axis.unit();
-            anchor + u * along_line(&ray, anchor, u)?
+            on_plane(a + u * along_line(&ray, a, u)?, plane)
         }
-        None => ray_on_plane(&ray, plane)?,
+        _ => ray_on_plane(&ray, plane)?,
     };
     Some((point, None))
 }
@@ -316,12 +341,17 @@ impl Tool {
             self.reset();
             return Ok(());
         }
+        let hovering = matches!(input, Input::Hover(_));
         match &self.state {
             State::Select { .. } => self.handle_select(scene, input),
             State::Line { .. } => self.handle_line(scene, input),
             State::Rectangle { .. } => self.handle_rectangle(scene, input),
             State::PushPull { .. } => self.handle_push_pull(scene, input),
         }?;
+        if !hovering {
+            // A click or typed value ends what the marker described.
+            self.preview.snap = None;
+        }
         self.refresh_lines();
         Ok(())
     }
@@ -362,7 +392,7 @@ impl Tool {
         match input {
             Input::Hover(ray) => match chain {
                 Some(c) => {
-                    let next = next_point(scene, ray, c.anchor, &c.plane, c.lock, aperture);
+                    let next = next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture);
                     c.cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
                 }
@@ -382,7 +412,7 @@ impl Tool {
                 }
                 Some(c) => {
                     if let Some((end, _)) =
-                        next_point(scene, ray, c.anchor, &c.plane, c.lock, aperture)
+                        next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture)
                         && Self::add_segment(scene, c, end)?
                     {
                         *chain = None;
@@ -400,7 +430,7 @@ impl Tool {
                 let dir = (cursor - c.anchor)
                     .normalized()
                     .map_err(|_| needs("arahkan kursor dulu"))?;
-                let end = c.anchor + dir * len;
+                let end = on_plane(c.anchor + dir * len, &c.plane);
                 if Self::add_segment(scene, c, end)? {
                     *chain = None;
                 }
@@ -444,8 +474,8 @@ impl Tool {
         };
         match input {
             Input::Hover(ray) => match first {
-                Some((a, plane)) => {
-                    let next = next_point(scene, ray, *a, plane, None, aperture);
+                Some((_, plane)) => {
+                    let next = next_point(scene, ray, None, plane, None, aperture);
                     *cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
                 }
@@ -458,7 +488,7 @@ impl Tool {
                     }
                 }
                 Some((a, plane)) => {
-                    if let Some((b, _)) = next_point(scene, ray, *a, plane, None, aperture) {
+                    if let Some((b, _)) = next_point(scene, ray, None, plane, None, aperture) {
                         let (w, d) = spans(*a, b, plane);
                         if Self::draw_rectangle(scene, *a, plane, w, d)? {
                             *first = None;
@@ -476,7 +506,9 @@ impl Tool {
                 };
                 // Typed sizes go toward the cursor's quadrant, as in the preview.
                 let (cw, cd) = cursor.map_or((1.0, 1.0), |b| spans(*a, b, plane));
-                let (w, d) = (w * cw.signum(), d * cd.signum());
+                // `<` rather than signum: -0.0 has a negative sign.
+                let side = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
+                let (w, d) = (w * side(cw), d * side(cd));
                 if Self::draw_rectangle(scene, *a, plane, w, d)? {
                     *first = None;
                     *cursor = None;
@@ -551,35 +583,44 @@ impl Tool {
     }
 
     /// Picks the region or solid face under the ray: whichever is nearer.
+    /// Regions come through a narrow snap; faces through a pick, so a ray right
+    /// on an edge or an axis still finds the face.
     fn arm(scene: &mut Scene, ray: PickRay) -> Option<Armed> {
-        let hit = scene.snap(&query(ray, NARROW))?;
-        let (target, shape) = if let Some((sketch, region)) = hit.snap.sketch_region_source {
-            (
-                Target::Region {
-                    tile: hit.tile,
-                    sketch,
-                    region,
-                },
-                scene.region_shape(hit.tile, sketch, region)?,
-            )
-        } else {
-            let source = hit.snap.source?;
-            if !matches!(source.element, ElementRef::Face(_)) {
-                return None;
+        let dir = ray.direction.normalized().ok()?;
+        let region = scene.snap(&query(ray, NARROW)).and_then(|h| {
+            let (sketch, region) = h.snap.sketch_region_source?;
+            let shape = scene.region_shape(h.tile, sketch, region)?;
+            let target = Target::Region {
+                tile: h.tile,
+                sketch,
+                region,
+            };
+            let at = h.snap.position;
+            Some(((at - ray.origin).dot(dir), target, at, shape))
+        });
+        let face = scene.pick_face(&ray).and_then(|f| {
+            let shape = scene.face_shape(f.tile, f.source)?;
+            let target = Target::Solid {
+                tile: f.tile,
+                source: f.source,
+            };
+            Some((f.depth, target, ray.origin + dir * f.depth, shape))
+        });
+        let (_, target, anchor, (plane, outline)) = match (region, face) {
+            (Some(r), Some(f)) => {
+                if r.0 <= f.0 {
+                    r
+                } else {
+                    f
+                }
             }
-            (
-                Target::Solid {
-                    tile: hit.tile,
-                    source,
-                },
-                scene.face_shape(hit.tile, source)?,
-            )
+            (r, f) => r.or(f)?,
         };
         Some(Armed {
             target,
-            anchor: hit.snap.position,
-            normal: shape.0.normal(),
-            outline: shape.1,
+            anchor,
+            normal: plane.normal(),
+            outline,
             distance: 0.0,
         })
     }
@@ -624,5 +665,51 @@ impl Tool {
                 },
             ),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plane_axes_stay_in_the_plane_when_nearly_flat() {
+        for n in [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.03, 0.02, 0.999),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.3, -0.5, 0.2),
+        ] {
+            let plane = Plane::from_point_normal(Point3::ORIGIN, n).unwrap();
+            let (u, v) = plane_axes(&plane);
+            let m = plane.normal();
+            for d in [m.dot(u), m.dot(v), u.dot(v)] {
+                assert!(d.abs() < 1e-12, "normal {n:?}: {d}");
+            }
+            assert!((u.length() - 1.0).abs() < 1e-12 && (v.length() - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn along_line_needs_the_point_in_front_of_the_eye() {
+        let at = Point3::new(0.0, 0.0, 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let toward = PickRay {
+            origin: Point3::new(10.0, 0.0, 5.0),
+            direction: Vec3::new(-1.0, 0.0, 0.0),
+        };
+        let t = along_line(&toward, at, up).expect("in front");
+        assert!((t - 5.0).abs() < 1e-9, "{t}");
+        let away = PickRay {
+            direction: Vec3::new(1.0, 0.0, 0.0),
+            ..toward
+        };
+        assert_eq!(along_line(&away, at, up), None);
+        let parallel = PickRay {
+            direction: up,
+            ..toward
+        };
+        assert_eq!(along_line(&parallel, at, up), None);
     }
 }
