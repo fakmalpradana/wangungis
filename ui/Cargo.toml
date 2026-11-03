@@ -8,5 +8,7 @@ license.workspace = true
 kernel.workspace = true
 wangungis-scene.workspace = true
 wangungis-render.workspace = true
+wangungis-tools.workspace = true
+inference.workspace = true
 eframe.workspace = true
 wgpu.workspace = true

@@ -8,7 +8,7 @@
 //! skip, unless WANGUNGIS_REQUIRE_GPU is set, in which case they fail.
 
 use kernel::{Document, Plane, Point3};
-use wangungis_render::{Camera, DEPTH_FORMAT, Renderer, TileMesh};
+use wangungis_render::{Camera, DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::Project;
 
 const W: u32 = 256;
@@ -88,11 +88,16 @@ fn render(
     tiles: &[([f64; 3], &Document)],
     cam: &Camera,
 ) -> (Vec<u8>, usize) {
-    let (device, queue) = dq;
-    let mut r = Renderer::new(device, FORMAT);
+    let mut r = Renderer::new(&dq.0, FORMAT);
     for (origin, doc) in tiles {
-        r.add_tile(device, *origin, &TileMesh::from_document(doc).unwrap());
+        r.add_tile(&dq.0, *origin, &TileMesh::from_document(doc).unwrap());
     }
+    shoot(dq, &r, cam)
+}
+
+/// Draws `r` from `cam` into a fresh target.
+fn shoot(dq: &(wgpu::Device, wgpu::Queue), r: &Renderer, cam: &Camera) -> (Vec<u8>, usize) {
+    let (device, queue) = dq;
     let tex = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -330,4 +335,122 @@ fn split_project_renders_like_the_source() {
         diff(&source, &alone) > 0.005,
         "tiles beyond (0, 0) add nothing"
     );
+}
+
+/// A tile uploaded again at the same origin replaces the old one.
+#[test]
+fn add_tile_replaces_the_tile_at_that_origin() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let cam = camera([0.0; 3]);
+    let (a, b) = (box_doc(0.0, 0.0), box_doc(3.0, 0.0));
+    let (want, _) = render(&dq, &[([0.0; 3], &b)], &cam);
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    r.add_tile(&dq.0, [0.0; 3], &TileMesh::from_document(&a).unwrap());
+    r.add_tile(&dq.0, [0.0; 3], &TileMesh::from_document(&b).unwrap());
+    let (got, draws) = shoot(&dq, &r, &cam);
+    assert_eq!(draws, 2, "the old tile is gone");
+    assert!(diff(&want, &got) <= 0.001);
+}
+
+/// Overlay lines appear in their color, on top of the model, at UTM too.
+#[test]
+fn overlay_draws_on_top_in_its_color() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let red = [1.0, 0.0, 0.0];
+    let reds = |px: &[u8]| {
+        px.chunks(4)
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+            .count()
+    };
+    for at in [[0.0; 3], [430_000.123, 9_150_000.456, 12.0]] {
+        let cam = camera(at);
+        let doc = box_doc(0.0, 0.0);
+        let mut r = Renderer::new(&dq.0, FORMAT);
+        r.add_tile(&dq.0, at, &TileMesh::from_document(&doc).unwrap());
+        let (plain, draws) = shoot(&dq, &r, &cam);
+        assert_eq!((reds(&plain), draws), (0, 2));
+        // Through the middle of the box: the depth test would hide it.
+        let p = |x: f64, y: f64, z: f64| [at[0] + x, at[1] + y, at[2] + z];
+        r.set_overlay(
+            &dq.0,
+            &[OverlayLines {
+                color: red,
+                lines: vec![(p(0.5, 2.0, 1.5), p(4.5, 2.0, 1.5))],
+            }],
+        );
+        let (with, draws) = shoot(&dq, &r, &cam);
+        assert_eq!(draws, 3);
+        assert!(
+            reds(&with) > 20,
+            "line barely visible: {} red px",
+            reds(&with)
+        );
+        r.set_overlay(&dq.0, &[]);
+        let (off, draws) = shoot(&dq, &r, &cam);
+        assert_eq!((reds(&off), draws), (0, 2));
+    }
+}
+
+fn user_hidden_box() -> Document {
+    let mut doc = box_doc(0.0, 0.0);
+    let node = doc.top_level_nodes()[0];
+    doc.set_node_user_hidden(node, true);
+    doc
+}
+
+/// CPU only: what a tile's mesh holds.
+#[test]
+fn mesh_holds_instances_and_sketches_but_not_hidden_nodes() {
+    let solid = TileMesh::from_document(&box_doc(0.0, 0.0)).unwrap();
+    assert_eq!(solid.triangle_count(), 12);
+    assert_eq!(
+        TileMesh::from_document(&user_hidden_box())
+            .unwrap()
+            .triangle_count(),
+        0
+    );
+
+    // An instance renders the same box.
+    let mut doc = box_doc(40.0, 0.0);
+    let node = doc.top_level_nodes()[0];
+    doc.make_component(&[node]).unwrap();
+    let inst = TileMesh::from_document(&doc).unwrap();
+    assert_eq!(inst.triangle_count(), 12);
+    let (lo, _) = inst.bounds().unwrap();
+    assert!((lo[0] - 40.0).abs() < 1e-3, "instance at {lo:?}");
+    // A hidden instance renders nothing.
+    let node = doc.top_level_nodes()[0];
+    doc.set_node_user_hidden(node, true);
+    assert_eq!(TileMesh::from_document(&doc).unwrap().triangle_count(), 0);
+    doc.set_node_user_hidden(node, false);
+    let kernel::NodeId::Instance(i) = node else {
+        panic!("the box became an instance")
+    };
+    let group = doc.group_nodes(&[kernel::NodeId::Instance(i)]).unwrap().0;
+    assert_eq!(doc.top_level_nodes(), [kernel::NodeId::Group(group)]);
+    doc.set_node_user_hidden(kernel::NodeId::Instance(i), true);
+    assert_eq!(
+        TileMesh::from_document(&doc).unwrap().triangle_count(),
+        0,
+        "hidden inside a group"
+    );
+
+    // A drawing with no solid has bounds, so zoom extents can find it.
+    let mut doc = Document::new();
+    let ring = [
+        Point3::new(7.0, 0.0, 0.0),
+        Point3::new(9.0, 0.0, 0.0),
+        Point3::new(9.0, 2.0, 0.0),
+    ];
+    let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
+    doc.sketch_mut(sk)
+        .unwrap()
+        .add_segment(ring[0], ring[1])
+        .unwrap();
+    let drawn = TileMesh::from_document(&doc).unwrap();
+    assert_eq!(drawn.triangle_count(), 0);
+    let (lo, hi) = drawn.bounds().expect("sketch bounds");
+    assert_eq!((lo[0], hi[0]), (7.0, 9.0));
 }

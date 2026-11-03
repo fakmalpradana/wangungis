@@ -86,6 +86,37 @@ impl Orbit {
         self.scene = Some((self.target, r));
     }
 
+    /// The ray through a viewport point: `(x, y)` in `w` x `h` units, origin
+    /// top-left. Same basis as `Camera::view_proj_at_eye`. Returns the eye and
+    /// the direction through the point.
+    pub fn ray(&self, x: f32, y: f32, w: f32, h: f32) -> ([f64; 3], [f64; 3]) {
+        let (w, h) = (w.max(1.0) as f64, h.max(1.0) as f64);
+        let b = self.back();
+        let f = b.map(|v| -v);
+        // f x z, unit: the pitch limit keeps f away from z.
+        let len = f[0].hypot(f[1]);
+        let right = [f[1] / len, -f[0] / len, 0.0];
+        // right x f.
+        let up = [
+            right[1] * f[2] - right[2] * f[1],
+            right[2] * f[0] - right[0] * f[2],
+            right[0] * f[1] - right[1] * f[0],
+        ];
+        let t = (FOVY as f64 / 2.0).tan();
+        let sx = (2.0 * x as f64 / w - 1.0) * t * w / h;
+        let sy = (1.0 - 2.0 * y as f64 / h) * t;
+        (
+            self.eye(),
+            std::array::from_fn(|k| f[k] + right[k] * sx + up[k] * sy),
+        )
+    }
+
+    /// Meters per viewport unit at distance `d` from the eye, for a viewport
+    /// `h` units tall.
+    pub fn m_per_unit(d: f64, h: f32) -> f64 {
+        2.0 * d * (FOVY as f64 / 2.0).tan() / h.max(1.0) as f64
+    }
+
     pub fn camera(&self, aspect: f32) -> Camera {
         let eye = self.eye();
         // ponytail: plain Depth32Float; far/near can reach 1e5 when zoomed in on
@@ -118,6 +149,38 @@ mod tests {
         let v = [p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2], 1.0];
         let c: [f64; 4] = std::array::from_fn(|r| (0..4).map(|k| m[k][r] as f64 * v[k]).sum());
         [c[0] / c[3], c[1] / c[3], c[2] / c[3]]
+    }
+
+    /// A point on the ray projects back to the pixel it came from, at any view
+    /// and far from the origin.
+    #[test]
+    fn ray_goes_through_its_pixel() {
+        let (w, h) = (800.0f32, 600.0f32);
+        for (yaw, pitch) in [(-2.2, 0.6), (0.7, PITCH_LIMIT), (2.0, -1.0), (0.0, 0.0)] {
+            let o = Orbit {
+                target: [430_000.0, 9_150_000.0, 5.0],
+                distance: 80.0,
+                yaw,
+                pitch,
+                scene: None,
+            };
+            for (x, y) in [
+                (400.0f32, 300.0f32),
+                (0.0, 0.0),
+                (790.0, 20.0),
+                (123.0, 555.0),
+            ] {
+                let (eye, dir) = o.ray(x, y, w, h);
+                assert_eq!(eye, o.eye());
+                let p: [f64; 3] = std::array::from_fn(|k| eye[k] + dir[k] * 50.0);
+                let c = ndc(&o.camera(w / h), p);
+                let (sx, sy) = ((c[0] + 1.0) / 2.0 * w as f64, (1.0 - c[1]) / 2.0 * h as f64);
+                assert!(
+                    (sx - x as f64).abs() < 1e-3 && (sy - y as f64).abs() < 1e-3,
+                    "yaw {yaw} pitch {pitch}: ({x}, {y}) came back as ({sx}, {sy})"
+                );
+            }
+        }
     }
 
     #[test]
