@@ -269,22 +269,27 @@ fn two_tiles_two_draws_each() {
 }
 
 /// End to end with `scene`: a document split into kernel tiles renders like
-/// the unsplit source, looking across the tile boundary at x = 500 m where
-/// neighbouring boxes land in different tiles.
+/// the unsplit source, looking at the tile corner (500, 500) where four
+/// neighbouring boxes land in four different tiles.
 #[test]
 fn split_project_renders_like_the_source() {
     let _serial = gpu_lock();
     let Some(dq) = gpu() else { return };
     let mut doc = Document::new();
-    // Anchors 492.5 and 499.5 stay in tile (0, 0); 506.5 goes to (1, 0).
-    for x in [490.0, 497.0, 504.0] {
-        add_box(&mut doc, x, 0.0);
+    // Box anchors (x + 2.5, y + 2.122): one per tile (0,0), (1,0), (0,1), (1,1).
+    for (x, y) in [
+        (490.0, 490.0),
+        (504.0, 490.0),
+        (490.0, 504.0),
+        (504.0, 504.0),
+    ] {
+        add_box(&mut doc, x, y);
     }
     // Pushes the reach past the kernel frame bound, so the document splits.
     add_box(&mut doc, 3_000.0, 0.0);
     let cam = Camera {
-        eye: [499.0, -30.0, 22.0],
-        target: [500.0, 2.0, 1.5],
+        eye: [480.0, 470.0, 30.0],
+        target: [500.0, 500.0, 1.5],
         fovy: 0.8,
         aspect: W as f32 / H as f32,
         near: 0.5,
@@ -293,15 +298,36 @@ fn split_project_renders_like_the_source() {
     let (source, _) = render(&dq, &[([0.0; 3], &doc)], &cam);
     assert!(coverage(&source) > 0.05, "boxes barely visible");
     let project = Project::from_document(doc).unwrap();
-    assert_eq!(project.tiles.len(), 3, "tiles {:?}", project.tiles.keys());
+    // Exactly one box per tile: a box copied but not removed would show here.
+    let per_tile: Vec<_> = project
+        .tiles
+        .iter()
+        .map(|(k, d)| ((k.i, k.j), d.top_level_nodes().len()))
+        .collect();
+    assert_eq!(
+        per_tile,
+        [
+            ((0, 0), 1),
+            ((0, 1), 1),
+            ((1, 0), 1),
+            ((1, 1), 1),
+            ((3, 0), 1)
+        ]
+    );
     let tiles: Vec<_> = project.tiles.iter().map(|(k, d)| (k.center(), d)).collect();
     let (img, draws) = render(&dq, &tiles, &cam);
-    assert_eq!(draws, 6);
+    assert_eq!(draws, 10);
     let d = diff(&source, &img);
     eprintln!("DIFF split vs source: {:.4}%", d * 100.0);
     assert!(
         d <= 0.001,
         "split project renders {:.2}% differently",
         d * 100.0
+    );
+    // The other tiles really contribute: tile (0, 0) alone looks different.
+    let (alone, _) = render(&dq, &tiles[..1], &cam);
+    assert!(
+        diff(&source, &alone) > 0.005,
+        "tiles beyond (0, 0) add nothing"
     );
 }

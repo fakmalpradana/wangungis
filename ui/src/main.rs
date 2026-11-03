@@ -42,6 +42,8 @@ struct Model {
     tiles: usize,
     /// Opened as one `.hew` and split into kernel tiles in memory.
     split: bool,
+    /// The file this model was opened from (the path box may differ).
+    source: std::path::PathBuf,
 }
 
 struct Viewport {
@@ -93,7 +95,7 @@ impl App {
     fn open(&mut self) {
         self.error = None;
         match load(&self.path) {
-            Ok((project, meshes)) => {
+            Ok((project, meshes, was_container)) => {
                 self.renderer.clear_tiles();
                 let mut placed = Vec::new();
                 for (key, mesh) in &meshes {
@@ -103,7 +105,6 @@ impl App {
                 self.bounds = union_bounds(&placed);
                 self.orbit = Orbit::default();
                 self.fit_pending = true;
-                let is_container = project.single().is_none();
                 self.model = Some(Model {
                     name: std::path::Path::new(&self.path)
                         .file_name()
@@ -121,7 +122,8 @@ impl App {
                     triangles: meshes.iter().map(|(_, m)| m.triangle_count()).sum(),
                     origin: project.origin,
                     tiles: project.tiles.len(),
-                    split: is_container && !self.path.ends_with(".wangun"),
+                    split: !was_container && project.single().is_none(),
+                    source: self.path.clone().into(),
                 });
                 self.project = Some(project);
             }
@@ -129,10 +131,14 @@ impl App {
         }
     }
 
-    /// Writes the split project next to the opened `.hew`, never over it.
+    /// Writes the split project next to the `.hew` it came from, never over
+    /// it: `kota.hew` becomes `kota.wangun`, any other name gets `.wangun`
+    /// appended. A split source is a plain `.hew`, so it is never the target.
     fn save_project(&mut self) {
-        let Some(p) = &self.project else { return };
-        let target = std::path::Path::new(&self.path).with_extension("wangun");
+        let (Some(p), Some(m)) = (&self.project, &self.model) else {
+            return;
+        };
+        let target = wangun_path(&m.source);
         self.error = std::fs::write(&target, p.save())
             .map(|()| self.path = target.to_string_lossy().into_owned())
             .err()
@@ -238,7 +244,22 @@ impl App {
 
 type TileMeshes = Vec<(TileKey, TileMesh)>;
 
-fn load(path: &str) -> Result<(Project, TileMeshes), String> {
+/// `kota.hew` (any case) to `kota.wangun`; other names get `.wangun` appended.
+fn wangun_path(source: &std::path::Path) -> std::path::PathBuf {
+    let is_hew = source
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("hew"));
+    let mut name = if is_hew {
+        source.with_extension("").into_os_string()
+    } else {
+        source.as_os_str().to_owned()
+    };
+    name.push(".wangun");
+    name.into()
+}
+
+/// The project, its tile meshes, and whether the file was a container.
+fn load(path: &str) -> Result<(Project, TileMeshes, bool), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Tidak bisa membaca {path}: {e}"))?;
     let project = Project::open(&bytes).map_err(|e| format!("Tidak bisa membuka proyek: {e:?}"))?;
     let meshes = project
@@ -250,7 +271,7 @@ fn load(path: &str) -> Result<(Project, TileMeshes), String> {
                 .map_err(|e| format!("Gagal membuat mesh tile {key:?}: {e:?}"))
         })
         .collect::<Result<_, _>>()?;
-    Ok((project, meshes))
+    Ok((project, meshes, Project::is_container(&bytes)))
 }
 
 /// Project-local bounds of all tiles: each tile's own bounds shifted by its
@@ -301,7 +322,9 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 if let Some(e) = &self.error {
                     ui.colored_label(egui::Color32::RED, e);
-                } else if let Some(m) = &self.model {
+                    ui.separator();
+                }
+                if let Some(m) = &self.model {
                     ui.label(format!(
                         "{} · {} tile · {} objek · {} segitiga",
                         m.name, m.tiles, m.objects, m.triangles
@@ -324,7 +347,7 @@ impl eframe::App for App {
                             ),
                         );
                     }
-                } else {
+                } else if self.error.is_none() {
                     ui.label("Belum ada file. Ketik path .hew atau .wangun lalu tekan Buka.");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -385,5 +408,21 @@ mod tests {
         ]);
         assert_eq!(got, Some(([-1.0, -1_002.0, 0.0], [2_001.0, 2.0, 3.0])));
         assert_eq!(union_bounds(&[([5.0; 3], None)]), None);
+    }
+
+    #[test]
+    fn wangun_path_replaces_only_a_hew_extension() {
+        let w = |p: &str| wangun_path(std::path::Path::new(p));
+        assert_eq!(w("/d/kota.hew"), std::path::PathBuf::from("/d/kota.wangun"));
+        assert_eq!(w("/d/KOTA.HEW"), std::path::PathBuf::from("/d/KOTA.wangun"));
+        assert_eq!(
+            w("/d/kota.v1"),
+            std::path::PathBuf::from("/d/kota.v1.wangun")
+        );
+        assert_eq!(w("/d/kota"), std::path::PathBuf::from("/d/kota.wangun"));
+        assert_eq!(
+            w("/d/x.wangun"),
+            std::path::PathBuf::from("/d/x.wangun.wangun")
+        );
     }
 }
