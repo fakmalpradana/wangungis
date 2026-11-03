@@ -24,8 +24,8 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - Sel menyimpan node dan sketch menurut pusat bounds-nya, plus bounds gabungan untuk menolak sinar secara murah.
 - Indeks sel dibuat saat sinar pertama kali lewat di dekatnya. Edit membuang sel seluruh tile, lalu hanya sel yang dilewati sinar yang dibangun lagi.
 - Scene `base` tanpa geometri menjawab snap arah murni (sumbu proyek, kunci sumbu).
-- Hasil digabung menurut `SnapKind::rank_group`, lalu sudut berbobot ke sinar, lalu jenis, lalu kedalaman. Jawaban "garis kunci kosong" berperingkat terakhir.
-- Oklusi lintas sel: sinar dari mata ke titik snap harus bebas dari face solid di sel mana pun (seperti `is_occluded` Hew). Region sketch tidak menutup lintas sel.
+- Hasil digabung menurut `SnapKind::rank_group`, lalu sudut berbobot ke sinar (dengan toleransi seri Hew), lalu jenis, lalu kedalaman. Jawaban "garis kunci kosong" berperingkat terakhir.
+- Oklusi lintas sel: sinar dari mata ke titik snap harus bebas dari face solid di sel mana pun (seperti `is_occluded` Hew), termasuk snap sumbu proyek. Hanya garis kunci kosong yang dikecualikan. Region sketch tidak menutup lintas sel.
 - Ini mendekati, tetapi tidak identik dengan, satu scene global: aturan "reach never steals" Hew tidak terlihat dari luar (`docs/research/spike-a2-native-render.md`).
 
 Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 51 ms (5,1 dtk bila satu indeks per tile); snap setelah edit 42 ms (324 ms); snap berikutnya ±80 µs; dari ketinggian 5 km, kursor menyapu kota ±78 ms per hover pada kali pertama dan ±18 ms setelahnya; draw/extrude/undo < 1 ms.

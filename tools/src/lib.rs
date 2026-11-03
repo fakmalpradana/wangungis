@@ -10,7 +10,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use inference::{InferenceScene, PickRay, Snap, SnapKind, SnapQuery, SnapSource};
+use inference::{
+    InferenceScene, PickRay, RANK_TIE_FRACTION, Snap, SnapKind, SnapQuery, SnapSource,
+    rank_distance_bucket,
+};
 use kernel::{
     Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchRegionId, Transform, Vec3,
 };
@@ -334,7 +337,7 @@ impl Scene {
                     0.0
                 };
                 let gap = (v[0] - t * d[0]).hypot(v[1] - t * d[1]);
-                let far = v[0].hypot(v[1]) + KERNEL_FRAME_BOUND_M;
+                let far = v[0].hypot(v[1]).hypot(ray.origin.z) + KERNEL_FRAME_BOUND_M;
                 gap <= KERNEL_FRAME_BOUND_M + cone_tan * far
             })
             .collect()
@@ -367,7 +370,8 @@ impl Scene {
     ///
     /// Each cell's answer is already right about that cell; what crosses cells
     /// is the choice between answers and occlusion. Answers rank as Hew ranks
-    /// inside one scene (group, then weighted angle, then kind, then depth),
+    /// inside one scene (group, then weighted angle in ties of one pixel, then
+    /// kind, then depth),
     /// except that Hew's "reach never steals" guard is not visible from outside.
     pub fn snap(&mut self, query: &SnapQuery) -> Option<Hit> {
         let dir = query.ray.direction.normalized().ok()?;
@@ -375,21 +379,21 @@ impl Scene {
             origin: query.ray.origin,
             direction: dir,
         };
-        let reach = [
-            SnapKind::Endpoint,
-            SnapKind::Center,
-            SnapKind::Quadrant,
-            SnapKind::Midpoint,
-            SnapKind::OnEdge,
-            SnapKind::OnFace,
-        ]
-        .map(|k| query.weights.reach(k, 1.0))
-        .into_iter()
-        .fold(1.0, f64::max);
-        let cone_tan = (query.aperture * reach).min(1.5).tan();
+        let reach = SnapKind::ALL
+            .iter()
+            .map(|k| query.weights.reach(*k, 1.0))
+            .fold(1.0, f64::max);
+        // Past 1.5 rad the cone is nearly a half-space: rule nothing out.
+        let half_angle = query.aperture * reach;
+        let cone_tan = if half_angle < 1.5 {
+            half_angle.tan()
+        } else {
+            f64::INFINITY
+        };
 
         let mut found: Vec<(u8, f64, f64, Hit, Point3)> = Vec::new();
-        let locked = query.lock.is_some();
+        // Hew ignores a lock without an anchor.
+        let locked = query.lock.is_some() && query.anchor.is_some();
         let mut offer = |key: TileKey, mut snap: Snap| {
             let c = key.center();
             snap.position = onset(snap.position, c);
@@ -432,16 +436,15 @@ impl Scene {
             }
         });
         found.sort_by(|a, b| {
+            let bucket = |d: f64| rank_distance_bucket(d, query.aperture * RANK_TIE_FRACTION);
             a.0.cmp(&b.0)
-                .then(a.1.total_cmp(&b.1))
+                .then(bucket(a.1).cmp(&bucket(b.1)))
                 .then(a.3.snap.kind.cmp(&b.3.snap.kind))
                 .then(a.2.total_cmp(&b.2))
         });
         for (rank, _, _, hit, aim) in found {
-            let free = query.see_through_points
-                || rank == u8::MAX
-                || hit.snap.kind == SnapKind::OnAxis
-                || !self.is_occluded(ray.origin, aim);
+            let free =
+                query.see_through_points || rank == u8::MAX || !self.is_occluded(ray.origin, aim);
             if free {
                 return Some(hit);
             }
@@ -563,8 +566,12 @@ impl Scene {
             sk.add_segment(*a, *b)
                 .expect("the same segments passed on an identical copy");
         }
-        doc.end_sketch_gesture(sketch).map_err(kernel_err)?;
-        self.record(key);
+        let change = doc.end_sketch_gesture(sketch).map_err(kernel_err)?;
+        // Segments lying on existing edges change nothing: Hew records no step,
+        // so neither may the project.
+        if !change.sketches_touched.is_empty() {
+            self.record(key);
+        }
         Ok((key, sketch))
     }
 

@@ -571,6 +571,48 @@ fn instances_snap_and_pick_unless_hidden() {
     assert!(s.pick_face(&down).is_none());
 }
 
+/// Drawing over an existing edge changes nothing, so it is no undo step.
+#[test]
+fn segment_on_an_existing_edge_is_no_undo_step() {
+    let mut s = scene();
+    let segs = rect_segments(0.0, 0.0, 5.0, 4.0);
+    let (key, sk) = s.draw(None, ground(), &segs).unwrap();
+    s.draw(Some((key, sk)), ground(), &segs[..1]).unwrap();
+    assert_eq!(s.undo().unwrap(), Some(key));
+    assert_eq!(
+        sketch_edges(s.project()),
+        0,
+        "one undo reverts the rectangle"
+    );
+    assert_eq!(s.undo().unwrap(), None);
+}
+
+/// The project axis behind a wall must not beat the wall under the cursor.
+#[test]
+fn an_axis_behind_a_wall_does_not_win() {
+    let mut s = scene();
+    add_box(&mut s, -5.0, -10.0, 15.0, 5.0, 3.0);
+    let hit = s
+        .snap(&query([2.0, -40.0, 1.0], [2.0, 0.0, 0.0]))
+        .expect("the wall");
+    assert_ne!(hit.snap.kind, SnapKind::OnAxis, "{hit:?}");
+    assert!(hit.snap.position.y <= -9.9, "{:?}", hit.snap.position);
+}
+
+/// A lock with no anchor means nothing to Hew: geometry still ranks normally.
+#[test]
+fn lock_without_anchor_ranks_normally() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let hit = s
+        .snap(&SnapQuery {
+            lock: Some(inference::SnapLock::Axis(inference::Axis::X)),
+            ..query([-20.0, -30.0, 40.0], [5.0, 4.0, 3.0])
+        })
+        .expect("a snap");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint, "{hit:?}");
+}
+
 /// Every object health-checks as a solid, in every tile.
 fn all_solid(p: &Project) -> bool {
     p.tiles
