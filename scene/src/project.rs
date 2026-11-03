@@ -126,7 +126,7 @@ struct TileEntry {
 /// Every world-space vertex under `node`: its world objects, plus every
 /// instance's definition geometry through the instance pose (the same walk
 /// Hew uses for its own placement anchor).
-fn node_points(doc: &Document, node: NodeId) -> Vec<Point3> {
+pub fn node_points(doc: &Document, node: NodeId) -> Vec<Point3> {
     let verts = |o: kernel::ObjectId| {
         doc.object(o)
             .into_iter()
@@ -278,6 +278,24 @@ impl Project {
         let p = Project { origin, tiles };
         p.check_reach()?;
         Ok(p)
+    }
+
+    /// An empty project holding only tile (0, 0).
+    pub fn new(origin: Option<ProjectOrigin>) -> Result<Self, ProjectError> {
+        Ok(Project {
+            origin,
+            tiles: BTreeMap::from([(TileKey::ORIGIN, new_tile(TileKey::ORIGIN, origin)?)]),
+        })
+    }
+
+    /// The document of tile `key`, created empty when the project has none yet.
+    /// The tile center must lie within the project bound.
+    pub fn tile_mut(&mut self, key: TileKey) -> Result<&mut Document, ProjectError> {
+        check_local(key.center())?;
+        if !self.tiles.contains_key(&key) {
+            self.tiles.insert(key, new_tile(key, self.origin)?);
+        }
+        Ok(self.tiles.get_mut(&key).expect("just ensured"))
     }
 
     /// True when `bytes` are a project container rather than a plain `.hew`.
@@ -445,6 +463,14 @@ fn tile_origin(project: ProjectOrigin, key: TileKey) -> ProjectOrigin {
         epsg: project.epsg,
         origin: std::array::from_fn(|k| project.origin[k] + c[k]),
     }
+}
+
+/// An empty tile. The round trip drops the metadata's undo steps, so the
+/// first undo a user can reach is their own edit.
+fn new_tile(key: TileKey, origin: Option<ProjectOrigin>) -> Result<Document, ProjectError> {
+    let mut doc = Document::new();
+    write_tile_meta(&mut doc, key, origin)?;
+    Document::load(&doc.save()).map_err(kernel)
 }
 
 fn write_tile_meta(

@@ -45,6 +45,9 @@ Satu kota = `Project { origin, tiles }`. Satu tile = satu `Document` Hew, beruku
   - Setiap vertex (x, y, z) wajib berada di dalam ±`PROJECT_BOUND_M`; bila tidak, hasilnya `Err`.
   - Tile (0, 0) memakai dokumen sumber itu sendiri, sehingga sketch world, anotasi, guide, scene, dan style tetap ada (tidak digeser). Anotasi yang menempel pada node yang dipindah ikut terlepas; definisi komponen yang hanya dipakai node yang dipindah tetap tersimpan di tile (0, 0).
 - `Project::open(bytes)`: membuka wadah proyek, atau `.hew` biasa lewat `from_document`.
+- `Project::new(origin)`: proyek kosong berisi tile (0, 0).
+- `Project::tile_mut(key)`: dokumen tile, dibuat kosong bila belum ada. Pusat tile wajib di dalam batas proyek.
+- `node_points(doc, node)`: semua vertex world di bawah node, termasuk geometri definisi instance.
 - `Project::is_container(bytes)`: `true` bila bytes berupa wadah proyek, bukan `.hew` biasa.
 - `Project::save()`: proyek satu tile disimpan sebagai `.hew` biasa. Selain itu disimpan sebagai wadah zip byte-stable berisi `wangungis-project.json` + `tiles/<i>_<j>.hew`.
 - `horizontal_reach(doc)`: jarak horizontal vertex world terjauh (objek dan geometri instance) dari origin dokumen.

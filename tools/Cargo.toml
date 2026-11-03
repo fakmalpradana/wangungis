@@ -1,0 +1,13 @@
+[package]
+name = "wangungis-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kernel.workspace = true
+inference.workspace = true
+wangungis-scene.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
