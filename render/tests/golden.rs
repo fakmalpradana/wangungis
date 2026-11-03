@@ -14,6 +14,14 @@ const W: u32 = 256;
 const H: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// GPU tests run one at a time: Windows WARP crashed (0xc0000005) once with
+/// three devices created in parallel (PR #7 CI, release). Assumed driver race.
+static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     // Hardware first, then the software fallback; a device must come up too.
@@ -181,6 +189,7 @@ fn coverage(px: &[u8]) -> f64 {
 
 #[test]
 fn far_tiles_render_like_the_origin() {
+    let _serial = gpu_lock();
     let Some(dq) = gpu() else { return };
     let doc = box_doc(0.0, 0.0);
     let (reference, draws) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
@@ -214,6 +223,7 @@ fn far_tiles_render_like_the_origin() {
 
 #[test]
 fn without_rtc_utm_renders_wrong() {
+    let _serial = gpu_lock();
     let Some(dq) = gpu() else { return };
     let (reference, _) = render(&dq, &[([0.0; 3], &box_doc(0.0, 0.0))], &camera([0.0; 3]));
     // Geometry baked at UTM in the tile's f32 buffer, tile frame at 0: no RTC.
@@ -236,6 +246,7 @@ fn without_rtc_utm_renders_wrong() {
 /// puts its box beside the first (more pixels covered than one tile alone).
 #[test]
 fn two_tiles_two_draws_each() {
+    let _serial = gpu_lock();
     let Some(dq) = gpu() else { return };
     let doc = box_doc(0.0, 0.0);
     let (one, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
@@ -250,4 +261,23 @@ fn two_tiles_two_draws_each() {
         c2 > c1 * 1.3,
         "second tile not drawn where expected: {c1:.3} -> {c2:.3}"
     );
+}
+
+/// CPU only: reach is the farthest vertex, not the AABB corner.
+#[test]
+fn horizontal_reach_is_the_farthest_vertex() {
+    // Triangle prism: AABB corner (1100, 1100) is ~1556 m out, no vertex is
+    // farther than 1100 m.
+    let mut doc = Document::new();
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let ring = [p(1100.0, 0.0), p(0.0, 1100.0), p(10.0, 10.0)];
+    let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
+    let s = doc.sketch_mut(sk).unwrap();
+    for k in 0..3 {
+        s.add_segment(ring[k], ring[(k + 1) % 3]).unwrap();
+    }
+    let r = doc.extrudable_regions(sk).unwrap();
+    doc.extrude_region(sk, r[0], 3.0).unwrap();
+    let m = TileMesh::from_document(&doc).unwrap();
+    assert!((m.horizontal_reach() - 1100.0).abs() < 1e-3);
 }
