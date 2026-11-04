@@ -21,6 +21,8 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 - `camera.rs`: `Orbit`, logika kamera murni `f64`, dengan test unit tanpa GPU (jarak mata, batas pitch, pan mengikuti kursor, sinar lewat pikselnya, batas zoom, fit).
 - `main.rs`: fungsi murni bertest unit (`union_bounds`, `wangun_path`, `save_target`, `write_atomic`, `typed_accepts`) dan app eframe 0.37 (wgpu). Viewport 3D dirender ke texture offscreen milik kita, lalu ditampilkan sebagai gambar egui. Dengan begitu depth buffer dikelola `render`, bukan egui.
 
+- `smoke.rs` (hanya test): checklist `docs/user/uji-asap.md` dijalankan pada `App` asli dengan event egui mentah dan GPU offscreen, tanpa jendela. Mencakup keyboard, klik, seret, scroll, undo, simpan, buka ulang. Tombol toolbar dan kotak path tidak diklik lewat tata letak; kodenya hanya memanggil metode yang sama. `WANGUNGIS_SMOKE_DUMP=<folder>` menulis gambar viewport untuk dilihat.
+
 ## Non-goals (menyusul)
 - Dialog file native.
 - Form pengisian origin.
