@@ -2697,6 +2697,7 @@ dependencies = [
  "eframe",
  "inference",
  "kernel",
+ "pollster",
  "wangungis-render",
  "wangungis-scene",
  "wangungis-tools",
