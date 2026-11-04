@@ -3,12 +3,41 @@
 //! `5`, `2,5` or `2.5` (the comma is a decimal mark, as written in Indonesia),
 //! `5;4` or `5x4` for two dimensions, an optional unit `mm`, `cm` or `m`
 //! (default m) per value, and a sign for the opposite direction.
+//! After a copy: `x5`, `5x`, `*5` or `5*` for five copies, `/5` or `5/` for five
+//! copies spaced evenly up to the copy just made.
+
+use std::num::NonZeroU32;
 
 /// Parsed input, in meters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Vcb {
     One(f64),
     Two(f64, f64),
+    /// Copies each as far as the first.
+    Copies(NonZeroU32),
+    /// Copies filling the distance to the first.
+    Divide(NonZeroU32),
+}
+
+/// More copies than this in one go is a typing error, not a model.
+const MAX_COPIES: u32 = 1_000;
+
+fn count(text: &str) -> Option<NonZeroU32> {
+    let t = text.trim();
+    if t.is_empty() || !t.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    NonZeroU32::new(t.parse().ok()?).filter(|n| n.get() <= MAX_COPIES)
+}
+
+/// `x5`, `5x`, `*5`, `5*`, `/5` or `5/`.
+fn array(text: &str) -> Option<Vcb> {
+    let t = text.trim();
+    let side = |mark: &[char]| t.strip_prefix(mark).or(t.strip_suffix(mark));
+    if let Some(n) = side(&['x', '*']) {
+        return Some(Vcb::Copies(count(n)?));
+    }
+    Some(Vcb::Divide(count(side(&['/'])?)?))
 }
 
 fn length(text: &str) -> Option<f64> {
@@ -37,6 +66,9 @@ fn length(text: &str) -> Option<f64> {
 /// `None` when the text is not one or two valid lengths.
 pub fn parse(text: &str) -> Option<Vcb> {
     let lower = text.to_ascii_lowercase();
+    if let Some(v) = array(&lower) {
+        return Some(v);
+    }
     let parts: Vec<&str> = lower.split([';', 'x']).collect();
     match parts[..] {
         [a] => Some(Vcb::One(length(a)?)),
@@ -48,6 +80,32 @@ pub fn parse(text: &str) -> Option<Vcb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn array_counts() {
+        let n = |v| NonZeroU32::new(v).unwrap();
+        for t in ["x5", "5x", "*5", "5*", " x5 ", "X5"] {
+            assert_eq!(parse(t), Some(Vcb::Copies(n(5))), "{t}");
+        }
+        for t in ["/5", "5/"] {
+            assert_eq!(parse(t), Some(Vcb::Divide(n(5))), "{t}");
+        }
+        for t in [
+            "x0",
+            "/0",
+            "x",
+            "/",
+            "x-1",
+            "x1,5",
+            "x1001",
+            "x99999999999",
+            "x5x",
+        ] {
+            assert_eq!(parse(t), None, "{t}");
+        }
+        // Two dimensions are not taken for an array.
+        assert_eq!(parse("5x4"), Some(Vcb::Two(5.0, 4.0)));
+    }
 
     #[test]
     fn valid_input() {

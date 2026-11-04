@@ -462,3 +462,119 @@ proptest! {
         prop_assert!(s.take_dirty().is_empty());
     }
 }
+
+/// Solids in the project and the top of the highest one.
+fn solid_count(s: &Scene) -> usize {
+    s.project()
+        .tiles
+        .values()
+        .map(|d| d.visible_object_ids().len())
+        .sum()
+}
+
+fn box_at_10(s: &mut Scene) {
+    typed_rectangle(s);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, s, [12.5, 12.0, 0.0]);
+    typed(&mut p, s, "3").unwrap();
+}
+
+/// East edge, in the tile, of everything.
+fn max_x(s: &Scene) -> f64 {
+    let mut x = f64::MIN;
+    for (key, d) in &s.project().tiles {
+        for id in d.visible_object_ids() {
+            for v in d.object(id).unwrap().vertices().values() {
+                x = x.max(v.position.x + key.center()[0]);
+            }
+        }
+    }
+    x
+}
+
+#[test]
+fn move_by_clicks_and_by_typing() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    // Pick up the box by its top, put the base point down 4 m on.
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(m.busy());
+    assert!(m.preview().lines.len() >= 12, "the box follows");
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut m, &mut s, [16.5, 12.0, 3.0]);
+    assert!(m.preview().lines.len() >= 13);
+    typed(&mut m, &mut s, "4").unwrap();
+    assert!(!m.busy());
+    assert!((max_x(&s) - 19.0).abs() <= MM, "{}", max_x(&s));
+    assert_eq!(solid_count(&s), 1);
+
+    // By clicks, along the same lock, back again.
+    click(&mut m, &mut s, [16.5, 12.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(!m.busy());
+    assert!((max_x(&s) - 15.0).abs() <= 0.01, "{}", max_x(&s));
+}
+
+#[test]
+fn copy_then_count_makes_an_array() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    m.handle(&mut s, Input::ToggleCopy).unwrap();
+    assert!(m.copying());
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut m, &mut s, [20.0, 12.0, 3.0]);
+    typed(&mut m, &mut s, "7").unwrap();
+    assert!(!m.copying(), "the next move is a plain move again");
+    assert_eq!(solid_count(&s), 2);
+
+    typed(&mut m, &mut s, "x10").unwrap();
+    assert_eq!(solid_count(&s), 11);
+    assert!((max_x(&s) - 85.0).abs() <= MM, "{}", max_x(&s));
+    // Another count replaces the array.
+    typed(&mut m, &mut s, "x3").unwrap();
+    assert_eq!(solid_count(&s), 4);
+    assert!((max_x(&s) - 36.0).abs() <= MM, "{}", max_x(&s));
+    // Dividing fills the first distance.
+    typed(&mut m, &mut s, "/7").unwrap();
+    assert_eq!(solid_count(&s), 8);
+    assert!((max_x(&s) - 22.0).abs() <= MM, "{}", max_x(&s));
+    s.undo().unwrap();
+    assert_eq!(solid_count(&s), 1, "the whole array is one step");
+}
+
+#[test]
+fn move_ignores_nothing_and_esc_leaves_no_step() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let saved = s.project().save();
+    let mut m = Tool::move_tool(APERTURE);
+    // Empty space picks up nothing.
+    click(&mut m, &mut s, [200.0, 200.0, 0.0]);
+    assert!(!m.busy());
+    assert!(typed(&mut m, &mut s, "x5").is_err(), "nothing was copied");
+    // A click on the base point itself moves nothing, the gesture stays.
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(m.busy());
+    m.handle(&mut s, Input::Cancel).unwrap();
+    assert!(!m.busy());
+    assert_eq!(s.project().save(), saved);
+}
+
+/// The cursor over the moved box itself must not lift it towards the eye.
+#[test]
+fn a_box_does_not_climb_its_own_faces() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 10.0, 0.0]);
+    assert!(m.busy());
+    // Over the top of the box, seen from above: a point on its own face.
+    hover(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    let (a, b) = *m.preview().lines.last().unwrap();
+    assert!((b.z - a.z).abs() <= MM, "base {a:?}, cursor {b:?}");
+}

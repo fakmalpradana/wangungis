@@ -89,6 +89,7 @@ struct App {
     split_on_open: bool,
     overlay_shown: Option<Preview>,
     last_pointer: Option<egui::Pos2>,
+    ctrl_held: bool,
     error: Option<String>,
 }
 
@@ -115,6 +116,7 @@ impl App {
             split_on_open: false,
             overlay_shown: None,
             last_pointer: None,
+            ctrl_held: false,
             error: None,
         };
         if path.is_some() {
@@ -297,6 +299,12 @@ impl App {
         if ctx.text_edit_focused() {
             return;
         }
+        // Ctrl flips copying the moment it goes down, like the C key.
+        let ctrl = ctx.input(|i| i.modifiers.ctrl);
+        if ctrl && !self.ctrl_held && self.tool.same_kind(&Tool::move_tool(0.0)) {
+            self.feed(Input::ToggleCopy);
+        }
+        self.ctrl_held = ctrl;
         for ev in ctx.input(|i| i.events.clone()) {
             match ev {
                 egui::Event::Text(text) => {
@@ -355,6 +363,8 @@ impl App {
             K::L if self.typed.is_empty() => self.switch_tool(Tool::line),
             K::R if self.typed.is_empty() => self.switch_tool(Tool::rectangle),
             K::P if self.typed.is_empty() => self.switch_tool(Tool::push_pull),
+            K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
+            K::C if self.typed.is_empty() => self.feed(Input::ToggleCopy),
             _ => {}
         }
     }
@@ -529,12 +539,13 @@ fn snap_label(kind: SnapKind) -> &'static str {
     }
 }
 
-/// Whether `ch` extends the value being typed. Digits and punctuation always
-/// start a value; unit letters only continue one, since alone they mean tools.
+/// Whether `ch` extends the value being typed. Digits, punctuation and array
+/// marks always start a value; unit letters only continue one, since alone they
+/// mean tools.
 fn typed_accepts(typed: &str, ch: char) -> bool {
     match ch {
-        '0'..='9' | '.' | ',' | ';' | '-' | '+' => true,
-        'x' | 'X' | 'm' | 'M' | 'c' | 'C' | ' ' => !typed.is_empty(),
+        '0'..='9' | '.' | ',' | ';' | '-' | '+' | 'x' | 'X' | '*' | '/' => true,
+        'm' | 'M' | 'c' | 'C' | ' ' => !typed.is_empty(),
         _ => false,
     }
 }
@@ -648,6 +659,7 @@ impl eframe::App for App {
                     ("Garis (L)", Tool::line),
                     ("Persegi (R)", Tool::rectangle),
                     ("Push/Pull (P)", Tool::push_pull),
+                    ("Pindah (M)", Tool::move_tool),
                 ] {
                     if ui
                         .selectable_label(self.tool.same_kind(&make(0.0)), label)
@@ -683,6 +695,10 @@ impl eframe::App for App {
                     &self.typed
                 });
                 ui.separator();
+                if self.tool.copying() {
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
+                    ui.separator();
+                }
                 if let Some(hit) = self.tool.preview().snap {
                     ui.label(snap_label(hit.snap.kind));
                     ui.separator();
@@ -913,7 +929,8 @@ mod tests {
     #[test]
     fn unit_letters_only_continue_a_value() {
         assert!(typed_accepts("", '5') && typed_accepts("", '-') && typed_accepts("", ','));
-        assert!(!typed_accepts("", 'm') && !typed_accepts("", 'x') && !typed_accepts("", ' '));
+        assert!(!typed_accepts("", 'm') && !typed_accepts("", 'c') && !typed_accepts("", ' '));
+        assert!(typed_accepts("", 'x') && typed_accepts("", '*') && typed_accepts("", '/'));
         assert!(typed_accepts("5", 'x') && typed_accepts("250", 'c') && typed_accepts("5", ' '));
         assert!(!typed_accepts("5", 'l') && !typed_accepts("", 'p'));
     }

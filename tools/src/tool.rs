@@ -6,10 +6,11 @@ use inference::{
     ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
 use kernel::{Plane, Point3, SketchId, SketchRegionId, Vec3};
+use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
 use crate::vcb::{self, Vcb};
-use crate::{EditError, Hit, Scene};
+use crate::{EditError, Hit, Movable, Scene};
 
 /// Smallest length (m) a gesture counts as: below it a click means nothing.
 const MIN_LEN: f64 = 1e-4;
@@ -29,6 +30,8 @@ pub enum Input {
     LockAxis(Axis),
     /// Esc.
     Cancel,
+    /// Move: copy instead of moving, or back.
+    ToggleCopy,
 }
 
 /// What the UI should draw over the model, project-local.
@@ -79,6 +82,23 @@ enum State {
         /// Outline of what a click would pick.
         hover: Vec<(Point3, Point3)>,
     },
+    Move {
+        moving: Option<Moving>,
+        /// Edges of what a click would pick up.
+        hover: Vec<(Point3, Point3)>,
+        copy: bool,
+        /// The copy just made, which a typed count turns into an array.
+        last: Option<(Movable, Vec3)>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Moving {
+    what: Movable,
+    base: Point3,
+    cursor: Option<Point3>,
+    lock: Option<Axis>,
+    lines: Vec<(Point3, Point3)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +260,36 @@ fn next_point(
     Some((point, None))
 }
 
+/// Where a moved thing's base point lands: a snap, the locked axis, or the
+/// horizontal plane through the base. It never snaps to itself: its faces and
+/// corners travel with it, and would pull it towards the eye.
+// ponytail: a snap on itself hides whatever was behind it for that frame. Taking
+// the object out of its cell's index (`remove_object`) would fix that.
+fn move_point(
+    scene: &mut Scene,
+    ray: PickRay,
+    m: &Moving,
+    aperture: f64,
+) -> Option<(Point3, Option<Hit>)> {
+    let q = SnapQuery {
+        anchor: Some(m.base),
+        lock: m.lock.map(SnapLock::Axis),
+        ..query(ray, aperture)
+    };
+    let hit = scene
+        .snap(&q)
+        .filter(|h| scene.movable_at(h).as_ref() != Some(&m.what));
+    if let Some(h) = hit {
+        return Some((h.snap.position, hit));
+    }
+    if let Some(axis) = m.lock {
+        let u = axis.unit();
+        return Some((m.base + u * along_line(&ray, m.base, u)?, None));
+    }
+    let plane = Plane::from_point_normal(m.base, Vec3::new(0.0, 0.0, 1.0)).ok()?;
+    ray_on_plane(&ray, &plane).map(|p| (p, None))
+}
+
 fn ring(points: &[Point3]) -> Vec<(Point3, Point3)> {
     (0..points.len())
         .map(|k| (points[k], points[(k + 1) % points.len()]))
@@ -305,6 +355,23 @@ impl Tool {
         )
     }
 
+    pub fn move_tool(aperture: f64) -> Self {
+        Self::with(
+            State::Move {
+                moving: None,
+                hover: Vec::new(),
+                copy: false,
+                last: None,
+            },
+            aperture,
+        )
+    }
+
+    /// Whether the next move copies.
+    pub fn copying(&self) -> bool {
+        matches!(self.state, State::Move { copy: true, .. })
+    }
+
     /// Whether `other` is the same tool, whatever state each is in.
     pub fn same_kind(&self, other: &Tool) -> bool {
         std::mem::discriminant(&self.state) == std::mem::discriminant(&other.state)
@@ -333,6 +400,7 @@ impl Tool {
             State::Line { chain } => chain.is_some(),
             State::Rectangle { first, .. } => first.is_some(),
             State::PushPull { armed, .. } => armed.is_some(),
+            State::Move { moving, .. } => moving.is_some(),
         }
     }
 
@@ -344,6 +412,7 @@ impl Tool {
             State::Line { .. } => Self::line(aperture),
             State::Rectangle { .. } => Self::rectangle(aperture),
             State::PushPull { .. } => Self::push_pull(aperture),
+            State::Move { .. } => Self::move_tool(aperture),
         };
     }
 
@@ -358,6 +427,7 @@ impl Tool {
             State::Line { .. } => self.handle_line(scene, input),
             State::Rectangle { .. } => self.handle_rectangle(scene, input),
             State::PushPull { .. } => self.handle_push_pull(scene, input),
+            State::Move { .. } => self.handle_move(scene, input),
         }?;
         if !hovering {
             // A click or typed value ends what the marker described.
@@ -390,7 +460,7 @@ impl Tool {
                     *outline = lines;
                 }
             }
-            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel => {}
+            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -457,7 +527,7 @@ impl Tool {
                     Some(axis)
                 };
             }
-            Input::Cancel => {}
+            Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -518,7 +588,7 @@ impl Tool {
                     *cursor = None;
                 }
             }
-            Input::LockAxis(_) | Input::Cancel => {}
+            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -537,6 +607,117 @@ impl Tool {
             return Ok(false);
         }
         scene.draw(Some(tile), *plane, &ring(&rectangle(a, plane, w, d)))?;
+        Ok(true)
+    }
+
+    fn handle_move(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Move {
+            moving,
+            hover,
+            copy,
+            last,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => match moving {
+                Some(m) => {
+                    let next = move_point(scene, ray, m, aperture);
+                    m.cursor = next.map(|n| n.0);
+                    self.preview.snap = next.and_then(|n| n.1);
+                }
+                None => {
+                    let hit = scene.snap(&query(ray, aperture));
+                    self.preview.snap = hit;
+                    *hover = hit
+                        .and_then(|h| scene.movable_at(&h))
+                        .map_or_else(Vec::new, |m| scene.movable_lines(&m));
+                }
+            },
+            Input::Click(ray) => match moving {
+                None => {
+                    if let Some(hit) = scene.snap(&query(ray, aperture))
+                        && let Some(what) = scene.movable_at(&hit)
+                    {
+                        *moving = Some(Moving {
+                            lines: scene.movable_lines(&what),
+                            what,
+                            base: hit.snap.position,
+                            cursor: None,
+                            lock: None,
+                        });
+                        *last = None;
+                        hover.clear();
+                    }
+                }
+                Some(m) => {
+                    if let Some((p, _)) = move_point(scene, ray, m, aperture) {
+                        let delta = p - m.base;
+                        if Self::finish_move(scene, m, delta, *copy, last)? {
+                            *moving = None;
+                            *copy = false;
+                        }
+                    }
+                }
+            },
+            Input::Typed(text) => match (&*moving, vcb::parse(&text)) {
+                (Some(m), Some(Vcb::One(len))) => {
+                    let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                    let dir = (cursor - m.base)
+                        .normalized()
+                        .map_err(|_| needs("arahkan kursor dulu"))?;
+                    let m = moving.as_mut().expect("matched above");
+                    if Self::finish_move(scene, m, dir * len, *copy, last)? {
+                        *moving = None;
+                        *copy = false;
+                    }
+                }
+                (None, Some(Vcb::Copies(n))) => {
+                    let (what, step) = last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
+                    scene.respace_copy(what, *step, n)?;
+                }
+                (None, Some(Vcb::Divide(n))) => {
+                    let (what, step) = last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
+                    let part = *step / f64::from(n.get());
+                    scene.respace_copy(what, part, n)?;
+                }
+                _ => return Err(needs("Move butuh satu jarak; setelah menyalin, x5 atau /5")),
+            },
+            Input::LockAxis(axis) => {
+                if let Some(m) = moving {
+                    m.lock = if m.lock == Some(axis) {
+                        None
+                    } else {
+                        Some(axis)
+                    };
+                }
+            }
+            Input::ToggleCopy => *copy = !*copy,
+            Input::Cancel => {}
+        }
+        Ok(())
+    }
+
+    /// `false` for a displacement too short to mean anything: the gesture stays
+    /// open.
+    fn finish_move(
+        scene: &mut Scene,
+        m: &Moving,
+        delta: Vec3,
+        copy: bool,
+        last: &mut Option<(Movable, Vec3)>,
+    ) -> Result<bool, EditError> {
+        if delta.length() < MIN_LEN {
+            return Ok(false);
+        }
+        if copy {
+            scene.copy(&m.what, delta, NonZeroU32::MIN)?;
+            *last = Some((m.what.clone(), delta));
+        } else {
+            scene.translate(&m.what, delta)?;
+        }
         Ok(true)
     }
 
@@ -582,7 +763,7 @@ impl Tool {
                 Self::commit_push_pull(scene, a.target, d)?;
                 *armed = None;
             }
-            Input::LockAxis(_) | Input::Cancel => {}
+            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -655,6 +836,15 @@ impl Tool {
                     ring(&rectangle(*a, plane, w, d))
                 }
                 _ => Vec::new(),
+            },
+            State::Move { moving, hover, .. } => match moving {
+                None => hover.clone(),
+                Some(m) => {
+                    let d = m.cursor.map_or(Vec3::new(0.0, 0.0, 0.0), |c| c - m.base);
+                    let mut lines: Vec<_> = m.lines.iter().map(|(a, b)| (*a + d, *b + d)).collect();
+                    lines.extend(m.cursor.map(|c| (m.base, c)));
+                    lines
+                }
             },
             State::PushPull { armed, hover } => armed.as_ref().map_or_else(
                 || hover.clone(),

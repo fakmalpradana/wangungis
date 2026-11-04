@@ -6,8 +6,8 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 ## Perilaku
 - `wangungis [file.hew | file.wangun]`: membuka file dari argumen. Bisa juga lewat kotak path + tombol **Buka** (atau Enter). Tanpa argumen: proyek baru kosong.
 - File dibuka lewat `scene::project::Project::open`. Setiap tile kernel menjadi satu tile render di pusatnya. `.hew` yang geometrinya melewati 1,5 km langsung dipecah menjadi tile 1 km di memori.
-- **Tool** (logika di crate `tools`): Pilih (Spasi), Garis (L), Persegi (R), Push/Pull (P). Klik kiri milik tool.
-- **Nilai:** angka yang diketik langsung masuk tanpa perlu fokus, ditampilkan di status bar, Enter mengirim, Backspace menghapus, Esc membatalkan. Huruf satuan (`m`, `c`, `x`) hanya dihitung setelah ada angka.
+- **Tool** (logika di crate `tools`): Pilih (Spasi), Garis (L), Persegi (R), Push/Pull (P), Pindah (M). Klik kiri milik tool. Saat Pindah, C atau menekan Ctrl beralih ke menyalin; status bar menulis "Menyalin".
+- **Nilai:** angka yang diketik langsung masuk tanpa perlu fokus, ditampilkan di status bar, Enter mengirim, Backspace menghapus, Esc membatalkan. Huruf satuan (`m`, `c`) hanya dihitung setelah ada angka. `x`, `*`, dan `/` boleh mengawali nilai, untuk jumlah array.
 - **Kunci sumbu:** panah kanan = X, kiri = Y, atas = Z.
 - **Undo/Redo:** Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, atau tombol. Gesture yang sedang berjalan dibatalkan, karena id-nya bisa basi.
 - **Navigasi:** seret tengah = orbit, Shift+seret tengah = pan. Di trackpad: Alt+seret kiri = orbit, Shift+Alt+seret kiri = pan. Scroll = zoom. **Zoom extents** memasukkan seluruh model ke layar.
@@ -25,4 +25,3 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 - Dialog file native.
 - Form pengisian origin.
 - Lazy-load per tile.
-- Move/array (rencana v0.1 berikutnya).
