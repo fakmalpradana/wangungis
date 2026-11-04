@@ -578,3 +578,30 @@ fn a_box_does_not_climb_its_own_faces() {
     let (a, b) = *m.preview().lines.last().unwrap();
     assert!((b.z - a.z).abs() <= MM, "base {a:?}, cursor {b:?}");
 }
+
+/// A ground click in line with the Z axis starts on the ground, not up the axis.
+#[test]
+fn drawing_does_not_start_up_the_z_axis() {
+    let mut s = scene();
+    // Straight towards the axis from afar: at (1, 1) on the ground, the ray
+    // passes the axis well within the pick cone.
+    let origin = Point3::new(-30.0, -30.0, 30.0);
+    let at = Point3::new(1.0, 1.0, 0.0);
+    let ray = PickRay {
+        origin,
+        direction: at - origin,
+    };
+    let mut r = Tool::rectangle(0.01);
+    r.handle(&mut s, Input::Click(ray)).unwrap();
+    assert!(r.busy());
+    r.handle(&mut s, Input::Typed("2;2".into())).unwrap();
+    assert_box_or_sketch_at_ground(&s);
+}
+
+fn assert_box_or_sketch_at_ground(s: &Scene) {
+    let doc = s.project().tiles.values().next().unwrap();
+    let k = doc.sketch(doc.sketch_ids()[0]).unwrap();
+    for v in k.vertices().values() {
+        assert!(v.position.z.abs() <= MM, "{v:?}");
+    }
+}

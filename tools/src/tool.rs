@@ -182,12 +182,20 @@ fn on_plane(p: Point3, plane: &Plane) -> Point3 {
     p - plane.normal() * plane.signed_distance(p)
 }
 
+/// The snap for where a drawing starts. The Z axis does not count: a click on the
+/// ground that happens to be in line with it would start the drawing in mid-air.
+fn start_snap(scene: &mut Scene, ray: PickRay, aperture: f64) -> Option<Hit> {
+    scene
+        .snap(&query(ray, aperture))
+        .filter(|h| h.snap.kind != SnapKind::OnAxis || h.snap.position.z.abs() <= ON_PLANE)
+}
+
 /// A first click: the point, the plane the drawing will lie on, and the tile
 /// holding what it joins. The face under the cursor gives the plane; any other
 /// snap a horizontal plane through it; nothing at all the ground.
 fn first_point(scene: &mut Scene, ray: PickRay, aperture: f64) -> Option<(Point3, Plane, TileKey)> {
     let own_tile = |p: Point3| TileKey::of([p.x, p.y]);
-    let Some(hit) = scene.snap(&query(ray, aperture)) else {
+    let Some(hit) = start_snap(scene, ray, aperture) else {
         return ray_on_plane(&ray, &ground()).map(|p| (p, ground(), own_tile(p)));
     };
     let p = hit.snap.position;
@@ -477,7 +485,7 @@ impl Tool {
                     c.cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
                 }
-                None => self.preview.snap = scene.snap(&query(ray, aperture)),
+                None => self.preview.snap = start_snap(scene, ray, aperture),
             },
             Input::Click(ray) => match chain {
                 None => {
@@ -555,7 +563,7 @@ impl Tool {
                     *cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
                 }
-                None => self.preview.snap = scene.snap(&query(ray, aperture)),
+                None => self.preview.snap = start_snap(scene, ray, aperture),
             },
             Input::Click(ray) => match first {
                 None => {

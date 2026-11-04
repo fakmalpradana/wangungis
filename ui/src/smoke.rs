@@ -1,4 +1,5 @@
-//! The smoke checklist (`docs/user/uji-asap.md`) played against the real `App`:
+//! The smoke checklist (`docs/user/uji-asap.md`) and the v0.1 exit task played
+//! against the real `App`:
 //! raw egui events in, real renderer on an offscreen GPU, no window. This is
 //! what stands in for clicking through the app, which CI cannot do. Buttons are
 //! called directly: finding them needs layout positions, and they only call
@@ -251,6 +252,13 @@ fn close(got: [f64; 3], want: [f64; 3]) {
     }
 }
 
+/// The model's low corner is where it was clicked, on the ground. In the default
+/// view (1, 1, 0) lies right over the Z axis, which must not catch the click.
+fn on_the_ground(d: &Driver, at: [f64; 2]) {
+    let (lo, _) = d.app.bounds().expect("something is drawn");
+    close(lo, [at[0], at[1], 0.0]);
+}
+
 #[test]
 fn smoke_checklist_in_the_real_app() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -286,6 +294,7 @@ fn smoke_checklist_in_the_real_app() {
     d.value("3");
     assert_eq!(d.counts(), (1, 12));
     close(d.extents(), [5.0, 4.0, 3.0]);
+    on_the_ground(&d, [1.0, 1.0]);
     assert!(d.model_pixels() > 1000, "the box shows in the view");
     d.dump("5-box");
 
@@ -438,4 +447,116 @@ fn navigation_never_reaches_the_tool() {
     assert_eq!(d.app.typed, "5");
     d.key(egui::Key::Escape);
     assert!(d.app.typed.is_empty());
+}
+
+/// The v0.1 exit task, start to finish through the real input path: a 5 x 4 x 3 m
+/// box with a door, copied ten times in an array, saved and reopened.
+#[test]
+fn box_with_a_door_in_an_array_of_ten() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+
+    d.letter(K::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3");
+    assert_eq!(d.counts(), (1, 12));
+    close(d.extents(), [5.0, 4.0, 3.0]);
+    on_the_ground(&d, [1.0, 1.0]);
+
+    // The door. The cursor is on the wall just above its bottom edge, which
+    // the corner of the rectangle snaps to: the edge's midpoint, x = 3.5.
+    d.letter(K::R, "r");
+    d.click([3.0, 1.0, 0.03]);
+    assert!(d.app.tool.busy());
+    d.hover([3.6, 1.0, 1.0]);
+    d.value("1;2");
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.app.scene.project().occupied().count(), 1);
+    let object = |d: &Driver| {
+        let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
+        doc.object(doc.visible_object_ids()[0])
+            .unwrap()
+            .faces()
+            .len()
+    };
+    assert_eq!(object(&d), 7, "the wall was split");
+    d.dump("exit-1-door-drawn");
+
+    d.letter(K::P, "p");
+    d.click([4.0, 1.0, 1.0]);
+    assert!(d.app.tool.busy(), "the door face is picked");
+    d.value("-4");
+    assert_eq!(
+        object(&d),
+        10,
+        "an inverted U: the door opens right through"
+    );
+    d.dump("exit-2-door-open");
+    let solid = d.app.stats.values().map(|s| s.triangles).sum::<usize>();
+    assert!(solid > 12, "the box gained an opening: {solid} triangles");
+
+    // Move, copy, along X, 7 m on, then ten copies.
+    d.letter(K::M, "m");
+    d.click([3.5, 3.0, 3.0]);
+    assert!(d.app.tool.busy());
+    d.letter(K::C, "c");
+    assert!(d.app.tool.copying());
+    d.key(K::ArrowRight);
+    d.hover([12.0, 3.0, 3.0]);
+    d.value("7");
+    assert_eq!(d.counts().0, 2);
+    d.value("x10");
+    assert_eq!(d.counts().0, 11, "the source and ten copies");
+    close(d.extents(), [75.0, 4.0, 3.0]);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    d.dump("exit-3-array");
+
+    // One undo removes the array, one redo brings it back.
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.counts().0, 1);
+    d.key_with(K::Z, COMMAND | egui::Modifiers::SHIFT);
+    assert_eq!(d.counts().0, 11);
+
+    // Save, reopen, save again: byte-identical.
+    let dir = std::env::temp_dir().join(format!("wangungis-exit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("kota.hew");
+    d.app.path = file.to_string_lossy().into_owned();
+    d.key_with(K::S, COMMAND);
+    assert_eq!(d.app.error, None);
+    let saved = std::fs::read(&file).unwrap();
+    let before = d.counts();
+    d.app.new_project();
+    d.frame(vec![]);
+    d.app.path = file.to_string_lossy().into_owned();
+    d.app.open();
+    d.frame(vec![]);
+    assert_eq!(d.counts(), before);
+    close(d.extents(), [75.0, 4.0, 3.0]);
+    d.key_with(K::S, COMMAND);
+    assert_eq!(std::fs::read(&file).unwrap(), saved, "byte-identical");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Ctrl flips copying like the C key, and only in Move.
+#[test]
+fn ctrl_toggles_copying_in_move() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    d.letter(egui::Key::M, "m");
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![]);
+    assert!(d.app.tool.copying(), "pressing Ctrl copies");
+    d.hold(egui::Modifiers::NONE);
+    assert!(d.app.tool.copying(), "releasing it changes nothing");
+    d.hold(egui::Modifiers::CTRL);
+    d.hold(egui::Modifiers::NONE);
+    assert!(!d.app.tool.copying());
 }
