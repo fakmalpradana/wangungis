@@ -31,17 +31,17 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 ## Langkah
 1. Jalankan tanpa file. Terlihat tiga garis sumbu: merah X, hijau Y, biru Z.
 2. Tekan **R**. Klik satu titik di tanah. Gerakkan kursor: persegi oranye mengikuti.
-3. Ketik `5;4` lalu Enter. Persegi 5×4 m tergambar, sebagai garis tepi (belum ada isian face).
+3. Ketik `5;4` lalu Enter. Persegi 5×4 m tergambar, dengan isian abu-abu.
 4. Tekan **P**. Arahkan kursor ke dalam persegi: garis tepinya menyala oranye. Klik.
 5. Ketik `3` lalu Enter. Kotak setinggi 3 m terbentuk. Status bar: 1 objek, 12 segitiga.
 6. Tetap di **P**, klik face atas, gerakkan kursor naik-turun, klik lagi. Tinggi berubah mengikuti kursor.
 7. **Cmd+Z** berkali-kali sampai kosong, lalu **Shift+Cmd+Z** sampai kotak kembali.
 8. Tekan **L**. Klik empat titik membentuk segi empat, lalu klik titik pertama lagi. Rantai berakhir sendiri. Dekatkan kursor ke sudut: penanda hijau muncul dan titik menempel.
 9. Isi path di kotak atas, misalnya `/tmp/uji.hew` (file yang belum ada). Tekan **Simpan**. Tekan **Baru**: layar kosong dan kotak path kosong. Isi path yang sama, tekan **Buka**: kotak yang sama muncul lagi. Simpan menolak menimpa file lain yang sudah ada.
-10. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
+10. Gambar persegi di dinding atau atap kotak: face-nya terbelah. Tekan **P**, klik face baru, tarik keluar atau dorong ke dalam. Dorong sampai tembus untuk membuat pintu.
+11. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
 
 ## Yang diketahui belum ada
-- Persegi yang tertutup belum punya isian face, hanya garis tepi.
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
-- Belum ada Move, array, auto-split face, dan dialog file.
+- Belum ada dialog file.
 - Baru dan Buka tidak memperingatkan perubahan yang belum disimpan.

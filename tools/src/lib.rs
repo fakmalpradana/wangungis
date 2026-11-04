@@ -89,6 +89,16 @@ pub struct FaceHit {
     pub depth: f64,
 }
 
+/// What [`Scene::draw`] did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drawn {
+    pub tile: TileKey,
+    /// The free sketch written, if the drawing did not all land on faces.
+    pub sketch: Option<SketchId>,
+    /// A new region closed, on a sketch or as a split of a face.
+    pub closed: bool,
+}
+
 /// One shard of a tile: what it holds, tile-local bounds to reject rays cheaply,
 /// and its index once a ray has needed it.
 #[derive(Default)]
@@ -593,20 +603,22 @@ impl Scene {
         self.dirty.insert(key);
     }
 
-    /// Draws `segments` (project-local, on `plane`) as ONE undo step: on the
-    /// sketch `target`, or on a new sketch in the tile of the first point.
-    /// Returns where the drawing went.
+    /// Draws `segments` (project-local, on `plane`) as ONE undo step through
+    /// Hew's drafting engine: whatever is drawn on that plane joins up, so a
+    /// shape on a solid's face splits the face, and lines meeting free drawing
+    /// connect to it. `tile`: where the plane's drawing lives, or `None` for
+    /// the tile of the first point. Refused edits leave nothing behind.
     pub fn draw(
         &mut self,
-        target: Option<(TileKey, SketchId)>,
+        tile: Option<TileKey>,
         plane: Plane,
         segments: &[(Point3, Point3)],
-    ) -> Result<(TileKey, SketchId), EditError> {
+    ) -> Result<Drawn, EditError> {
         let first = segments
             .first()
             .ok_or(EditError::Unsupported("gambar kosong"))?
             .0;
-        let key = target.map_or_else(|| TileKey::of([first.x, first.y]), |t| t.0);
+        let key = tile.unwrap_or_else(|| TileKey::of([first.x, first.y]));
         let c = key.center();
         let mut local = Vec::with_capacity(segments.len());
         for (a, b) in segments {
@@ -620,41 +632,35 @@ impl Scene {
             local.push((offset(*a, c), offset(*b, c)));
         }
         let plane = shifted_plane(plane, c).map_err(kernel_err)?;
-        // A dry run on a copy: a batch the kernel refuses leaves no sketch, no
-        // tile and no undo step behind.
-        let mut probe = match target {
-            Some((k, s)) => self
-                .project
-                .tiles
-                .get(&k)
-                .and_then(|d| d.sketch(s))
-                .ok_or(EditError::Kernel("sketch hilang".into()))?
-                .clone(),
-            None => kernel::Sketch::on_plane(plane),
-        };
-        for (a, b) in &local {
-            probe.add_segment(*a, *b).map_err(kernel_err)?;
-        }
+        let existed = self.project.tiles.contains_key(&key);
         let doc = self.project.tile_mut(key)?;
-        let sketch = match target {
-            Some((_, s)) => s,
-            None => doc.add_sketch(plane),
+        let objects = doc.drawable_objects_on_plane(plane, None);
+        let mut closed = false;
+        let drafted = doc.draft(plane, None, &objects, "draw", |sk| {
+            for (a, b) in &local {
+                closed |= !sk.add_segment(*a, *b)?.regions_created.is_empty();
+            }
+            Ok(())
+        });
+        let report = match drafted {
+            Ok((report, _)) => report,
+            Err(e) => {
+                if !existed {
+                    self.project.tiles.remove(&key);
+                }
+                return Err(kernel_err(e));
+            }
         };
-        doc.begin_sketch_gesture(sketch).map_err(kernel_err)?;
-        let sk = doc
-            .sketch_mut(sketch)
-            .ok_or(EditError::Kernel("sketch hilang".into()))?;
-        for (a, b) in &local {
-            sk.add_segment(*a, *b)
-                .expect("the same segments passed on an identical copy");
-        }
-        let change = doc.end_sketch_gesture(sketch).map_err(kernel_err)?;
         // Segments lying on existing edges change nothing: Hew records no step,
         // so neither may the project.
-        if !change.sketches_touched.is_empty() {
+        if !report.objects.is_empty() || !report.sketches.is_empty() {
             self.record(key);
         }
-        Ok((key, sketch))
+        Ok(Drawn {
+            tile: key,
+            sketch: report.sketches.last().copied(),
+            closed,
+        })
     }
 
     /// Undoes the op just applied when it pushed the tile past the kernel

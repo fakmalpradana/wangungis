@@ -56,10 +56,24 @@ pub struct TileMesh {
     edges: Vec<[f32; 3]>,
 }
 
+/// A region as a sheet object: its outer ring, with each hole imprinted so that
+/// triangulation respects it.
+fn region_sheet(sk: &kernel::Sketch, region: kernel::SketchRegionId) -> Option<kernel::Object> {
+    let profile = sk.profile(region).ok()?;
+    let outer = profile.outer();
+    let ring = (0..outer.len()).collect();
+    let mut sheet = kernel::Object::from_polygons(outer, &[ring]).ok()?;
+    let face = sheet.faces().keys().next()?;
+    for hole in profile.holes() {
+        sheet.split_face_inner(face, hole).ok()?;
+    }
+    Some(sheet)
+}
+
 impl TileMesh {
     /// Merges `doc`'s visible geometry (the tile's kernel document): world
-    /// Objects, component instances through their poses, and sketch lines.
-    // ponytail: closed sketch regions have no fill yet, only their edges.
+    /// Objects, component instances through their poses, and sketch lines and
+    /// region fills.
     pub fn from_document(doc: &kernel::Document) -> Result<Self, tessellate::TessellateError> {
         let palette = kernel::MaterialPalette::default();
         let mut m = TileMesh::default();
@@ -102,8 +116,56 @@ impl TileMesh {
                     m.edges.push([p.x as f32, p.y as f32, p.z as f32]);
                 }
             }
+            for (region, r) in sk.regions().iter() {
+                if !r.faceless {
+                    m.push_region(sk, region, &palette);
+                }
+            }
         }
         Ok(m)
+    }
+
+    /// Fills a sketch region, visible from both sides. Hew triangulates: the
+    /// region becomes a throwaway sheet object, whose triangles falling in a
+    /// hole are dropped. A region Hew cannot sheet keeps just its edges.
+    fn push_region(
+        &mut self,
+        sk: &kernel::Sketch,
+        region: kernel::SketchRegionId,
+        palette: &kernel::MaterialPalette,
+    ) {
+        let Some(mesh) =
+            region_sheet(sk, region).and_then(|sheet| tessellate::tessellate(&sheet, palette).ok())
+        else {
+            return;
+        };
+        let plane = sk.plane();
+        let n = plane.normal();
+        let inside = |tri: &[u32]| {
+            let c = (0..3).map(|k| {
+                let at = |i: u32| f64::from(mesh.positions[i as usize * 3 + k]);
+                (at(tri[0]) + at(tri[1]) + at(tri[2])) / 3.0
+            });
+            let c: Vec<f64> = c.collect();
+            let p = kernel::Point3::new(c[0], c[1], c[2]);
+            let p = p - n * plane.signed_distance(p);
+            sk.region_contains_point(region, p).unwrap_or(false)
+        };
+        let base = self.verts.len() as u32;
+        let front = [n.x as f32, n.y as f32, n.z as f32];
+        for p in mesh.positions.chunks(3) {
+            let pos = [p[0], p[1], p[2]];
+            self.verts.push(Vertex { pos, nrm: front });
+            self.verts.push(Vertex {
+                pos,
+                nrm: front.map(|v| -v),
+            });
+        }
+        for tri in mesh.indices.chunks(3).filter(|t| inside(t)) {
+            let at = |k: usize, back: u32| base + tri[k] * 2 + back;
+            self.indices.extend([at(0, 0), at(1, 0), at(2, 0)]);
+            self.indices.extend([at(2, 1), at(1, 1), at(0, 1)]);
+        }
     }
 
     /// Appends a tessellated Object, baked through `pose` when it has one.
