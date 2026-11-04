@@ -12,3 +12,6 @@ wangungis-tools.workspace = true
 inference.workspace = true
 eframe.workspace = true
 wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true

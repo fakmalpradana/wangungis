@@ -7,6 +7,8 @@
 //! Usage: wangungis [file.hew | file.wangun]
 
 mod camera;
+#[cfg(test)]
+mod smoke;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,6 +93,8 @@ struct App {
     last_pointer: Option<egui::Pos2>,
     ctrl_held: bool,
     error: Option<String>,
+    #[cfg(test)]
+    view_rect: egui::Rect,
 }
 
 impl App {
@@ -99,6 +103,10 @@ impl App {
             .wgpu_render_state
             .clone()
             .expect("eframe started with the wgpu renderer");
+        Self::with_render_state(rs, path)
+    }
+
+    fn with_render_state(rs: egui_wgpu::RenderState, path: Option<String>) -> Self {
         let renderer = Renderer::new(&rs.device, COLOR_FORMAT);
         let mut app = App {
             rs,
@@ -118,6 +126,8 @@ impl App {
             last_pointer: None,
             ctrl_held: false,
             error: None,
+            #[cfg(test)]
+            view_rect: egui::Rect::NOTHING,
         };
         if path.is_some() {
             app.open();
@@ -431,7 +441,9 @@ impl App {
         };
         let color = tex(
             COLOR_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
         );
         let depth = tex(DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT)
             .create_view(&Default::default());
@@ -638,6 +650,13 @@ fn union_bounds(tiles: &[PlacedBounds]) -> Option<([f64; 3], [f64; 3])> {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.shell(ui);
+    }
+}
+
+impl App {
+    /// One frame of the whole window. The smoke test drives this directly.
+    fn shell(&mut self, ui: &mut egui::Ui) {
         self.handle_keys(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -761,6 +780,10 @@ impl eframe::App for App {
                     self.camera_moved();
                 }
                 let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+                #[cfg(test)]
+                {
+                    self.view_rect = rect;
+                }
                 self.navigate(ui, &resp, size);
                 // The panels above were drawn before this input: show it now.
                 if self.pointer_input(&resp, rect, size) {
@@ -773,9 +796,7 @@ impl eframe::App for App {
                 }
             });
     }
-}
 
-impl App {
     /// Middle-drag, or Alt + left-drag on a trackpad: orbit; with Shift: pan.
     /// Scroll: zoom. The plain left button belongs to the tool.
     fn navigate(&mut self, ui: &egui::Ui, resp: &egui::Response, size: egui::Vec2) {
