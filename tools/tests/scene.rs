@@ -8,7 +8,7 @@ use proptest::prelude::*;
 use std::num::NonZeroU32;
 use wangungis_scene::project::{Project, TileKey};
 use wangungis_scene::{KERNEL_FRAME_BOUND_M, ProjectOrigin};
-use wangungis_tools::{EditError, Movable, Scene};
+use wangungis_tools::{EditError, Erasable, Movable, Scene};
 
 const MM: f64 = 1e-3;
 const UTM49S: ProjectOrigin = ProjectOrigin {
@@ -1077,4 +1077,85 @@ fn a_stale_pick_is_refused() {
     s.undo().unwrap();
     s.undo().unwrap();
     assert!(s.translate(&m, NOUGHT).is_err(), "the solid is gone");
+}
+
+fn erasable(s: &mut Scene, from: [f64; 3], at: [f64; 3]) -> Erasable {
+    let hit = s.snap(&query(from, at)).expect("a snap");
+    s.erasable_at(&hit)
+        .unwrap_or_else(|| panic!("nothing to erase at {hit:?}"))
+}
+
+/// Erasing the line that divides a face merges it back; a real edge takes the
+/// whole solid. Each is one undo step.
+#[test]
+fn eraser_removes_lines_and_whole_solids() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    // A line right across the top divides it.
+    let (a, b) = (Point3::new(2.0, 0.0, 3.0), Point3::new(2.0, 4.0, 3.0));
+    s.draw(Some(key), top_plane(3.0), &[(a, b)]).unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 7);
+
+    let e = erasable(&mut s, [2.0, 2.0, 40.0], [2.0, 2.0, 3.0]);
+    assert!(matches!(e, Erasable::Line { .. }), "{e:?}");
+    s.erase(&e).unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 6, "the faces merged");
+    kernel_valid(&s, key);
+    s.undo().unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 7);
+    s.redo().unwrap();
+
+    // A real edge of the box: the box goes, and comes back on undo.
+    let e = erasable(&mut s, [2.0, -30.0, 30.0], [2.5, 0.0, 3.0]);
+    assert!(matches!(e, Erasable::Node { .. }), "{e:?}");
+    assert_eq!(s.erasable_lines(&e).len(), 12);
+    s.erase(&e).unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+    s.undo().unwrap();
+    assert_eq!(solids(s.project()).0, 1);
+}
+
+/// A drawn line goes alone, opening the loop it closed.
+#[test]
+fn eraser_opens_a_drawn_loop() {
+    let mut s = scene();
+    let (key, sk) = draw_rect(&mut s, 0.0, 0.0, 5.0, 4.0);
+    assert_eq!(regions(&s, key, sk).len(), 1);
+    let e = erasable(&mut s, [2.5, -20.0, 30.0], [2.5, 0.0, 0.0]);
+    s.erase(&e).unwrap();
+    assert_eq!(sketch_edges(s.project()), 3);
+    let live = s.project().tiles[&key].sketch_ids()[0];
+    assert_eq!(regions(&s, key, live).len(), 0);
+    s.undo().unwrap();
+    assert_eq!(sketch_edges(s.project()), 4);
+}
+
+/// A face holds no edge to erase; a click on it does nothing.
+#[test]
+fn eraser_ignores_faces() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let hit = s.snap(&query([2.5, 2.0, 40.0], [2.5, 2.0, 3.0])).unwrap();
+    assert_eq!(hit.snap.kind, SnapKind::OnFace);
+    assert_eq!(s.erasable_at(&hit), None);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    /// A shape drawn on a face and erased line by line leaves a valid solid, and
+    /// undoing it all restores the file.
+    #[test]
+    fn erasing_drawing_keeps_the_solid_valid(
+        x in 0.5f64..2.5, y in 0.5f64..1.5, w in 1.5f64..2.5, d in 1.0f64..2.0,
+    ) {
+        let mut s = scene();
+        let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+        s.draw(Some(key), top_plane(3.0), &ring_at(3.0, x, y, w, d)).unwrap();
+        let drawn = s.project().save();
+        let e = erasable(&mut s, [x + w / 2.0, y - 20.0, 30.0], [x + w / 2.0, y, 3.0]);
+        s.erase(&e).unwrap();
+        kernel_valid(&s, key);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &drawn);
+    }
 }

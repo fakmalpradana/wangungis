@@ -11,11 +11,12 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `extrude(tile, sketch, region, distance)`, `push_pull(tile, source, distance)`.
 - `movable_at(&Hit) -> Option<Movable>`, `movable_lines(&Movable)`: yang diangkat Move, yaitu seluruh node puncak (objek, grup, instance) atau gambar tersambung pada sketch bebas.
 - `translate(&Movable, delta)`, `copy(&Movable, step, count)`, `respace_copy(&Movable, step, count)`: satu langkah undo. Hasil tetap di tile asal; melewati 1,5 km dari pusat tile atau batas proyek ditolak sebelum dokumen berubah. Pengecualian: gambar yang disalin keluar bidangnya dicatat satu langkah per salinan.
+- `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
-Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, push_pull, move_tool}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
+Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, push_pull, move_tool, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
 - Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
@@ -28,6 +29,7 @@ Perilaku:
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
 - **Move:** klik benda, lalu klik tujuan atau ketik jarak searah kursor. `ToggleCopy` membuat langkah berikutnya menyalin, lalu kembali ke memindah (`copying()`). Tepat setelah menyalin, `x5` membuat lima salinan sejarak salinan pertama, dan `/5` membuat lima salinan yang mengisi jarak itu; angka baru menggantikan array sebelumnya, dan semuanya tetap satu langkah undo. Benda yang dipindah tidak bisa snap ke dirinya sendiri. Tanpa snap, titik bergerak di bidang horizontal melalui titik dasar, atau di sumbu terkunci.
+- **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.
 - **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 

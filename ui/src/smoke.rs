@@ -560,3 +560,42 @@ fn ctrl_toggles_copying_in_move() {
     d.hold(egui::Modifiers::NONE);
     assert!(!d.app.tool.copying());
 }
+
+#[test]
+fn eraser_takes_a_line_then_the_box() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+    d.letter(K::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3");
+
+    // A line across the top, then erase it.
+    d.letter(K::L, "l");
+    d.click([3.5, 1.0, 3.0]);
+    d.click([3.5, 5.0, 3.0]);
+    d.key(K::Escape);
+    let faces = |d: &Driver| {
+        let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
+        let ids = doc.visible_object_ids();
+        ids.first()
+            .map_or(0, |o| doc.object(*o).unwrap().faces().len())
+    };
+    assert_eq!(faces(&d), 7);
+    d.letter(K::E, "e");
+    d.hover([3.5, 2.0, 3.0]);
+    assert!(!d.app.tool.preview().lines.is_empty(), "the line lights up");
+    d.click([3.5, 2.0, 3.0]);
+    assert_eq!(d.app.error, None);
+    assert_eq!(faces(&d), 6, "the top is whole again");
+
+    // A real edge takes the box.
+    d.click([3.5, 1.0, 3.0]);
+    assert_eq!(d.counts(), (0, 0));
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.counts(), (1, 12));
+}

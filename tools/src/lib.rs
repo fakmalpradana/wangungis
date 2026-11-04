@@ -124,6 +124,20 @@ impl Movable {
     }
 }
 
+/// What the Eraser would remove at a snap.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Erasable {
+    /// A whole top-level solid: its edge is no drawing, so nothing less is valid.
+    Node { tile: TileKey, node: NodeId },
+    /// A drawn line, free or dividing a solid's face. Tile-local.
+    Line {
+        tile: TileKey,
+        plane: Plane,
+        a: Point3,
+        b: Point3,
+    },
+}
+
 /// Lines drawn for a picked object at most. Past this the preview is partial,
 /// never the edit.
 const MAX_PREVIEW_LINES: usize = 5_000;
@@ -785,6 +799,127 @@ impl Scene {
             .into_iter()
             .map(|(a, b)| (onset(a, c), onset(b, c)))
             .collect()
+    }
+
+    /// What the Eraser would remove at `hit`: only edges count, as faces belong
+    /// to their edges. `None` over a face, a corner, or nothing.
+    pub fn erasable_at(&self, hit: &Hit) -> Option<Erasable> {
+        let tile = hit.tile;
+        let doc = self.project.tiles.get(&tile)?;
+        if let Some((sketch, edge)) = hit.snap.sketch_source {
+            let sk = doc.sketch(sketch)?;
+            let e = sk.edges().get(edge)?;
+            return Some(Erasable::Line {
+                tile,
+                plane: sk.plane(),
+                a: sk.vertices()[e.from].position,
+                b: sk.vertices()[e.to].position,
+            });
+        }
+        let source = hit.snap.source?;
+        let inference::ElementRef::Edge(edge) = source.element else {
+            return None;
+        };
+        let node = |doc: &Document| {
+            doc.top_level_nodes()
+                .into_iter()
+                .find(|n| match source.instance {
+                    Some(inst) => doc.leaf_instances_under(*n).contains(&inst),
+                    None => doc.leaf_objects_under(*n).contains(&source.object),
+                })
+        };
+        if source.instance.is_none() {
+            let (a, b) = doc.object(source.object)?.edge_endpoints(edge)?;
+            let on = |p: &Plane| {
+                [a, b]
+                    .iter()
+                    .all(|q| p.signed_distance(*q).abs() <= IN_PLANE)
+            };
+            // An edge on a plane where the object carries drawing may be drawing
+            // itself; drafting refuses it if it is the solid's own.
+            if let Some(plane) = doc
+                .object_drawing_planes(source.object)
+                .iter()
+                .find(|p| on(p))
+            {
+                return Some(Erasable::Line {
+                    tile,
+                    plane: *plane,
+                    a,
+                    b,
+                });
+            }
+        }
+        Some(Erasable::Node {
+            tile,
+            node: node(doc)?,
+        })
+    }
+
+    /// Lines to highlight what would be erased, project-local.
+    pub fn erasable_lines(&self, e: &Erasable) -> Vec<(Point3, Point3)> {
+        match e {
+            Erasable::Node { tile, node } => self.movable_lines(&Movable::Node {
+                tile: *tile,
+                node: *node,
+            }),
+            Erasable::Line { tile, a, b, .. } => {
+                let c = tile.center();
+                vec![(onset(*a, c), onset(*b, c))]
+            }
+        }
+    }
+
+    /// Removes `e` as one undo step. A line's faces fall with it: a loop it
+    /// closed opens, and on a solid the two faces it divided merge.
+    pub fn erase(&mut self, e: &Erasable) -> Result<(), EditError> {
+        match e {
+            Erasable::Node { tile, node } => {
+                let doc = self.project.tile_mut(*tile)?;
+                doc.delete_node(*node).map_err(kernel_err)?;
+                self.record(*tile);
+            }
+            Erasable::Line { tile, plane, a, b } => {
+                let doc = self.project.tile_mut(*tile)?;
+                let objects = doc.drawable_objects_on_plane(*plane, None);
+                let (report, _) = doc
+                    .draft(*plane, None, &objects, "erase", |sk| {
+                        let near = |p: Point3, q: Point3| (p - q).length() <= IN_PLANE;
+                        // Drafting may have split it where other drawing meets it.
+                        let on = |p: Point3| {
+                            let (u, v) = (*b - *a, p - *a);
+                            let t = v.dot(u) / u.dot(u);
+                            (0.0..=1.0).contains(&t) && (v - u * t).length() <= IN_PLANE
+                        };
+                        let pieces: Vec<_> = sk
+                            .edges()
+                            .iter()
+                            .filter(|(_, e)| {
+                                let (p, q) =
+                                    (sk.vertices()[e.from].position, sk.vertices()[e.to].position);
+                                (near(p, *a) && near(q, *b))
+                                    || (near(p, *b) && near(q, *a))
+                                    || (on(p) && on(q))
+                            })
+                            .map(|(id, _)| id)
+                            .collect();
+                        for piece in pieces {
+                            sk.remove_edge(piece)?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| match e {
+                        kernel::DocumentError::DraftBoundaryEdgeTouched => EditError::Unsupported(
+                            "tepi solid tidak bisa dihapus sendiri; pilih seluruh objek",
+                        ),
+                        other => kernel_err(other),
+                    })?;
+                if !report.objects.is_empty() || !report.sketches.is_empty() {
+                    self.record(*tile);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Refuses a displacement carrying `m` past the tile or project bound.

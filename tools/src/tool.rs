@@ -90,6 +90,10 @@ enum State {
         /// The copy just made, which a typed count turns into an array.
         last: Option<(Movable, Vec3)>,
     },
+    Erase {
+        /// What a click would remove.
+        hover: Vec<(Point3, Point3)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +134,15 @@ fn query(ray: PickRay, aperture: f64) -> SnapQuery {
         soft_axis_aperture_scale: None,
         off_plane_points: false,
         see_through_points: false,
+    }
+}
+
+/// "What is under the cursor", for a click that picks rather than draws: a corner
+/// does not reach past the aperture, so edges stay reachable next to it.
+fn pick_query(ray: PickRay, aperture: f64) -> SnapQuery {
+    SnapQuery {
+        weights: SnapWeights::standard().for_picking(),
+        ..query(ray, aperture)
     }
 }
 
@@ -375,6 +388,10 @@ impl Tool {
         )
     }
 
+    pub fn eraser(aperture: f64) -> Self {
+        Self::with(State::Erase { hover: Vec::new() }, aperture)
+    }
+
     /// Whether the next move copies.
     pub fn copying(&self) -> bool {
         matches!(self.state, State::Move { copy: true, .. })
@@ -409,6 +426,7 @@ impl Tool {
             State::Rectangle { first, .. } => first.is_some(),
             State::PushPull { armed, .. } => armed.is_some(),
             State::Move { moving, .. } => moving.is_some(),
+            State::Erase { .. } => false,
         }
     }
 
@@ -421,6 +439,7 @@ impl Tool {
             State::Rectangle { .. } => Self::rectangle(aperture),
             State::PushPull { .. } => Self::push_pull(aperture),
             State::Move { .. } => Self::move_tool(aperture),
+            State::Erase { .. } => Self::eraser(aperture),
         };
     }
 
@@ -436,6 +455,7 @@ impl Tool {
             State::Rectangle { .. } => self.handle_rectangle(scene, input),
             State::PushPull { .. } => self.handle_push_pull(scene, input),
             State::Move { .. } => self.handle_move(scene, input),
+            State::Erase { .. } => self.handle_erase(scene, input),
         }?;
         if !hovering {
             // A click or typed value ends what the marker described.
@@ -447,9 +467,9 @@ impl Tool {
 
     fn handle_select(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         match input {
-            Input::Hover(ray) => self.preview.snap = scene.snap(&query(ray, self.aperture)),
+            Input::Hover(ray) => self.preview.snap = scene.snap(&pick_query(ray, self.aperture)),
             Input::Click(ray) => {
-                let hit = scene.snap(&query(ray, self.aperture));
+                let hit = scene.snap(&pick_query(ray, self.aperture));
                 let picked = hit.and_then(|h| match (h.snap.source, h.snap.sketch_region_source) {
                     (Some(source), _) => Some(Target::Solid {
                         tile: h.tile,
@@ -616,6 +636,33 @@ impl Tool {
         }
         scene.draw(Some(tile), *plane, &ring(&rectangle(a, plane, w, d)))?;
         Ok(true)
+    }
+
+    fn handle_erase(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Erase { hover } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => {
+                let hit = scene.snap(&pick_query(ray, aperture));
+                self.preview.snap = hit;
+                *hover = hit
+                    .and_then(|h| scene.erasable_at(&h))
+                    .map_or_else(Vec::new, |e| scene.erasable_lines(&e));
+            }
+            Input::Click(ray) => {
+                let target = scene
+                    .snap(&pick_query(ray, aperture))
+                    .and_then(|h| scene.erasable_at(&h));
+                if let Some(e) = target {
+                    scene.erase(&e)?;
+                    hover.clear();
+                }
+            }
+            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        Ok(())
     }
 
     fn handle_move(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
@@ -845,6 +892,7 @@ impl Tool {
                 }
                 _ => Vec::new(),
             },
+            State::Erase { hover } => hover.clone(),
             State::Move { moving, hover, .. } => match moving {
                 None => hover.clone(),
                 Some(m) => {

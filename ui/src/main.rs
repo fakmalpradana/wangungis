@@ -374,6 +374,7 @@ impl App {
             K::R if self.typed.is_empty() => self.switch_tool(Tool::rectangle),
             K::P if self.typed.is_empty() => self.switch_tool(Tool::push_pull),
             K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
+            K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
             K::C if self.typed.is_empty() => self.feed(Input::ToggleCopy),
             _ => {}
         }
@@ -679,6 +680,7 @@ impl App {
                     ("Persegi (R)", Tool::rectangle),
                     ("Push/Pull (P)", Tool::push_pull),
                     ("Pindah (M)", Tool::move_tool),
+                    ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui
                         .selectable_label(self.tool.same_kind(&make(0.0)), label)
