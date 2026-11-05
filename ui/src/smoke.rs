@@ -732,6 +732,55 @@ fn push_pull_with_ctrl_through_the_app() {
     close(d.extents(), [5.0, 4.0, 3.0]);
 }
 
+/// Pulling a top up to a corner of another solid, through the app: the marker
+/// names the corner and the height comes out exact.
+#[test]
+fn push_pull_snaps_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    d.letter(K::R, "r");
+    d.click([12.0, 2.0, 0.0]);
+    d.hover([13.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([13.5, 3.0, 0.0]);
+    d.value("6");
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+
+    d.click([4.5, 4.0, 3.0]);
+    d.hover([12.0, 2.0, 6.0]);
+    let kind = d.app.tool.preview().snap.map(|h| snap_label(h.snap.kind));
+    assert_eq!(kind, Some(snap_label(inference::SnapKind::Endpoint)));
+    d.click([12.0, 2.0, 6.0]);
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.counts().0, 2);
+    let top = d
+        .app
+        .scene
+        .project()
+        .tiles
+        .values()
+        .flat_map(|doc| {
+            doc.visible_object_ids()
+                .into_iter()
+                .filter_map(|id| doc.object(id).map(|o| o.vertices().clone()))
+                .collect::<Vec<_>>()
+        })
+        .flat_map(|v| {
+            v.values()
+                .map(|p| (p.position.x, p.position.z))
+                .collect::<Vec<_>>()
+        })
+        .filter(|(x, _)| *x < 8.0)
+        .map(|(_, z)| z)
+        .fold(f64::MIN, f64::max);
+    assert!((top - 6.0).abs() < 1e-3, "{top}");
+}
+
 /// B paints the face under the pointer: the view shows it, undo takes it off.
 #[test]
 fn paint_a_face_through_the_app() {
