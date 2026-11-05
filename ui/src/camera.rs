@@ -3,6 +3,15 @@
 use wangungis_render::Camera;
 
 pub const FOVY: f32 = 0.8;
+/// Standard views: label, yaw, pitch (rad).
+pub const VIEWS: [(&str, f64, f64); 6] = [
+    ("Atas", -std::f64::consts::FRAC_PI_2, PITCH_LIMIT),
+    ("Depan", -std::f64::consts::FRAC_PI_2, 0.0),
+    ("Belakang", std::f64::consts::FRAC_PI_2, 0.0),
+    ("Kiri", std::f64::consts::PI, 0.0),
+    ("Kanan", 0.0, 0.0),
+    ("Iso", -2.356194490192345, 0.6154797086703873),
+];
 
 /// Camera orbiting `target` at `distance`, z up. Angles in radians.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,6 +147,29 @@ impl Orbit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each view looks from where its name says, at the target.
+    #[test]
+    fn standard_views_look_from_their_side() {
+        let eye = |name: &str| {
+            let (_, yaw, pitch) = VIEWS.iter().copied().find(|v| v.0 == name).unwrap();
+            let o = Orbit {
+                target: [0.0; 3],
+                distance: 10.0,
+                yaw,
+                pitch,
+                scene: None,
+            };
+            o.eye()
+        };
+        assert!(eye("Atas")[2] > 9.9, "{:?}", eye("Atas"));
+        assert!(eye("Depan")[1] < -9.9, "{:?}", eye("Depan"));
+        assert!(eye("Belakang")[1] > 9.9, "{:?}", eye("Belakang"));
+        assert!(eye("Kiri")[0] < -9.9, "{:?}", eye("Kiri"));
+        assert!(eye("Kanan")[0] > 9.9, "{:?}", eye("Kanan"));
+        let iso = eye("Iso");
+        assert!(iso[0] < -5.0 && iso[1] < -5.0 && iso[2] > 5.0, "{iso:?}");
+    }
 
     fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
         (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f64>().sqrt()

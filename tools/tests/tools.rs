@@ -873,3 +873,183 @@ fn typed_move_keeps_to_a_late_lock() {
     typed(&mut m, &mut s, "2").unwrap();
     assert_box(&s, [12.0, 10.0, 0.0], [17.0, 14.0, 3.0]);
 }
+
+/// Shift adds to what Select holds and takes back what it already holds.
+#[test]
+fn shift_click_builds_a_selection() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [30.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [32.0, 12.0, 0.0]);
+    typed(&mut r, &mut s, "5;4").unwrap();
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [32.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+
+    let mut t = Tool::select(APERTURE);
+    assert_eq!(t.picked_nodes(), None);
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1);
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    let (tile, both) = t.picked_nodes().unwrap();
+    assert_eq!(both.len(), 2);
+    assert!(t.preview().lines.len() >= 24, "both are outlined");
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1, "shift takes it back");
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    // A plain click starts over.
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1);
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+
+    s.group(tile, &both).unwrap();
+    assert_eq!(s.project().tiles[&tile].top_level_nodes().len(), 1);
+    // Other tools take shift-click as a click.
+    let mut m = Tool::move_tool(APERTURE);
+    m.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    assert!(m.busy());
+}
+
+#[test]
+fn tape_measures_and_leaves_guides_that_snap() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut t = Tool::tape(APERTURE);
+    // From an edge: a parallel line through where it ends.
+    click(&mut t, &mut s, [12.5, 10.0, 0.0]);
+    assert!(t.busy());
+    hover(&mut t, &mut s, [12.5, 8.0, 0.0]);
+    let m = t.measure().unwrap();
+    assert!((m - 2.0).abs() < 0.05, "{m}");
+    assert!(typed(&mut t, &mut s, "0").is_err(), "zero says so");
+    assert!(t.busy());
+    typed(&mut t, &mut s, "3").unwrap();
+    assert!(!t.busy());
+    let lines = s.guide_lines();
+    assert_eq!(lines.len(), 1);
+    let (a, b) = lines[0];
+    assert!(
+        (a.y - 7.0).abs() <= MM && (b.y - 7.0).abs() <= MM,
+        "{a:?} {b:?}"
+    );
+    assert!((a.x - b.x).abs() > 100.0, "along the edge");
+
+    // A rectangle corner snaps onto the guide.
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [30.0, 7.02, 0.0]);
+    hover(&mut r, &mut s, [33.0, 4.0, 0.0]);
+    typed(&mut r, &mut s, "1;1").unwrap();
+    assert!(
+        sketch_points(&s).iter().any(|p| (p.y - 7.0).abs() <= MM),
+        "{:?}",
+        sketch_points(&s)
+    );
+
+    // One undo step each, and all gone at once.
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert!(s.guide_lines().is_empty());
+    s.redo().unwrap();
+    assert_eq!(s.guide_lines().len(), 1);
+    s.delete_guides().unwrap();
+    assert!(s.guide_lines().is_empty());
+    s.undo().unwrap();
+    assert_eq!(s.guide_lines().len(), 1);
+
+    // From a corner: a point.
+    click(&mut t, &mut s, [10.0, 10.0, 3.0]);
+    click(&mut t, &mut s, [18.0, 18.0, 3.0]);
+    assert!(!t.busy());
+    assert_eq!(s.guide_lines().len(), 4, "the line, and a cross of three");
+    // A guide saves with the project.
+    let bytes = s.project().save();
+    assert_eq!(Project::open(&bytes).unwrap().save(), bytes);
+}
+
+#[test]
+fn follow_me_sweeps_a_region_along_a_line() {
+    let mut s = scene();
+    // The profile: 1 x 1 on the plane x = 0, facing +x. The path along +x from it.
+    let wall =
+        kernel::Plane::from_point_normal(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+    let p = |y: f64, z: f64| Point3::new(0.0, y, z);
+    let r = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)];
+    let segs: Vec<_> = (0..4).map(|k| (r[k], r[(k + 1) % 4])).collect();
+    s.draw(None, wall, &segs).unwrap();
+    let (a, b, c) = (
+        Point3::new(0.0, 0.5, 0.0),
+        Point3::new(10.0, 0.5, 0.0),
+        Point3::new(10.0, 8.0, 0.0),
+    );
+    // The path on the ground, away from the wall's own plane.
+    let ground =
+        kernel::Plane::from_point_normal(Point3::ORIGIN, Vec3::new(0.0, 0.0, 1.0)).unwrap();
+    s.draw(None, ground, &[(a, b), (b, c)]).unwrap();
+
+    let mut f = Tool::follow_me(APERTURE);
+    let from_x = |at: [f64; 3]| PickRay {
+        origin: Point3::new(at[0] + 10.0, at[1], at[2]),
+        direction: Vec3::new(-1.0, 0.0, 0.0),
+    };
+    assert!(
+        f.handle(&mut s, Input::Click(ray([10.0, 30.0, 0.0])))
+            .is_ok(),
+        "a click on nothing does nothing"
+    );
+    assert!(!f.busy());
+    f.handle(&mut s, Input::Click(from_x([0.0, 0.5, 0.6])))
+        .unwrap();
+    assert!(f.busy(), "the profile is picked");
+    assert_eq!(f.preview().lines.len(), 4);
+    f.handle(&mut s, Input::Click(ray([5.0, 0.5, 0.0])))
+        .unwrap();
+    assert!(!f.busy());
+    let all = bounds(&s);
+    assert_eq!(all.len(), 1, "one solid");
+    let (lo, hi) = all[0];
+    assert!(
+        (hi[1] - 8.0).abs() < 1.0 && hi[0] > 9.5 && lo[2].abs() <= MM,
+        "{lo:?} {hi:?}"
+    );
+    s.undo().unwrap();
+    assert!(bounds(&s).is_empty());
+}
+
+/// A tile holding only a guide is still part of the saved project.
+#[test]
+fn a_guide_alone_in_a_tile_is_saved() {
+    let mut s = scene();
+    s.add_guide_point(Point3::new(3_000.0, 3_000.0, 0.0))
+        .unwrap();
+    let reopened = Project::open(&s.project().save()).unwrap();
+    assert_eq!(
+        reopened.occupied().count(),
+        2,
+        "origin tile and the guide's"
+    );
+    assert_eq!(Scene::new(reopened).guide_lines().len(), 3);
+    assert_eq!(s.guide_lines().len(), 3);
+}
+
+/// What Shift takes back stops being lit, and an emptied selection is no selection.
+#[test]
+fn shift_taking_back_clears_its_outline() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut t = Tool::select(APERTURE);
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert!(t.busy());
+    t.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    assert_eq!(t.picked_nodes(), None);
+    assert!(t.preview().lines.is_empty());
+    assert!(!t.busy(), "nothing is held");
+    assert_eq!(t.selected(), None);
+}

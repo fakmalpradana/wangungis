@@ -45,11 +45,16 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 12. Tekan **E**, arahkan ke garis pintu yang belum didorong, klik: garis hilang dan face menyatu. Klik tepi kotak: seluruh kotak hilang. Cmd+Z mengembalikannya.
 13. Tekan **Q**, klik sudut kotak, klik arah nol, ketik `90` lalu Enter. Lalu **S**, klik kotak, ketik `2` lalu Enter: dua kali lebih besar.
 14. Tekan **C**, klik pusat, ketik `2` lalu Enter: lingkaran terisi, bisa di-Push/Pull jadi silinder. **G**, ketik `8s`, klik pusat, klik radius: segi delapan. **A**, klik dua ujung, gerakkan kursor, klik: busur. **F**, klik region, ketik `0,5` lalu Enter: tepi sejajar.
-15. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
+15. Isi kotak atas dengan `/tmp/uji.obj` (atau `.stl`, `.glb`, `.3mf`), tekan **Ekspor**, buka di Blender. Skala dan posisinya harus sama.
+16. Coba tombol tampilan: Atas, Depan, Kanan, Iso.
+17. Tekan **Spasi**, klik kotak, Shift + klik kotak lain, tekan **Grup**. Tekan **M**, geser: keduanya ikut. **Pecah** mengembalikan. **Komponen** lalu salin dengan **M** dan **C**: salinannya berbagi geometri. **Delete** menghapus yang terpilih.
+18. Tekan **T**, klik tepi kotak, gerakkan kursor menjauh (status bar menulis jarak), ketik `2` lalu Enter: garis panduan muncul dan garis baru menempel padanya. **Hapus panduan** menghapusnya.
+19. **Follow Me:** gambar persegi kecil di dinding, gambar garis dari tengah persegi menjauh dari dinding. Klik Follow Me, klik persegi, klik garis: terbentuk batang.
+20. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
 
 ## Pengaman data
 Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
 
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
-- Belum ada dialog file.
+- Belum ada dialog file, dan belum bisa mengedit isi grup atau komponen di tempat.

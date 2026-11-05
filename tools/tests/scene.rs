@@ -1310,3 +1310,139 @@ fn a_copy_onto_itself_is_no_step() {
     assert!(s.undo().unwrap().is_some());
     assert_eq!(s.undo().unwrap(), None, "two drawings, two steps");
 }
+
+fn nodes(s: &Scene, key: TileKey) -> Vec<kernel::NodeId> {
+    s.project().tiles[&key].top_level_nodes()
+}
+
+/// A group moves as one, survives a save, and dissolves back.
+#[test]
+fn groups_move_as_one_and_dissolve() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 10.0, 0.0, 5.0, 4.0, 3.0);
+    let both = nodes(&s, key);
+    assert_eq!(both.len(), 2);
+    s.group(key, &both).unwrap();
+    assert_eq!(nodes(&s, key).len(), 1);
+    assert_eq!(solids(s.project()).0, 2, "the geometry is untouched");
+
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    assert!(
+        matches!(
+            m,
+            Movable::Node {
+                node: kernel::NodeId::Group(_),
+                ..
+            }
+        ),
+        "{m:?}"
+    );
+    assert_eq!(s.movable_lines(&m).len(), 24, "both boxes follow");
+    s.transform(&m, &Transform::translation(Vec3::new(0.0, 20.0, 0.0)))
+        .unwrap();
+    let (lo, hi) = solids(s.project()).1.unwrap();
+    assert!(
+        (lo[1] - 20.0).abs() < MM && (hi[0] - 15.0).abs() < MM,
+        "{lo:?} {hi:?}"
+    );
+
+    let bytes = s.project().save();
+    let reopened = Project::open(&bytes).unwrap();
+    assert_eq!(
+        reopened.tiles[&key].top_level_nodes().len(),
+        1,
+        "the group is saved"
+    );
+    assert_eq!(reopened.save(), bytes);
+
+    let group = nodes(&s, key)[0];
+    s.dissolve(key, &[group]).unwrap();
+    assert_eq!(nodes(&s, key).len(), 2);
+    s.undo().unwrap();
+    assert_eq!(nodes(&s, key).len(), 1);
+    let g = nodes(&s, key);
+    assert!(matches!(s.dissolve(key, &g), Ok(())));
+    let plain = nodes(&s, key)[0];
+    assert!(
+        s.dissolve(key, &[plain]).is_err(),
+        "a plain object has nothing to dissolve"
+    );
+}
+
+/// Instances of a component share geometry; exploding one frees it.
+#[test]
+fn component_copies_are_instances() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let one = nodes(&s, key);
+    s.make_component(key, &one).unwrap();
+    assert!(matches!(nodes(&s, key)[0], kernel::NodeId::Instance(_)));
+
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    let step = Transform::translation(Vec3::new(8.0, 0.0, 0.0));
+    s.copy(&m, &step, NonZeroU32::new(3).unwrap()).unwrap();
+    let doc = &s.project().tiles[&key];
+    assert_eq!(doc.top_level_nodes().len(), 4);
+    assert!(
+        doc.top_level_nodes()
+            .iter()
+            .all(|n| matches!(n, kernel::NodeId::Instance(_)))
+    );
+    assert_eq!(
+        doc.visible_object_ids().len(),
+        0,
+        "no copy of the geometry in the world"
+    );
+
+    // Every instance snaps and picks where it stands.
+    let far = the_box(&mut s, 26.0, 2.0, 3.0);
+    assert_ne!(far, m);
+
+    let n = nodes(&s, key)[1];
+    s.dissolve(key, &[n]).unwrap();
+    assert_eq!(s.project().tiles[&key].visible_object_ids().len(), 1);
+    s.undo().unwrap();
+
+    let bytes = s.project().save();
+    assert_eq!(Project::open(&bytes).unwrap().save(), bytes);
+}
+
+#[test]
+fn deleting_nodes_is_one_step() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 10.0, 0.0, 5.0, 4.0, 3.0);
+    let both = nodes(&s, key);
+    s.delete_nodes(key, &both).unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+    s.undo().unwrap();
+    assert_eq!(solids(s.project()).0, 2);
+}
+
+/// Dissolving several at once is one step, and skips what has nothing to dissolve.
+#[test]
+fn dissolving_several_is_one_step() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 10.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 20.0, 0.0, 5.0, 4.0, 3.0);
+    let all = nodes(&s, key);
+    s.group(key, &all[..1]).unwrap();
+    let now = nodes(&s, key);
+    let second = *now
+        .iter()
+        .find(|n| matches!(n, kernel::NodeId::Object(_)))
+        .unwrap();
+    s.make_component(key, &[second]).unwrap();
+    let mixed = nodes(&s, key);
+    assert_eq!(mixed.len(), 3);
+    s.dissolve(key, &mixed).unwrap();
+    assert!(
+        nodes(&s, key)
+            .iter()
+            .all(|n| matches!(n, kernel::NodeId::Object(_)))
+    );
+    s.undo().unwrap();
+    assert_eq!(nodes(&s, key), mixed, "one undo restores them all");
+}

@@ -1304,6 +1304,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-export"
+version = "1.3.1"
+source = "git+https://github.com/hew3d/hew?rev=612c1c15e68f7d9ce3763dca17079f5263dc6137#612c1c15e68f7d9ce3763dca17079f5263dc6137"
+dependencies = [
+ "kernel",
+ "serde_json",
+ "tessellate",
+ "zip",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2698,10 +2709,22 @@ dependencies = [
  "inference",
  "kernel",
  "pollster",
+ "wangungis-io",
  "wangungis-render",
  "wangungis-scene",
  "wangungis-tools",
  "wgpu",
+]
+
+[[package]]
+name = "wangungis-io"
+version = "0.0.0"
+dependencies = [
+ "kernel",
+ "mesh-export",
+ "tessellate",
+ "wangungis-scene",
+ "wangungis-tools",
 ]
 
 [[package]]
