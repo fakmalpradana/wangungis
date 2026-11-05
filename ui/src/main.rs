@@ -137,7 +137,6 @@ struct App {
     orbit: Orbit,
     /// Zoom extents on the next frame, once the viewport aspect is known.
     fit_pending: bool,
-    path: String,
     scene: Scene,
     tool: Tool,
     /// Lengths are shown in this, and bare typed lengths read in it.
@@ -165,8 +164,12 @@ struct App {
     overlay_shown: Option<Preview>,
     last_pointer: Option<egui::Pos2>,
     moved_since_click: bool,
-    /// The path box had focus last frame.
-    path_focused: bool,
+    /// A file window waiting for the end of the frame.
+    dialog: Option<Dialog>,
+    /// What to do once the Save As window this question opened has saved.
+    after_save: Option<Leaving>,
+    /// The window saying which files go where.
+    formats_open: bool,
     ctrl_held: bool,
     /// Another key or button went down while Ctrl was held.
     ctrl_chord: bool,
@@ -185,8 +188,6 @@ struct App {
     closing: bool,
     #[cfg(test)]
     view_rect: egui::Rect,
-    #[cfg(test)]
-    path_rect: egui::Rect,
 }
 
 impl App {
@@ -214,7 +215,6 @@ impl App {
             view: None,
             orbit: Orbit::default(),
             fit_pending: false,
-            path: path.clone().unwrap_or_default(),
             scene: empty_scene(),
             tool: Tool::select(0.01),
             unit: Unit::default(),
@@ -234,7 +234,9 @@ impl App {
             overlay_shown: None,
             last_pointer: None,
             moved_since_click: false,
-            path_focused: false,
+            dialog: None,
+            after_save: None,
+            formats_open: false,
             ctrl_held: false,
             ctrl_chord: false,
             error: None,
@@ -247,11 +249,9 @@ impl App {
             closing: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
-            #[cfg(test)]
-            path_rect: egui::Rect::NOTHING,
         };
-        if path.is_some() {
-            app.open();
+        if let Some(path) = path {
+            app.open_path(Path::new(&path));
         }
         app
     }
@@ -288,7 +288,7 @@ impl App {
         self.leaving = None;
         match what {
             Leaving::New => self.new_project(),
-            Leaving::Open => self.open(),
+            Leaving::Open => self.dialog = Some(Dialog::Open),
             Leaving::Close => {
                 // The user chose to lose the changes, or there were none.
                 self.drop_autosave();
@@ -340,7 +340,6 @@ impl App {
             Ok(project) => {
                 self.adopt(Scene::new(project));
                 self.source = Source::default();
-                self.path.clear();
                 self.unsaved = true;
                 self.split_on_open = false;
                 self.fit_pending = true;
@@ -359,17 +358,15 @@ impl App {
         self.notice = None;
         self.adopt(empty_scene());
         self.source = Source::default();
-        // Simpan writes to this box next: it must not still name the old file.
-        self.path.clear();
         self.unsaved = false;
         self.split_on_open = false;
     }
 
-    fn open(&mut self) {
+    fn open_path(&mut self, path: &Path) {
         self.error = None;
         self.notice = None;
-        let opened = std::fs::read(&self.path)
-            .map_err(|e| format!("Tidak bisa membaca {}: {e}", self.path))
+        let opened = std::fs::read(path)
+            .map_err(|e| format!("Tidak bisa membaca {}: {e}", path.display()))
             .and_then(|bytes| {
                 Project::open(&bytes)
                     .map(|p| (p, Project::is_container(&bytes)))
@@ -380,7 +377,7 @@ impl App {
                 self.split_on_open = !container && project.single().is_none();
                 self.unsaved = self.split_on_open;
                 self.source = Source {
-                    path: Some(self.path.clone().into()),
+                    path: Some(path.to_owned()),
                     container,
                 };
                 self.adopt(Scene::new(project));
@@ -390,27 +387,31 @@ impl App {
         }
     }
 
+    /// Simpan: over the file it came from, or asks where for a new project.
     fn save(&mut self) {
+        match self.source.path.clone() {
+            Some(path) => self.save_to(&path),
+            None => self.dialog = Some(Dialog::SaveAs),
+        }
+    }
+
+    /// Writes the project to `chosen`, in the format its tile count calls for. The
+    /// file window has already asked about replacing `chosen`. It has not asked
+    /// about a name changed here, so that one never replaces anything.
+    fn save_to(&mut self, chosen: &Path) {
         self.notice = None;
         let project = self.scene.project();
         let single = project.single().is_some();
-        let target = match save_target(&self.source, &self.path, single) {
-            Ok(t) => t,
-            Err(e) => {
-                self.error = Some(e);
-                return;
-            }
-        };
-        if self.source.path.as_deref() != Some(&target) && target.exists() {
+        let target = save_target(&self.source, chosen, single);
+        if target != chosen && self.source.path.as_deref() != Some(&target) && target.exists() {
             self.error = Some(format!(
-                "{} sudah ada dan bukan file yang sedang dibuka. Pakai nama lain.",
+                "{} sudah ada dan bukan file yang sedang dibuka. Pakai Simpan sebagai dengan nama lain.",
                 target.display()
             ));
             return;
         }
         match write_atomic(&target, &project.save()) {
             Ok(()) => {
-                self.path = target.to_string_lossy().into_owned();
                 self.source = Source {
                     path: Some(target),
                     container: !single,
@@ -424,26 +425,20 @@ impl App {
         }
     }
 
-    /// Writes the project to the path box as the format its extension names.
-    /// Never over an existing file.
-    fn export(&mut self) {
+    /// Writes the project to `target` as the format its extension names.
+    fn export_to(&mut self, target: &Path) {
         self.notice = None;
-        let target = PathBuf::from(self.path.trim());
         let format = target
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .filter(|e| wangungis_io::FORMATS.contains(&e.as_str()));
         let Some(format) = format else {
             self.error = Some(format!(
-                "Isi kotak atas dengan path ber-ekstensi: {}.",
+                "Nama file harus berakhiran salah satu dari: {}.",
                 wangungis_io::FORMATS.join(", ")
             ));
             return;
         };
-        if target.exists() {
-            self.error = Some(format!("{} sudah ada. Pakai nama lain.", target.display()));
-            return;
-        }
         let written = wangungis_io::export(self.scene.project(), &format)
             .map_err(|e| match e {
                 wangungis_io::ExportError::MultiTile => {
@@ -454,7 +449,7 @@ impl App {
                 }
                 other => format!("Ekspor gagal: {other:?}"),
             })
-            .and_then(|bytes| write_atomic(&target, &bytes).map_err(|e| e.to_string()));
+            .and_then(|bytes| write_atomic(target, &bytes).map_err(|e| e.to_string()));
         match written {
             Ok(()) => {
                 self.error = None;
@@ -462,6 +457,45 @@ impl App {
             }
             Err(e) => self.error = Some(e),
         }
+    }
+
+    /// Acts on what a file window answered. `None`: it was cancelled.
+    fn answer_dialog(&mut self, dialog: Dialog, path: Option<PathBuf>) {
+        let after_save = self.after_save.take();
+        let Some(path) = path else {
+            return;
+        };
+        match dialog {
+            Dialog::Open => self.open_path(&path),
+            Dialog::SaveAs => {
+                self.save_to(&path);
+                if let Some(what) = after_save.filter(|_| !self.unsaved) {
+                    self.do_leave(what);
+                }
+            }
+            Dialog::Export => self.export_to(&path),
+        }
+    }
+
+    /// Shows the OS file window, which holds this frame until it closes.
+    // ponytail: blocking. Nothing else can happen meanwhile, as in any modal window.
+    #[cfg(not(test))]
+    fn run_dialog(&mut self, dialog: Dialog) {
+        let single = self.scene.project().single().is_some();
+        let opened_at = std::time::Instant::now();
+        let picked = dialog.window(self.source.path.as_deref(), single);
+        // rfd answers a missing portal and zenity the same as a cancel. Nobody
+        // cancels this fast.
+        // ponytail: timing guess, as rfd gives no error to read.
+        #[cfg(target_os = "linux")]
+        if picked.is_none() && opened_at.elapsed().as_millis() < 150 {
+            self.error = Some(
+                "Jendela berkas tidak bisa dibuka. Pasang xdg-desktop-portal atau zenity.".into(),
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = opened_at;
+        self.answer_dialog(dialog, picked);
     }
 
     /// Rebuilds one tile's mesh and numbers from its document.
@@ -946,8 +980,7 @@ impl App {
             return;
         }
         // Tab must not park focus. On a button, keys stop reaching the tools and
-        // Enter presses it. In the path box, tool keys edit the path and Enter
-        // starts opening whatever that became.
+        // Enter presses it.
         ctx.memory_mut(|m| {
             if let Some(id) = m.focused() {
                 m.surrender_focus(id);
@@ -959,11 +992,6 @@ impl App {
         }
         for ev in ctx.input(|i| i.events.clone()) {
             match ev {
-                // egui cleared the box's focus before this frame: Esc is spent.
-                egui::Event::Key {
-                    key: egui::Key::Escape,
-                    ..
-                } if self.path_focused => {}
                 egui::Event::Text(text) => {
                     for ch in text.chars() {
                         if typed_accepts(&self.typed, ch) {
@@ -993,7 +1021,9 @@ impl App {
             match (key, m.shift) {
                 (K::Z, false) => self.undo(),
                 (K::Z, true) => self.redo(),
-                (K::S, _) => self.save(),
+                (K::S, false) => self.save(),
+                (K::S, true) => self.dialog = Some(Dialog::SaveAs),
+                (K::O, false) => self.leave(Leaving::Open),
                 _ => {}
             }
             return;
@@ -1270,26 +1300,99 @@ fn typed_accepts(typed: &str, ch: char) -> bool {
     }
 }
 
-/// Where Simpan writes: the path box, or the opened file when the box is empty.
-/// A single-tile project is a plain `.hew`, anything else a `.wangun`. The opened
-/// file is overwritten only when it already holds that kind, so a `.hew` that
-/// was split or grew tiles is never replaced by a container.
-fn save_target(source: &Source, path_box: &str, single: bool) -> Result<PathBuf, String> {
-    let boxed = path_box.trim();
-    let base: PathBuf = match &source.path {
-        _ if !boxed.is_empty() => boxed.into(),
-        Some(p) => p.clone(),
-        None => return Err("Isi path file di kotak atas dulu, lalu tekan Simpan.".into()),
-    };
-    let same_kind = source.path.as_ref() == Some(&base) && source.container != single;
-    Ok(if same_kind {
-        base
+/// Where a save aimed at `chosen` goes. A single-tile project is a plain `.hew`,
+/// anything else a `.wangun`. The opened file is overwritten only when it already
+/// holds that kind, so a `.hew` that was split or grew tiles is never replaced by
+/// a container.
+fn save_target(source: &Source, chosen: &Path, single: bool) -> PathBuf {
+    let same_kind = source.path.as_deref() == Some(chosen) && source.container != single;
+    if same_kind {
+        chosen.to_owned()
     } else if single {
-        base.with_extension("hew")
+        chosen.with_extension("hew")
     } else {
-        wangun_path(&base)
-    })
+        wangun_path(chosen)
+    }
 }
+
+/// A file window the user can open.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Dialog {
+    Open,
+    SaveAs,
+    Export,
+}
+
+impl Dialog {
+    /// Blocks on the OS window. `current`: the open project's file, to start beside
+    /// it. `single`: a project of one tile, which every format can hold.
+    #[cfg(not(test))]
+    fn window(self, current: Option<&Path>, single: bool) -> Option<PathBuf> {
+        let mut window = rfd::FileDialog::new();
+        if let Some(dir) = current.and_then(Path::parent) {
+            window = window.set_directory(dir);
+        }
+        let stem = current
+            .and_then(Path::file_stem)
+            .map_or("proyek".into(), |n| n.to_string_lossy());
+        match self {
+            Dialog::Open => window
+                .set_title("Buka proyek")
+                .add_filter("Proyek WangunGIS (.hew, .wangun)", &["hew", "wangun"])
+                .pick_file(),
+            Dialog::SaveAs if single => window
+                .set_title("Simpan proyek")
+                .set_file_name(format!("{stem}.hew"))
+                .add_filter("Proyek satu tile (.hew)", &["hew"])
+                .save_file(),
+            Dialog::SaveAs => window
+                .set_title("Simpan proyek")
+                .set_file_name(format!("{stem}.wangun"))
+                .add_filter("Proyek banyak tile (.wangun)", &["wangun"])
+                .save_file(),
+            Dialog::Export if single => window
+                .set_title("Ekspor model")
+                .set_file_name(format!("{stem}.obj"))
+                .add_filter("Wavefront OBJ (.obj)", &["obj"])
+                .add_filter("glTF biner (.glb)", &["glb"])
+                .add_filter("glTF (.gltf)", &["gltf"])
+                .add_filter("STL (.stl)", &["stl"])
+                .add_filter("3MF (.3mf)", &["3mf"])
+                .save_file(),
+            Dialog::Export => window
+                .set_title("Ekspor model")
+                .set_file_name(format!("{stem}.obj"))
+                .add_filter(
+                    "Wavefront OBJ (.obj), satu-satunya untuk banyak tile",
+                    &["obj"],
+                )
+                .save_file(),
+        }
+    }
+}
+
+/// What the file windows can read and write, as the Format window shows it.
+const FILE_FORMATS: [(&str, &str, &str); 7] = [
+    (
+        "Buka, Simpan",
+        ".hew",
+        "Proyek satu tile: geometri, warna, tag, nama, grup, komponen.",
+    ),
+    (
+        "Buka, Simpan",
+        ".wangun",
+        "Proyek banyak tile, isi sama. Dibuat otomatis saat proyek lebih dari satu tile.",
+    ),
+    (
+        "Ekspor",
+        ".obj",
+        "Semua tile. Tanpa warna. Koordinat lokal proyek, origin tertulis di komentar.",
+    ),
+    ("Ekspor", ".glb", "Satu tile, dengan warna. Biner."),
+    ("Ekspor", ".gltf", "Satu tile, dengan warna. Teks."),
+    ("Ekspor", ".stl", "Satu tile, tanpa warna."),
+    ("Ekspor", ".3mf", "Satu tile, dengan warna."),
+];
 
 /// Writes through a temporary file, so a failed write cannot damage `target`.
 fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -1387,29 +1490,16 @@ impl App {
         self.handle_keys(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("File:");
-                let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
-                let had_focus = std::mem::replace(&mut self.path_focused, field.has_focus());
-                #[cfg(test)]
-                {
-                    self.path_rect = field.rect;
-                }
-                // lost_focus stays true a frame longer: an Enter then is not the box's.
-                let enter = had_focus
-                    && field.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("Buka").clicked() || enter {
-                    self.leave(Leaving::Open);
-                }
-                if ui.button("Baru").clicked() {
-                    self.leave(Leaving::New);
-                }
-                if ui.button("Simpan").clicked() {
-                    self.save();
-                }
-                if ui.button("Ekspor").clicked() {
-                    self.export();
-                }
+                self.file_menu(ui);
+                ui.label(format!(
+                    "{}{}",
+                    self.source
+                        .path
+                        .as_deref()
+                        .and_then(Path::file_name)
+                        .map_or("Proyek baru".into(), |n| n.to_string_lossy()),
+                    if self.unsaved { " *" } else { "" }
+                ));
                 ui.separator();
                 for (label, make) in [
                     ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
@@ -1540,12 +1630,7 @@ impl App {
                     ui.separator();
                 }
                 ui.label(format!(
-                    "{} · {} tile · {} objek · {} segitiga",
-                    self.source
-                        .path
-                        .as_deref()
-                        .and_then(Path::file_name)
-                        .map_or("Proyek baru".into(), |n| n.to_string_lossy()),
+                    "{} tile · {} objek · {} segitiga",
                     self.tile_count(),
                     self.stats.values().map(|s| s.objects).sum::<usize>(),
                     self.stats.values().map(|s| s.triangles).sum::<usize>(),
@@ -1622,6 +1707,81 @@ impl App {
                     paint_tip(ui, rect, at, snap_label(hit.snap.kind));
                 }
             });
+        #[cfg(not(test))]
+        if let Some(dialog) = self.dialog.take() {
+            self.run_dialog(dialog);
+        }
+    }
+
+    /// The Berkas menu. Every entry says what it reads or writes.
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Berkas", |ui| {
+            let item = |ui: &mut egui::Ui, label: &str, hint: &str| {
+                let clicked = ui.button(label).on_hover_text(hint).clicked();
+                if clicked {
+                    ui.close();
+                }
+                clicked
+            };
+            if item(ui, "Baru", "Mulai proyek kosong.") {
+                self.leave(Leaving::New);
+            }
+            if item(
+                ui,
+                "Buka…  (Cmd/Ctrl+O)",
+                "Membuka proyek .hew atau .wangun.",
+            ) {
+                self.leave(Leaving::Open);
+            }
+            if item(
+                ui,
+                "Simpan  (Cmd/Ctrl+S)",
+                "Menyimpan ke file yang sedang dibuka. Proyek baru akan ditanya lokasinya.",
+            ) {
+                self.save();
+            }
+            if item(
+                ui,
+                "Simpan sebagai…  (Cmd/Ctrl+Shift+S)",
+                "Satu tile menjadi .hew, banyak tile menjadi .wangun.",
+            ) {
+                self.dialog = Some(Dialog::SaveAs);
+            }
+            if item(
+                ui,
+                "Ekspor…",
+                "Menulis model ke .obj, .glb, .gltf, .stl, atau .3mf. Proyek tidak berubah.",
+            ) {
+                self.dialog = Some(Dialog::Export);
+            }
+            ui.separator();
+            if item(ui, "Format yang didukung…", "Penjelasan tiap format.") {
+                self.formats_open = true;
+            }
+        });
+    }
+
+    /// The window explaining the formats.
+    fn formats_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.formats_open;
+        egui::Window::new("Format yang didukung")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                egui::Grid::new("formats").striped(true).show(ui, |ui| {
+                    ui.strong("Aksi");
+                    ui.strong("Format");
+                    ui.strong("Isi dan batas");
+                    ui.end_row();
+                    for (action, format, what) in FILE_FORMATS {
+                        ui.label(action);
+                        ui.monospace(format);
+                        ui.label(what);
+                        ui.end_row();
+                    }
+                });
+            });
+        self.formats_open = open;
     }
 
     fn modal(&self) -> bool {
@@ -1630,6 +1790,7 @@ impl App {
 
     /// The questions that must be answered before going on.
     fn dialogs(&mut self, ctx: &egui::Context) {
+        self.formats_window(ctx);
         let window = |title: &str| {
             egui::Window::new(title.to_owned())
                 .collapsible(false)
@@ -1655,7 +1816,11 @@ impl App {
                 ui.horizontal(|ui| {
                     if ui.button("Simpan").clicked() {
                         self.save();
-                        if !self.unsaved {
+                        if self.dialog.is_some() {
+                            // Never saved: goes on once the file window has.
+                            self.after_save = Some(what);
+                            self.leaving = None;
+                        } else if !self.unsaved {
                             self.do_leave(what);
                         } else {
                             // The reason is in the status bar.
@@ -1803,26 +1968,22 @@ mod tests {
             path: Some(p.into()),
             container,
         };
-        let t = |s: &Source, boxed: &str, single| save_target(s, boxed, single).unwrap();
+        let t = |s: &Source, chosen: &str, single| save_target(s, Path::new(chosen), single);
         // Same kind: overwrite what was opened.
-        assert_eq!(
-            t(&on_disk("/d/a.hew", false), "", true),
-            PathBuf::from("/d/a.hew")
-        );
-        assert_eq!(
-            t(&on_disk("/d/a.wangun", true), "", false),
-            PathBuf::from("/d/a.wangun")
-        );
         assert_eq!(
             t(&on_disk("/d/a.hew", false), "/d/a.hew", true),
             PathBuf::from("/d/a.hew")
+        );
+        assert_eq!(
+            t(&on_disk("/d/a.wangun", true), "/d/a.wangun", false),
+            PathBuf::from("/d/a.wangun")
         );
         // A .hew that was split or grew tiles goes beside it.
         assert_eq!(
             t(&on_disk("/d/a.hew", false), "/d/a.hew", false),
             PathBuf::from("/d/a.wangun")
         );
-        // A name typed in the box is a Save As.
+        // Another name is a Save As.
         assert_eq!(
             t(&on_disk("/d/a.hew", false), "/d/other.hew", true),
             PathBuf::from("/d/other.hew")
@@ -1831,12 +1992,11 @@ mod tests {
             t(&on_disk("/d/a.wangun", true), "/d/other", false),
             PathBuf::from("/d/other.wangun")
         );
-        // Never saved: the path box decides, the kind decides the extension.
+        // Never saved: the kind decides the extension.
         let new = Source::default();
-        assert_eq!(t(&new, " /d/b.hew ", true), PathBuf::from("/d/b.hew"));
+        assert_eq!(t(&new, "/d/b.hew", true), PathBuf::from("/d/b.hew"));
         assert_eq!(t(&new, "/d/b", true), PathBuf::from("/d/b.hew"));
         assert_eq!(t(&new, "/d/b.hew", false), PathBuf::from("/d/b.wangun"));
-        assert!(save_target(&new, "  ", true).is_err());
     }
 
     #[test]

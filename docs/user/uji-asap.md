@@ -26,7 +26,9 @@ Untuk membuka file: tambahkan `-- path/ke/file.hew`.
 | Isi angka | Langsung ketik, lalu Enter. Muncul di status bar sebagai "Nilai" |
 | Batal | Esc |
 | Undo / Redo | Cmd+Z / Shift+Cmd+Z (Ctrl di Windows dan Linux) |
-| Simpan | Cmd+S atau tombol Simpan |
+| Simpan | Cmd+S atau menu Berkas |
+| Buka | Cmd+O atau menu Berkas |
+| Simpan sebagai | Shift+Cmd+S atau menu Berkas |
 | Kunci sumbu saat Garis atau Pindah; sumbu putar | Panah kanan = X, kiri = Y, atas = Z. Saat Garis, sumbu boleh keluar dari bidang gambar |
 | Garis tegak lurus bidang gambar (keluar dari dinding) | Panah bawah |
 | Garis miring | Ketik `30d` lalu Enter: 30° dari sumbu terkunci (tanpa kunci: dari X, atau horizontal di dinding), ke arah kursor. Lalu klik atau ketik panjang |
@@ -48,13 +50,13 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face,
 6. Tetap di **P**, klik face atas, gerakkan kursor naik-turun, klik lagi. Tinggi berubah mengikuti kursor.
 7. **Cmd+Z** berkali-kali sampai kosong, lalu **Shift+Cmd+Z** sampai kotak kembali.
 8. Tekan **L**. Klik empat titik membentuk segi empat, lalu klik titik pertama lagi. Rantai berakhir sendiri. Dekatkan kursor ke sudut: penanda hijau muncul dan titik menempel.
-9. Isi path di kotak atas, misalnya `/tmp/uji.hew` (file yang belum ada). Tekan **Simpan**. Tekan **Baru**: layar kosong dan kotak path kosong. Isi path yang sama, tekan **Buka**: kotak yang sama muncul lagi. Simpan menolak menimpa file lain yang sudah ada.
+9. Tekan **Cmd+S**: jendela penyimpanan OS terbuka. Pilih folder dan nama, misalnya `uji`. Buka menu **Berkas > Baru**: layar kosong. **Berkas > Buka**, cari file tadi: kotak yang sama muncul lagi. Buka **Berkas > Format yang didukung** dan baca apakah penjelasannya cukup jelas.
 10. Gambar persegi di dinding atau atap kotak: face-nya terbelah. Tekan **P**, klik face baru, tarik keluar atau dorong ke dalam. Dorong sampai tembus untuk membuat pintu.
 11. **Tugas referensi v0.1.** Dari layar kosong: buat kotak 5×4×3 m, gambar persegi 1×2 m di dinding menyentuh lantai, dorong tembus jadi pintu. Tekan **M**, tekan **C**, klik kotak, tekan panah kanan, gerakkan kursor ke kanan, ketik `7` lalu Enter, ketik `x10` lalu Enter. Ada sebelas kotak berpintu. Satu **Cmd+Z** menghapus semua salinan. Simpan, buka ulang: sama.
 12. Tekan **E**, arahkan ke garis pintu yang belum didorong, klik: garis hilang dan face menyatu. Klik tepi kotak: seluruh kotak hilang. Cmd+Z mengembalikannya.
 13. Tekan **Q**, klik sudut kotak, klik arah nol, ketik `90` lalu Enter. Lalu **S**, klik kotak, ketik `2` lalu Enter: dua kali lebih besar.
 14. Tekan **C**, klik pusat, ketik `2` lalu Enter: lingkaran terisi, bisa di-Push/Pull jadi silinder. **G**, ketik `8s`, klik pusat, klik radius: segi delapan. **A**, klik dua ujung, gerakkan kursor, klik: busur. **F**, klik region, ketik `0,5` lalu Enter: tepi sejajar.
-15. Isi kotak atas dengan `/tmp/uji.obj` (atau `.stl`, `.glb`, `.3mf`), tekan **Ekspor**, buka di Blender. Skala dan posisinya harus sama.
+15. **Berkas > Ekspor**, pilih jenis `.obj` (atau `.stl`, `.glb`, `.3mf`) di jendela OS, simpan, buka di Blender. Skala dan posisinya harus sama.
 16. Coba tombol tampilan: Atas, Depan, Kanan, Iso.
 17. Tekan **Spasi**, klik kotak, Shift + klik kotak lain, tekan **Grup**. Tekan **M**, geser: keduanya ikut. **Pecah** mengembalikan. **Komponen** lalu salin dengan **M** dan **C**: salinannya berbagi geometri. **Delete** menghapus yang terpilih.
 18. **Garis panduan.** Tekan **T**. Klik tepi bawah kotak (penanda merah atau sian). Gerakkan kursor menjauh: garis oranye sepanjang tepi mengikuti, dan status bar menulis jarak tegak lurus dari tepi. Ketik `2` lalu Enter: muncul garis merah muda sepanjang ±200 m, dan status bar menulis "Panduan dibuat". Tekan **R**, dekatkan kursor ke garis itu: titik menempel. **Hapus panduan** menghapusnya.
