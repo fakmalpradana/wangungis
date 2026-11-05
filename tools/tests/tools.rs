@@ -2,7 +2,7 @@
 //! typed text in, geometry out. This is the uji asap without a GPU.
 
 use inference::{Axis, PickRay, SnapKind};
-use kernel::{Point3, Rgba8, Vec3};
+use kernel::{NodeId, Point3, Rgba8, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::Project;
@@ -1863,5 +1863,439 @@ proptest! {
             s.undo().unwrap();
         }
         prop_assert_eq!(bounds(&s), shape);
+    }
+}
+
+/// Three boxes side by side: the first two grouped, the third free.
+fn group_and_a_box(s: &mut Scene) -> (wangungis_scene::project::TileKey, NodeId) {
+    for x in [10.0, 30.0, 50.0] {
+        let mut r = Tool::rectangle(APERTURE);
+        click(&mut r, s, [x, 10.0, 0.0]);
+        hover(&mut r, s, [x + 1.0, 11.0, 0.0]);
+        typed(&mut r, s, "5;4").unwrap();
+        let mut p = Tool::push_pull(APERTURE);
+        click(&mut p, s, [x + 2.5, 12.0, 0.0]);
+        typed(&mut p, s, "3").unwrap();
+    }
+    let (key, doc) = s.project().tiles.iter().next().unwrap();
+    let key = *key;
+    let nodes = doc.top_level_nodes();
+    assert_eq!(nodes.len(), 3);
+    s.group(key, &nodes[..2]).unwrap();
+    let doc = &s.project().tiles[&key];
+    let group = doc
+        .top_level_nodes()
+        .into_iter()
+        .find(|n| matches!(n, NodeId::Group(_)))
+        .unwrap();
+    (key, group)
+}
+
+/// Every tool that changes something, aimed at the box at x = 50 and its face.
+fn try_every_tool_on_the_free_box(s: &mut Scene) {
+    let top = [52.5, 12.0, 3.0];
+    let edge = [55.0, 12.0, 3.0];
+    let aperture = APERTURE / 10.0;
+    let hit = |t: &mut Tool, s: &mut Scene, at: [f64; 3]| {
+        let _ = t.handle(s, Input::Click(ray(at)));
+    };
+
+    let mut p = Tool::push_pull(aperture);
+    hit(&mut p, s, top);
+    let _ = typed(&mut p, s, "1");
+    let mut k = Tool::push_pull(aperture);
+    k.handle(s, Input::ToggleCopy).unwrap();
+    hit(&mut k, s, top);
+    let _ = typed(&mut k, s, "1");
+    let mut b = Tool::paint(aperture);
+    b.set_paint(Some(paint_of(9, 9, 9)));
+    hit(&mut b, s, top);
+    let mut e = Tool::eraser(APERTURE);
+    hit(&mut e, s, edge);
+    let mut m = Tool::move_tool(APERTURE);
+    hit(&mut m, s, edge);
+    hit(&mut m, s, [70.0, 12.0, 3.0]);
+    let mut q = Tool::rotate(APERTURE);
+    hit(&mut q, s, edge);
+    hit(&mut q, s, [60.0, 12.0, 3.0]);
+    let _ = typed(&mut q, s, "45");
+    let mut c = Tool::scale(APERTURE);
+    hit(&mut c, s, edge);
+    let _ = typed(&mut c, s, "2");
+    let mut o = Tool::offset(aperture);
+    hit(&mut o, s, top);
+    let _ = typed(&mut o, s, "0.5");
+    let mut f = Tool::follow_me(aperture);
+    hit(&mut f, s, top);
+    // A line drawn across the face must not split it.
+    let mut l = Tool::line(aperture);
+    hit(&mut l, s, [51.0, 11.0, 3.0]);
+    hit(&mut l, s, [54.0, 13.0, 3.0]);
+    let _ = l.handle(s, Input::Cancel);
+}
+
+/// The free box as (vertices, faces, painted faces), whatever else happens.
+fn free_box_state(s: &Scene) -> Vec<(usize, usize, usize, [f64; 2])> {
+    let mut out = Vec::new();
+    for (key, doc) in &s.project().tiles {
+        let c = key.center();
+        for o in doc.visible_object_ids() {
+            let object = doc.object(o).unwrap();
+            let x: Vec<f64> = object
+                .vertices()
+                .values()
+                .map(|v| v.position.x + c[0])
+                .collect();
+            if x.iter().all(|x| *x >= 45.0) {
+                let hi = x.iter().copied().fold(f64::MIN, f64::max);
+                let top = object
+                    .vertices()
+                    .values()
+                    .map(|v| v.position.z)
+                    .fold(f64::MIN, f64::max);
+                let paint = object
+                    .faces()
+                    .keys()
+                    .filter(|f| doc.face_material(o, *f).is_some())
+                    .count();
+                out.push((
+                    object.vertices().len(),
+                    object.faces().len(),
+                    paint,
+                    [hi, top],
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Inside a group its members take edits, and nothing outside does, by any tool.
+#[test]
+fn only_what_is_open_can_be_edited() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    let free = free_box_state(&s);
+    assert_eq!(free.len(), 1);
+
+    // Closed: its members are out of reach too.
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    assert!(!p.busy(), "a member of a closed group");
+    let mut b = Tool::paint(APERTURE / 10.0);
+    b.set_paint(Some(paint_of(9, 9, 9)));
+    assert_eq!(
+        b.handle(&mut s, Input::Click(ray([12.5, 12.0, 3.0]))),
+        Err(EditError::OutOfScope)
+    );
+
+    s.enter(key, group).unwrap();
+    assert_eq!(s.session(), Some((key, vec![group])));
+    try_every_tool_on_the_free_box(&mut s);
+    assert_eq!(free_box_state(&s), free, "the box outside did not change");
+    assert!(
+        s.project()
+            .tiles
+            .values()
+            .all(|d| d.health_report(None).rows.is_empty())
+    );
+
+    // A member takes edits.
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    assert!(p.busy());
+    typed(&mut p, &mut s, "1").unwrap();
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+
+    assert!(s.leave().unwrap());
+    assert_eq!(s.session(), None);
+    assert!(!s.leave().unwrap(), "nothing left to leave");
+    let doc = &s.project().tiles[&key];
+    assert_eq!(doc.top_level_nodes().len(), 2, "the group came back");
+    assert_eq!(free_box_state(&s), free);
+    assert!(doc.health_report(None).rows.is_empty());
+}
+
+/// Undo walks back through closing and opening; the session follows.
+#[test]
+fn undo_goes_through_a_session() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    let saved = s.project().save();
+    s.enter(key, group).unwrap();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    s.leave().unwrap();
+
+    s.undo().unwrap();
+    assert_eq!(s.session().map(|o| o.1), Some(vec![group]), "open again");
+    s.undo().unwrap();
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+    s.undo().unwrap();
+    assert_eq!(s.session(), None);
+    assert_eq!(s.project().save(), saved);
+
+    for _ in 0..3 {
+        s.redo().unwrap();
+    }
+    assert_eq!(s.session(), None);
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+/// A file never holds an open session: saving one writes it as if closed.
+#[test]
+fn saving_inside_a_session_saves_it_closed() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    s.enter(key, group).unwrap();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+
+    let open = s.project().save();
+    assert_eq!(s.project().save(), open, "byte-stable");
+    assert!(s.session().is_some(), "saving leaves it open");
+    let reopened = Project::open(&open).unwrap();
+    assert_eq!(reopened.save(), open, "byte-identical again");
+    let doc = reopened.tiles.values().next().unwrap();
+    assert!(doc.session_stack().is_empty());
+    assert_eq!(doc.top_level_nodes().len(), 2, "the group is back");
+    let reopened = Scene::new(reopened);
+    has_box(&reopened, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+/// Inside a component an edit reaches every instance of it.
+#[test]
+fn editing_a_component_changes_its_instances() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (key, doc) = s.project().tiles.iter().next().unwrap();
+    let (key, nodes) = (*key, doc.top_level_nodes());
+    s.make_component(key, &nodes).unwrap();
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [15.0, 12.0, 3.0]);
+    m.handle(&mut s, Input::ToggleCopy).unwrap();
+    hover(&mut m, &mut s, [35.0, 12.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    typed(&mut m, &mut s, "20").unwrap();
+    let doc = &s.project().tiles[&key];
+    let tops = doc.top_level_nodes();
+    assert_eq!(tops.len(), 2);
+
+    s.enter(key, tops[0]).unwrap();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    assert!(p.busy(), "the member is editable now");
+    typed(&mut p, &mut s, "1").unwrap();
+    while s.leave().unwrap() {}
+
+    let doc = &s.project().tiles[&key];
+    let heights: Vec<f64> = doc
+        .top_level_nodes()
+        .into_iter()
+        .map(|n| {
+            wangungis_scene::project::node_points(doc, n)
+                .iter()
+                .map(|p| p.z)
+                .fold(f64::MIN, f64::max)
+        })
+        .collect();
+    assert_eq!(heights.len(), 2);
+    assert!(heights.iter().all(|h| (h - 4.0).abs() < MM), "{heights:?}");
+    assert!(doc.health_report(None).rows.is_empty());
+}
+
+/// A stretched instance cannot be opened, and what comes back says why.
+#[test]
+fn a_stretched_instance_stays_closed() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (key, doc) = s.project().tiles.iter().next().unwrap();
+    let (key, nodes) = (*key, doc.top_level_nodes());
+    s.make_component(key, &nodes).unwrap();
+    let node = s.project().tiles[&key].top_level_nodes()[0];
+    let stretch = kernel::Transform::scale(Vec3::new(2.0, 1.0, 1.0));
+    s.transform(
+        &wangungis_tools::Movable::Node { tile: key, node },
+        &stretch,
+    )
+    .unwrap();
+    assert!(s.enter(key, node).is_err());
+    assert_eq!(s.session(), None);
+}
+
+/// Groups inside groups open one at a time and close the same way.
+#[test]
+fn nested_groups_open_in_turn() {
+    let mut s = scene();
+    let (key, inner) = group_and_a_box(&mut s);
+    let doc = &s.project().tiles[&key];
+    let tops = doc.top_level_nodes();
+    s.group(key, &tops).unwrap();
+    let outer = s.project().tiles[&key].top_level_nodes()[0];
+
+    assert_eq!(
+        s.enter(key, inner),
+        Err(EditError::OutOfScope),
+        "outer first"
+    );
+    s.enter(key, outer).unwrap();
+    s.enter(key, inner).unwrap();
+    assert_eq!(s.session(), Some((key, vec![outer, inner])));
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert!(s.leave().unwrap());
+    assert_eq!(s.session(), Some((key, vec![outer])));
+    assert!(s.leave().unwrap());
+    assert_eq!(s.session(), None);
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+    assert_eq!(s.project().tiles[&key].top_level_nodes(), vec![outer]);
+}
+
+/// While one tile holds the session, no other tile can be edited.
+#[test]
+fn a_session_keeps_edits_in_its_tile() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    s.enter(key, group).unwrap();
+    let saved = s.project().save();
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [3_000.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [3_001.0, 11.0, 0.0]);
+    assert_eq!(typed(&mut r, &mut s, "5;4"), Err(EditError::OutOfScope));
+    assert_eq!(s.project().save(), saved);
+}
+
+/// A drawing outside the session stays outside it.
+#[test]
+fn a_drawing_outside_the_session_is_refused() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    typed_rectangle_at(&mut s, [70.0, 10.0, 0.0]);
+    s.enter(key, group).unwrap();
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE);
+    let _ = p.handle(&mut s, Input::Click(ray([72.0, 12.0, 0.0])));
+    let _ = typed(&mut p, &mut s, "3");
+    let mut m = Tool::move_tool(APERTURE);
+    let _ = m.handle(&mut s, Input::Click(ray([70.0, 12.0, 0.0])));
+    let _ = m.handle(&mut s, Input::Click(ray([90.0, 12.0, 0.0])));
+    let mut e = Tool::eraser(APERTURE);
+    let _ = e.handle(&mut s, Input::Click(ray([70.0, 12.0, 0.0])));
+    assert_eq!(s.project().save(), saved);
+}
+
+/// A line drawn inside goes with the group, and stays with it afterwards.
+#[test]
+fn a_drawing_made_inside_stays_inside() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    s.enter(key, group).unwrap();
+
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [90.0, 10.0, 0.0]);
+    click(&mut l, &mut s, [95.0, 13.0, 0.0]);
+    l.handle(&mut s, Input::Cancel).unwrap();
+
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [92.5, 11.5, 0.0]);
+    assert!(m.busy(), "its own drawing moves");
+    m.handle(&mut s, Input::Cancel).unwrap();
+
+    s.leave().unwrap();
+    let inside = |s: &Scene| {
+        let doc = &s.project().tiles[&key];
+        let NodeId::Group(g) = group else {
+            unreachable!()
+        };
+        doc.group_member_sketches(g)
+            .iter()
+            .map(|id| doc.sketch(*id).unwrap().edges().len())
+            .sum::<usize>()
+    };
+    assert_eq!(inside(&s), 1, "the line joined the group");
+
+    // Closed again, it is out of reach. Hew would pull a new line on that plane
+    // into the group's drawing, so that is refused.
+    click(&mut m, &mut s, [92.5, 11.5, 0.0]);
+    assert!(!m.busy(), "out of reach");
+    m.handle(&mut s, Input::Cancel).unwrap();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [90.0, 30.0, 0.0]);
+    let refused = l.handle(&mut s, Input::Click(ray([95.0, 33.0, 0.0])));
+    assert!(
+        matches!(refused, Err(EditError::Unsupported(_))),
+        "{refused:?}"
+    );
+    assert_eq!(inside(&s), 1);
+}
+
+/// Hew would merge a line drawn inside into a drawing outside on the same plane,
+/// so it is refused, and that drawing stays as it was.
+#[test]
+fn a_plane_with_drawing_outside_is_not_drawn_on_inside() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    typed_rectangle_at(&mut s, [70.0, 10.0, 0.0]);
+    s.enter(key, group).unwrap();
+    let saved = s.project().save();
+
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [90.0, 10.0, 0.0]);
+    let refused = l.handle(&mut s, Input::Click(ray([95.0, 13.0, 0.0])));
+    assert!(
+        matches!(refused, Err(EditError::Unsupported(_))),
+        "{refused:?}"
+    );
+    assert_eq!(s.project().save(), saved);
+
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [70.0, 12.0, 0.0]);
+    assert!(!m.busy(), "the drawing outside does not move");
+}
+
+fn typed_rectangle_at(s: &mut Scene, at: [f64; 3]) {
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, s, at);
+    hover(&mut r, s, [at[0] + 1.0, at[1] + 1.0, at[2]]);
+    typed(&mut r, s, "5;4").unwrap();
+}
+
+proptest! {
+    /// Any order of opening, editing, closing and undoing: solids stay sound, the
+    /// box outside never changes, and a save reads back without a session.
+    #[test]
+    fn sessions_keep_everything_sound(steps in proptest::collection::vec(0u8..5, 1..14)) {
+        let mut s = scene();
+        let (key, group) = group_and_a_box(&mut s);
+        let mut free = free_box_state(&s);
+        for step in steps {
+            match step {
+                0 => { let _ = s.enter(key, group); }
+                1 => { let _ = s.leave(); }
+                2 => {
+                    let mut p = Tool::push_pull(APERTURE / 10.0);
+                    let _ = p.handle(&mut s, Input::Click(ray([12.5, 12.0, 3.0])));
+                    if p.busy() {
+                        let _ = typed(&mut p, &mut s, "0.5");
+                    }
+                }
+                3 => { let _ = s.undo(); }
+                _ => try_every_tool_on_the_free_box(&mut s),
+            }
+            prop_assert!(s.project().tiles.values().all(|d| d.health_report(None).rows.is_empty()));
+            // With nothing open the tools may reach it; with a session, none may.
+            if s.session().is_some() {
+                prop_assert_eq!(free_box_state(&s), free.clone());
+            } else {
+                free = free_box_state(&s);
+            }
+            let file = s.project().save();
+            let again = Project::open(&file).unwrap();
+            prop_assert!(again.tiles.values().all(|d| d.session_stack().is_empty()));
+            prop_assert_eq!(again.save(), file);
+        }
     }
 }

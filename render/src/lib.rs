@@ -23,7 +23,9 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location
 }
 @fragment fn fs(i: O) -> @location(0) vec4<f32> {
   let l = 0.35 + 0.65 * max(dot(normalize(i.n), u.light.xyz), 0.0);
-  return vec4<f32>(i.color.rgb * l, i.color.a);
+  // Alpha is how solid the face looks, towards the view's background: geometry
+  // outside an open group fades. Never blended, so depth stays right.
+  return vec4<f32>(mix(vec3<f32>(0.93, 0.94, 0.95), i.color.rgb * l, i.color.a), 1.0);
 }
 @vertex fn vs_edge(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
   return u.view_proj * vec4<f32>(pos + u.offset.xyz, 1.0);
@@ -32,6 +34,10 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location
 // Overlay lines carry their flat color in the `light` slot of the uniform.
 @fragment fn fs_overlay() -> @location(0) vec4<f32> { return vec4<f32>(u.light.xyz, 1.0); }
 "#;
+
+/// How solid geometry outside an open group looks, in a vertex's alpha.
+// ponytail: its edges stay dark, the edge pipeline has no color.
+const FADED: u8 = 90;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -78,16 +84,20 @@ impl TileMesh {
     pub fn from_document(doc: &kernel::Document) -> Result<Self, tessellate::TessellateError> {
         let palette = doc.materials();
         let mut m = TileMesh::default();
+        // With a group or component open, the rest of the tile fades.
+        // ponytail: other tiles do not fade, only the session's own.
+        let open = doc.session_direct_members();
         for node in doc.top_level_nodes() {
             if !node_visible(doc, node) {
                 continue;
             }
+            let faded = open.as_ref().is_some_and(|o| !o.contains(&node));
             for oid in doc.leaf_objects_under(node) {
                 if !node_visible(doc, kernel::NodeId::Object(oid)) {
                     continue;
                 }
                 if let Some(obj) = doc.object(oid) {
-                    m.push(&tessellate::tessellate(obj, palette)?, None);
+                    m.push(&tessellate::tessellate(obj, palette)?, None, faded);
                 }
             }
             for inst in doc.leaf_instances_under(node) {
@@ -104,7 +114,7 @@ impl TileMesh {
                 {
                     if shown && let Some(obj) = doc.object(member) {
                         let t = tessellate::tessellate(obj, palette)?;
-                        m.push(&t, Some(local.then(&pose)));
+                        m.push(&t, Some(local.then(&pose)), faded);
                     }
                 }
             }
@@ -173,7 +183,7 @@ impl TileMesh {
     }
 
     /// Appends a tessellated Object, baked through `pose` when it has one.
-    fn push(&mut self, t: &tessellate::RenderMesh, pose: Option<kernel::Transform>) {
+    fn push(&mut self, t: &tessellate::RenderMesh, pose: Option<kernel::Transform>, faded: bool) {
         let at = |p: &[f32]| match &pose {
             None => [p[0], p[1], p[2]],
             Some(x) => {
@@ -200,7 +210,12 @@ impl TileMesh {
             self.verts.push(Vertex {
                 pos: at(p),
                 nrm,
-                color: [color[0], color[1], color[2], 255],
+                color: [
+                    color[0],
+                    color[1],
+                    color[2],
+                    if faded { FADED } else { 255 },
+                ],
             });
         }
         self.indices.extend(t.indices.iter().map(|i| i + base));

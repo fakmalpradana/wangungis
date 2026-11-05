@@ -252,6 +252,31 @@ fn unpainted_faces_render_neutral_gray() {
     );
 }
 
+/// With a group open, what is outside it fades, and closing brings it back.
+#[test]
+fn outside_an_open_group_fades() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let mut doc = Document::new();
+    // The box in view stays outside; the group is out of frame.
+    add_box(&mut doc, 0.0, 0.0);
+    let far = add_box(&mut doc, 500.0, 0.0);
+    let (group, _) = doc.group_nodes(&[kernel::NodeId::Object(far)]).unwrap();
+    let dark = |px: &[u8]| px.chunks(4).filter(|p| p[0] < 150).count();
+    let (closed, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
+    doc.open_group_session(group).unwrap();
+    let (open, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
+    assert!(
+        dark(&open) < dark(&closed),
+        "open {} closed {}",
+        dark(&open),
+        dark(&closed)
+    );
+    doc.close_group_session().unwrap();
+    let (again, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
+    assert_eq!(again, closed);
+}
+
 #[test]
 fn far_tiles_render_like_the_origin() {
     let _serial = gpu_lock();

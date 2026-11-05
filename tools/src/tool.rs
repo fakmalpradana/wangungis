@@ -2094,7 +2094,7 @@ impl Tool {
         match input {
             Input::Hover(ray) => {
                 *hover = scene
-                    .pick_face(&ray)
+                    .editable_face(&ray)
                     .and_then(|f| scene.face_shape(f.tile, f.source))
                     .map_or_else(Vec::new, |(_, outline)| ring(&outline));
             }
@@ -2176,7 +2176,9 @@ impl Tool {
         let dir = ray.direction.normalized().ok()?;
         let region = scene.snap(&query(ray, NARROW)).and_then(|h| {
             let (sketch, region) = h.snap.sketch_region_source?;
-            let shape = scene.region_shape(h.tile, sketch, region)?;
+            let shape = scene
+                .region_shape(h.tile, sketch, region)
+                .filter(|_| scene.sketch_editable(h.tile, sketch))?;
             let target = Target::Region {
                 tile: h.tile,
                 sketch,
@@ -2185,7 +2187,7 @@ impl Tool {
             let at = h.snap.position;
             Some(((at - ray.origin).dot(dir), target, at, shape))
         });
-        let face = scene.pick_face(&ray).and_then(|f| {
+        let face = scene.editable_face(&ray).and_then(|f| {
             let shape = scene.face_shape(f.tile, f.source)?;
             let target = Target::Solid {
                 tile: f.tile,
