@@ -7,7 +7,7 @@
 //! Needs a GPU adapter (CI: Metal, lavapipe, WARP). Without one the tests
 //! skip, unless WANGUNGIS_REQUIRE_GPU is set, in which case they fail.
 
-use kernel::{Document, Plane, Point3};
+use kernel::{Document, Material, ObjectId, Plane, Point3, Rgba8, Vec3};
 use wangungis_render::{Camera, DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::Project;
 
@@ -56,7 +56,7 @@ fn box_doc(x: f64, y: f64) -> Document {
     doc
 }
 
-fn add_box(doc: &mut Document, x: f64, y: f64) {
+fn add_box(doc: &mut Document, x: f64, y: f64) -> ObjectId {
     let p = |a: f64, b: f64| Point3::new(x + a, y + b, 0.0);
     let ring = [p(0.0, 0.0), p(5.0, 0.0), p(5.0, 4.244), p(0.0, 4.244)];
     let sk = doc.add_sketch(Plane::from_polygon(&ring).unwrap());
@@ -65,7 +65,22 @@ fn add_box(doc: &mut Document, x: f64, y: f64) {
         s.add_segment(ring[k], ring[(k + 1) % 4]).unwrap();
     }
     let r = doc.extrudable_regions(sk).unwrap();
-    doc.extrude_region(sk, r[0], 3.0).unwrap();
+    doc.extrude_region(sk, r[0], 3.0).unwrap().0
+}
+
+fn face_with_normal(doc: &Document, object: ObjectId, normal: Vec3) -> kernel::FaceId {
+    doc.object(object)
+        .unwrap()
+        .faces()
+        .iter()
+        .find(|(_, face)| {
+            let n = face.plane.normal();
+            (n.x - normal.x).abs() < 1e-9
+                && (n.y - normal.y).abs() < 1e-9
+                && (n.z - normal.z).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .unwrap()
 }
 
 /// Camera looking at the box whose corner is at `at` (project-local).
@@ -195,6 +210,46 @@ fn diff(a: &[u8], b: &[u8]) -> f64 {
 /// Fraction of non-background pixels: guards against a blank render passing.
 fn coverage(px: &[u8]) -> f64 {
     px.chunks(4).filter(|p| p[..3] != [255, 255, 255]).count() as f64 / (W * H) as f64
+}
+
+#[test]
+fn painted_face_uses_its_material_and_unpainted_face_stays_gray() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let mut doc = Document::new();
+    let object = add_box(&mut doc, 0.0, 0.0);
+    let red = doc.add_material(Material::solid("Red", Rgba8::rgb(240, 20, 20)));
+    let face = face_with_normal(&doc, object, Vec3::new(-1.0, 0.0, 0.0));
+    doc.paint_face(object, face, Some(red)).unwrap();
+
+    let (px, _) = render(&dq, &[([0.0; 3], &doc)], &camera([0.0; 3]));
+    let red = px
+        .chunks(4)
+        .filter(|p| p[0] > p[1].saturating_mul(3) && p[0] > p[2].saturating_mul(3))
+        .count();
+    let gray = px
+        .chunks(4)
+        .filter(|p| p[0] > 40 && p[0] < 240 && p[0] == p[1] && p[1] == p[2])
+        .count();
+    assert!(red > 100, "painted side has only {red} strongly red pixels");
+    assert!(gray > 100, "unpainted side has only {gray} gray pixels");
+}
+
+#[test]
+fn unpainted_faces_render_neutral_gray() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let (px, _) = render(&dq, &[([0.0; 3], &box_doc(0.0, 0.0))], &camera([0.0; 3]));
+    let faces: Vec<_> = px.chunks(4).filter(|p| p[0] < 240 && p[0] > 40).collect();
+    assert!(
+        faces.len() > 100,
+        "box has only {} face pixels",
+        faces.len()
+    );
+    assert!(
+        faces.iter().all(|p| p[0] == p[1] && p[1] == p[2]),
+        "an unpainted face is not neutral gray"
+    );
 }
 
 #[test]

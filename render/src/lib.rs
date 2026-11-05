@@ -17,13 +17,13 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SHADER: &str = r#"
 struct U { view_proj: mat4x4<f32>, offset: vec4<f32>, light: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: U;
-struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
-@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) n: vec3<f32>) -> O {
-  var o: O; o.p = u.view_proj * vec4<f32>(pos + u.offset.xyz, 1.0); o.n = n; return o;
+struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location(1) color: vec4<f32> };
+@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) n: vec3<f32>, @location(2) color: vec4<f32>) -> O {
+  var o: O; o.p = u.view_proj * vec4<f32>(pos + u.offset.xyz, 1.0); o.n = n; o.color = color; return o;
 }
 @fragment fn fs(i: O) -> @location(0) vec4<f32> {
   let l = 0.35 + 0.65 * max(dot(normalize(i.n), u.light.xyz), 0.0);
-  return vec4<f32>(vec3<f32>(0.85, 0.82, 0.78) * l, 1.0);
+  return vec4<f32>(i.color.rgb * l, i.color.a);
 }
 @vertex fn vs_edge(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
   return u.view_proj * vec4<f32>(pos + u.offset.xyz, 1.0);
@@ -38,6 +38,7 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
 struct Vertex {
     pos: [f32; 3],
     nrm: [f32; 3],
+    color: [u8; 4],
 }
 
 #[repr(C)]
@@ -75,7 +76,7 @@ impl TileMesh {
     /// Objects, component instances through their poses, and sketch lines and
     /// region fills.
     pub fn from_document(doc: &kernel::Document) -> Result<Self, tessellate::TessellateError> {
-        let palette = kernel::MaterialPalette::default();
+        let palette = doc.materials();
         let mut m = TileMesh::default();
         for node in doc.top_level_nodes() {
             if !node_visible(doc, node) {
@@ -86,7 +87,7 @@ impl TileMesh {
                     continue;
                 }
                 if let Some(obj) = doc.object(oid) {
-                    m.push(&tessellate::tessellate(obj, &palette)?, None);
+                    m.push(&tessellate::tessellate(obj, palette)?, None);
                 }
             }
             for inst in doc.leaf_instances_under(node) {
@@ -102,7 +103,7 @@ impl TileMesh {
                     doc.expanded_def_placements(def).into_iter().zip(shown)
                 {
                     if shown && let Some(obj) = doc.object(member) {
-                        let t = tessellate::tessellate(obj, &palette)?;
+                        let t = tessellate::tessellate(obj, palette)?;
                         m.push(&t, Some(local.then(&pose)));
                     }
                 }
@@ -118,7 +119,7 @@ impl TileMesh {
             }
             for (region, r) in sk.regions().iter() {
                 if !r.faceless {
-                    m.push_region(sk, region, &palette);
+                    m.push_region(sk, region);
                 }
             }
         }
@@ -128,14 +129,10 @@ impl TileMesh {
     /// Fills a sketch region, visible from both sides. Hew triangulates: the
     /// region becomes a throwaway sheet object, whose triangles falling in a
     /// hole are dropped. A region Hew cannot sheet keeps just its edges.
-    fn push_region(
-        &mut self,
-        sk: &kernel::Sketch,
-        region: kernel::SketchRegionId,
-        palette: &kernel::MaterialPalette,
-    ) {
-        let Some(mesh) =
-            region_sheet(sk, region).and_then(|sheet| tessellate::tessellate(&sheet, palette).ok())
+    fn push_region(&mut self, sk: &kernel::Sketch, region: kernel::SketchRegionId) {
+        let palette = kernel::MaterialPalette::default();
+        let Some(mesh) = region_sheet(sk, region)
+            .and_then(|sheet| tessellate::tessellate(&sheet, &palette).ok())
         else {
             return;
         };
@@ -153,12 +150,19 @@ impl TileMesh {
         };
         let base = self.verts.len() as u32;
         let front = [n.x as f32, n.y as f32, n.z as f32];
+        let color = tessellate::DEFAULT_MATERIAL_RGBA;
+        let color = [color.r, color.g, color.b, color.a];
         for p in mesh.positions.chunks(3) {
             let pos = [p[0], p[1], p[2]];
-            self.verts.push(Vertex { pos, nrm: front });
+            self.verts.push(Vertex {
+                pos,
+                nrm: front,
+                color,
+            });
             self.verts.push(Vertex {
                 pos,
                 nrm: front.map(|v| -v),
+                color,
             });
         }
         for tri in mesh.indices.chunks(3).filter(|t| inside(t)) {
@@ -178,7 +182,12 @@ impl TileMesh {
             }
         };
         let base = self.verts.len() as u32;
-        for (p, n) in t.positions.chunks(3).zip(t.normals.chunks(3)) {
+        for ((p, n), color) in t
+            .positions
+            .chunks(3)
+            .zip(t.normals.chunks(3))
+            .zip(t.colors.chunks(3))
+        {
             let nrm = match &pose {
                 None => [n[0], n[1], n[2]],
                 Some(x) => {
@@ -187,7 +196,12 @@ impl TileMesh {
                     [q.x as f32, q.y as f32, q.z as f32]
                 }
             };
-            self.verts.push(Vertex { pos: at(p), nrm });
+            let color: [u8; 3] = std::array::from_fn(|i| (color[i] * 255.0).round() as u8);
+            self.verts.push(Vertex {
+                pos: at(p),
+                nrm,
+                color: [color[0], color[1], color[2], 255],
+            });
         }
         self.indices.extend(t.indices.iter().map(|i| i + base));
         self.edges.extend(t.edge_positions.chunks(3).map(at));
@@ -397,7 +411,7 @@ impl Renderer {
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        let tri_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let tri_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4];
         let edge_attrs = wgpu::vertex_attr_array![0 => Float32x3];
         let pipeline = |vs: &str,
                         fs: &str,
@@ -434,7 +448,7 @@ impl Renderer {
         let tri = pipeline(
             "vs",
             "fs",
-            24,
+            28,
             &tri_attrs,
             wgpu::PrimitiveState {
                 cull_mode: Some(wgpu::Face::Back),
