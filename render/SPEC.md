@@ -10,7 +10,7 @@ Renderer wgpu ber-batching dengan RTC per tile (ADR-003). Satu tile kernel (satu
 - `Camera::view_proj_at_eye()`: rotasi view + proyeksi dengan mata di origin.
 - `Renderer::new(&Device, TextureFormat)`: depth `DEPTH_FORMAT` (Depth32Float).
 - `Renderer::add_tile(&Device, origin_f64, &TileMesh)`: mengunggah tile, menggantikan tile dengan origin yang sama. `Renderer::clear_tiles()`.
-- `Renderer::set_overlay(&Device, &[OverlayLines { color, lines }])`: garis umpan balik tool. Satu warna per grup, satu draw call per grup, selalu di atas model, posisi `f64` lokal-proyek.
+- `Renderer::set_overlay(&Device, &[OverlayLines { color, lines }])`: garis umpan balik tool. Satu warna per grup, satu draw call per grup, selalu di atas model, posisi `f64` lokal-proyek. Garis dipotong ke batas pandang di CPU setiap frame: lavapipe kehilangan garis sepanjang 200 m atau lebih di viewport lebar (terukur di CI; penyebab pastinya asumsi: ujung hasil potongan driver terlalu jauh di luar layar).
 - `Renderer::prepare(&Queue, &Camera)` lalu `Renderer::draw(&mut RenderPass) -> draw_calls`.
 - Renderer tidak tahu apa pun soal egui maupun UI.
 

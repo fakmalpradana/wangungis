@@ -32,7 +32,8 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
-const GUIDE_COLOR: [f32; 3] = [0.45, 0.45, 0.6];
+/// Unlike the axes, the preview, the snap markers and the pale background.
+const GUIDE_COLOR: [f32; 3] = [0.85, 0.0, 0.55];
 /// Seconds between autosaves of a project with unsaved changes.
 const AUTOSAVE_S: f64 = 60.0;
 
@@ -440,7 +441,12 @@ impl App {
             _ if self.moved_since_click => self.last_pointer = None,
             _ => {}
         }
+        let guides = self.scene.guide_lines().len();
         match self.tool.handle(&mut self.scene, input) {
+            Ok(()) if self.scene.guide_lines().len() > guides => {
+                self.notice =
+                    Some("Panduan dibuat: garis merah muda, snap menempel padanya.".into());
+            }
             Ok(()) => {}
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -623,6 +629,7 @@ impl App {
             K::ArrowRight => self.feed(Input::LockAxis(Axis::X)),
             K::ArrowLeft => self.feed(Input::LockAxis(Axis::Y)),
             K::ArrowUp => self.feed(Input::LockAxis(Axis::Z)),
+            K::ArrowDown => self.feed(Input::LockNormal),
             // Letters that are units only count as tools with nothing typed.
             K::Space if self.typed.is_empty() => self.switch_tool(Tool::select),
             K::L if self.typed.is_empty() => self.switch_tool(Tool::line),
@@ -835,7 +842,7 @@ fn snap_label(kind: SnapKind) -> &'static str {
 fn typed_accepts(typed: &str, ch: char) -> bool {
     match ch {
         '0'..='9' | '.' | ',' | ';' | '-' | '+' | 'x' | 'X' | '*' | '/' => true,
-        'm' | 'M' | 'c' | 'C' | 's' | 'S' | ' ' => !typed.is_empty(),
+        'm' | 'M' | 'c' | 'C' | 's' | 'S' | 'd' | 'D' | '°' | ' ' => !typed.is_empty(),
         _ => false,
     }
 }
@@ -1046,6 +1053,9 @@ impl App {
                     }
                 }
             });
+        });
+        egui::Panel::bottom("hint").show(ui, |ui| {
+            ui.label(self.tool.hint());
         });
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {

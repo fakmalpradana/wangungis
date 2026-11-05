@@ -917,6 +917,121 @@ fn the_keyboard_and_the_path_box() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Uji asap step 18: a guide shows, in its own color, and says so.
+#[test]
+fn a_guide_is_seen_and_announced() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let guide_pixels = |d: &Driver| {
+        let want = GUIDE_COLOR.map(|c| (c * 255.0) as i32);
+        let (_, _, px) = d.pixels();
+        px.chunks(4)
+            .filter(|p| (0..3).all(|k| (i32::from(p[k]) - want[k]).abs() < 50))
+            .count()
+    };
+    draw_a_box(&mut d);
+    assert_eq!(guide_pixels(&d), 0);
+    d.letter(K::T, "t");
+    assert!(d.app.tool.hint().contains("tepi"), "{}", d.app.tool.hint());
+    d.click([4.5, 2.0, 0.0]);
+    d.hover([9.0, 1.0, 0.0]);
+    let m = d.app.tool.measure().unwrap();
+    assert!((m - 1.0).abs() < 0.05, "measured square to the edge: {m}");
+    d.value("3");
+    d.frame(vec![]);
+    d.dump("18-guide");
+    assert_eq!(d.app.scene.guide_lines().len(), 1);
+    assert!(
+        d.app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("Panduan")),
+        "{:?}",
+        d.app.notice
+    );
+    assert!(guide_pixels(&d) > 200, "{}", guide_pixels(&d));
+}
+
+/// Uji asap step 19: a line straight out of a wall, by the arrow keys and by an
+/// angle, and Follow Me along it.
+#[test]
+fn a_rod_out_of_a_wall() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    // Close enough that a click on the wall stays clear of its edges.
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    d.letter(K::R, "r");
+    d.click([4.0, 2.0, 1.0]);
+    d.hover([4.5, 2.0, 1.5]);
+    d.value("1;1");
+    d.letter(K::L, "l");
+    d.click([4.5, 2.0, 1.5]);
+    d.key(K::ArrowDown);
+    assert!(d.app.tool.hint().contains("tegak lurus"));
+    d.hover([4.5, 1.0, 1.5]);
+    d.value("4");
+    d.key(K::Escape);
+    d.dump("19-line");
+    d.app.switch_tool(Tool::follow_me);
+    d.click([4.8, 2.0, 1.8]);
+    assert_eq!(d.app.tool.preview().lines.len(), 4, "the square is picked");
+    d.click([4.5, -1.0, 1.5]);
+    assert_eq!(d.app.error, None);
+    d.dump("19-rod");
+    let (lo, _) = d.app.bounds().unwrap();
+    close(lo, [2.0, -2.0, 0.0]);
+
+    // Up the Z axis, then 30° off X.
+    d.app.undo();
+    d.letter(K::L, "l");
+    d.click([9.0, 9.0, 0.0]);
+    d.key(K::ArrowUp);
+    d.hover([9.0, 9.0, 1.0]);
+    d.value("2");
+    d.key(K::Escape);
+    d.click([10.0, 9.0, 0.0]);
+    d.hover([12.0, 10.0, 0.0]);
+    d.value("30d");
+    assert!(d.app.tool.hint().contains("30°"), "{}", d.app.tool.hint());
+    d.hover([12.0, 10.0, 0.0]);
+    d.value("2");
+    assert_eq!(d.app.error, None);
+}
+
+/// Uji asap step 20 without a big file: a long rectangle, and one past the border
+/// of its tile.
+#[test]
+fn a_second_tile_from_an_empty_project() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    d.letter(K::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    d.hover([2.0, 2.0, 0.0]);
+    d.value("800;10");
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    assert_eq!(d.app.tile_count(), 1);
+    d.click([790.0, 40.0, 0.0]);
+    d.hover([795.0, 45.0, 0.0]);
+    d.value("10;10");
+    d.frame(vec![]);
+    d.dump("20-two-tiles");
+    assert_eq!(d.app.tile_count(), 2);
+    // A line from the second snaps to a corner of the first, in the other tile.
+    d.letter(K::L, "l");
+    d.click([790.0, 40.0, 0.0]);
+    d.hover([801.0, 11.0, 0.0]);
+    let hit = d.app.tool.preview().snap.expect("the corner next door");
+    assert_eq!(hit.snap.kind, SnapKind::Endpoint);
+}
+
 #[test]
 fn the_split_label_counts_what_the_status_bar_counts() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());

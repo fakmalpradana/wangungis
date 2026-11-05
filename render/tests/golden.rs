@@ -393,6 +393,74 @@ fn overlay_draws_on_top_in_its_color() {
     }
 }
 
+/// A long line, one end behind the eye: what reaches the screen is still drawn.
+#[test]
+fn overlay_line_past_the_eye_is_clipped_not_lost() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let at = [0.0; 3];
+    let cam = camera(at);
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    let dir = [8.5, 11.122, -5.5];
+    let along = |t: f64| std::array::from_fn(|k| cam.target[k] + [2.0, -1.5, 0.0][k] + dir[k] * t);
+    r.set_overlay(
+        &dq.0,
+        &[OverlayLines {
+            color: [1.0, 0.0, 0.0],
+            lines: vec![(along(-5.0), along(5.0))],
+        }],
+    );
+    let (px, _) = shoot(&dq, &r, &cam);
+    let reds = px
+        .chunks(4)
+        .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+        .count();
+    assert!(reds > 20, "line lost: {reds} red px");
+}
+
+/// Lines of every reach, under a camera like the app's. Reports all cases at once.
+#[test]
+fn overlay_lines_of_any_reach_draw() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let base = camera([0.0; 3]);
+    let wide = Camera {
+        near: 0.15,
+        far: 1500.0,
+        ..camera([0.0; 3])
+    };
+    let t = base.target;
+    let on_x = |r: f64| ([t[0] - r, t[1], t[2]], [t[0] + r, t[1], t[2]]);
+    let mut lost = Vec::new();
+    for (name, cam, line) in [
+        ("short", &base, on_x(1.0)),
+        ("off both sides", &base, on_x(40.0)),
+        ("far past the near plane", &base, on_x(150.0)),
+        ("app camera short", &wide, on_x(1.0)),
+        ("app camera 40", &wide, on_x(40.0)),
+        ("app camera 200", &wide, on_x(200.0)),
+        ("app camera 500", &wide, on_x(500.0)),
+    ] {
+        let mut r = Renderer::new(&dq.0, FORMAT);
+        r.set_overlay(
+            &dq.0,
+            &[OverlayLines {
+                color: [1.0, 0.0, 0.0],
+                lines: vec![line],
+            }],
+        );
+        let (px, _) = shoot(&dq, &r, cam);
+        let reds = px
+            .chunks(4)
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+            .count();
+        if reds < 20 {
+            lost.push((name, reds));
+        }
+    }
+    assert!(lost.is_empty(), "lost: {lost:?}");
+}
+
 fn user_hidden_box() -> Document {
     let mut doc = box_doc(0.0, 0.0);
     let node = doc.top_level_nodes()[0];

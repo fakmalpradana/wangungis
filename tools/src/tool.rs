@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
 use crate::vcb::{self, Vcb};
-use crate::{EditError, Hit, Movable, Scene};
+use crate::{EditError, GUIDE_REACH_M, Hit, Movable, Scene};
 
 /// Smallest length (m) a gesture counts as: below it a click means nothing.
 const MIN_LEN: f64 = 1e-4;
@@ -24,6 +24,8 @@ const MIN_SCALE: f64 = 1e-3;
 /// Facets of an arc per full turn, and at least this many on any arc.
 const ARC_SIDES_PER_TURN: f64 = 48.0;
 const MIN_ARC_SIDES: usize = 4;
+/// Cosine under which a direction counts as lying in a plane.
+const IN_PLANE: f64 = 1e-6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -36,6 +38,8 @@ pub enum Input {
     Typed(String),
     /// Toggles a lock to this axis.
     LockAxis(Axis),
+    /// Line: toggles a lock square to the drawing's plane.
+    LockNormal,
     /// Esc.
     Cancel,
     /// Move: copy instead of moving, or back.
@@ -137,7 +141,7 @@ enum State {
         cursor: Option<Point3>,
     },
     Follow {
-        profile: Option<(TileKey, SketchId, SketchRegionId)>,
+        profile: Option<Target>,
         outline: Vec<(Point3, Point3)>,
     },
 }
@@ -174,15 +178,128 @@ struct Moving {
     lines: Vec<(Point3, Point3)>,
 }
 
+/// What the next segment of a Line is held to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Lock {
+    Axis(Axis),
+    /// Square to the drawing's plane.
+    Normal(Vec3),
+    /// `degrees` away from `from`, which `name` describes, on `plane`. One way
+    /// only: the angle chose the side.
+    Angle {
+        from: Vec3,
+        name: &'static str,
+        degrees: f64,
+        dir: Vec3,
+        plane: Plane,
+    },
+}
+
+impl Lock {
+    fn dir(self) -> Vec3 {
+        match self {
+            Lock::Axis(a) => a.unit(),
+            Lock::Normal(n) => n,
+            Lock::Angle { dir, .. } => dir,
+        }
+    }
+
+    fn snap(self) -> SnapLock {
+        match self {
+            Lock::Axis(a) => SnapLock::Axis(a),
+            _ => SnapLock::Direction(self.dir()),
+        }
+    }
+
+    fn describe(self) -> String {
+        match self {
+            Lock::Axis(a) => format!("sumbu {}", axis_name(a)),
+            Lock::Normal(_) => "tegak lurus bidang".into(),
+            Lock::Angle { name, degrees, .. } => format!("{degrees}° dari {name}"),
+        }
+    }
+}
+
+fn axis_name(axis: Axis) -> &'static str {
+    match axis {
+        Axis::X => "X",
+        Axis::Y => "Y",
+        Axis::Z => "Z",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct Chain {
     anchor: Point3,
     plane: Plane,
     tile: TileKey,
     cursor: Option<Point3>,
-    lock: Option<Axis>,
+    /// Where the pointer was last, for the side of a typed angle.
+    ray: Option<PickRay>,
+    /// Holds the next segment only.
+    lock: Option<Lock>,
     /// Nothing drawn yet, so the plane may still follow the cursor.
     open: bool,
+}
+
+impl Chain {
+    /// The plane the next segment lies on.
+    fn next_plane(&self) -> Plane {
+        match self.lock {
+            Some(Lock::Angle { plane, .. }) => plane,
+            Some(lock) => plane_along(self.anchor, lock.dir(), &self.plane, self.ray.as_ref()),
+            None => self.plane,
+        }
+    }
+
+    /// `p`, held to the side an angle chose: behind the anchor it means no length.
+    fn ahead(&self, p: Point3) -> Point3 {
+        match self.lock {
+            Some(Lock::Angle { dir, .. }) if (p - self.anchor).dot(dir) < 0.0 => self.anchor,
+            _ => p,
+        }
+    }
+
+    /// Locks the next segment `degrees` away from the locked direction, or from
+    /// the plane's first axis, on the side of it where the pointer is. A negative
+    /// angle takes the other side. Typing again starts from the same direction.
+    /// Needs the pointer to have moved since the last segment, to tell the side.
+    fn aim(&mut self, degrees: f64) -> Result<(), EditError> {
+        let ray = self.ray.ok_or(needs("arahkan kursor dulu"))?;
+        let (from, name) = match self.lock {
+            Some(Lock::Axis(a)) => (a.unit(), axis_name(a)),
+            Some(Lock::Normal(n)) => (n, "tegak lurus bidang"),
+            Some(Lock::Angle { from, name, .. }) => (from, name),
+            None => {
+                let name = if self.plane.normal().z.abs() > 0.999 {
+                    "X"
+                } else {
+                    "horizontal"
+                };
+                (plane_axes(&self.plane).0, name)
+            }
+        };
+        let plane = plane_along(self.anchor, from, &self.plane, Some(&ray));
+        let side = plane.normal().cross(from);
+        let seen = ray_on_plane(&ray, &plane).map(|p| p - self.anchor);
+        let sign = |v: Vec3| {
+            if seen.is_some_and(|d| d.dot(v) < 0.0) {
+                -1.0
+            } else {
+                1.0
+            }
+        };
+        let angle = degrees.to_radians();
+        self.lock = Some(Lock::Angle {
+            from,
+            name,
+            degrees,
+            dir: from * (sign(from) * angle.cos()) + side * (sign(side) * angle.sin()),
+            plane,
+        });
+        self.cursor = None;
+        Ok(())
+    }
 }
 
 /// The active tool. Errors leave the tool where it was, so the user can retry.
@@ -260,10 +377,46 @@ fn plane_axes(plane: &Plane) -> (Vec3, Vec3) {
     (u, n.cross(u))
 }
 
+/// A plane through `anchor` holding `along`: `plane` itself when it can, otherwise
+/// the axis plane that faces the eye most. Axis planes, so that lines locked one
+/// after another can still close into a region.
+fn plane_along(anchor: Point3, along: Vec3, plane: &Plane, ray: Option<&PickRay>) -> Plane {
+    if plane.normal().dot(along).abs() <= IN_PLANE {
+        return *plane;
+    }
+    let view = ray
+        .and_then(|r| r.direction.normalized().ok())
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+    let (u, v) = plane_axes(plane);
+    [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        u,
+        v,
+    ]
+    .into_iter()
+    .filter(|n| n.dot(along).abs() <= IN_PLANE)
+    .max_by(|a, b| a.dot(view).abs().total_cmp(&b.dot(view).abs()))
+    .and_then(|n| Plane::from_point_normal(anchor, n).ok())
+    .unwrap_or(*plane)
+}
+
 /// `p` moved onto `plane`: snaps land within rounding of it, and the kernel
 /// takes only exact sketch points.
 fn on_plane(p: Point3, plane: &Plane) -> Point3 {
     p - plane.normal() * plane.signed_distance(p)
+}
+
+/// What the Tape spans from its start `a` to the cursor. From an edge it measures
+/// square to the edge, as that is the distance of the guide it leaves; along the
+/// edge itself it is the plain distance.
+fn tape_span(a: Point3, along: Option<Vec3>, cursor: Point3) -> Vec3 {
+    let d = cursor - a;
+    match along {
+        Some(u) if (d - u * d.dot(u)).length() >= MIN_LEN => d - u * d.dot(u),
+        _ => d,
+    }
 }
 
 /// The snap for where a drawing starts. The Z axis does not count: a click on the
@@ -335,12 +488,12 @@ fn next_point(
     ray: PickRay,
     anchor: Option<Point3>,
     plane: &Plane,
-    lock: Option<Axis>,
+    lock: Option<Lock>,
     aperture: f64,
 ) -> Option<(Point3, Option<Hit>)> {
     let q = SnapQuery {
         anchor,
-        lock: lock.map(SnapLock::Axis),
+        lock: lock.map(Lock::snap),
         constraint_plane: Some(*plane),
         ..query(ray, aperture)
     };
@@ -351,8 +504,8 @@ fn next_point(
         return Some((on_plane(h.snap.position, plane), hit));
     }
     let point = match (lock, anchor) {
-        (Some(axis), Some(a)) => {
-            let u = axis.unit();
+        (Some(lock), Some(a)) => {
+            let u = lock.dir();
             on_plane(a + u * along_line(&ray, a, u)?, plane)
         }
         _ => ray_on_plane(&ray, plane)?,
@@ -703,11 +856,61 @@ impl Tool {
     pub fn measure(&self) -> Option<f64> {
         match &self.state {
             State::Tape {
-                from: Some((a, _)),
+                from: Some((a, along)),
                 cursor: Some(b),
-            } => Some((*b - *a).length()),
+            } => Some(tape_span(*a, *along, *b).length()),
             _ => None,
         }
+    }
+
+    /// What the tool waits for now, in words for the status bar.
+    pub fn hint(&self) -> String {
+        let s = match &self.state {
+            State::Select { .. } => "Klik benda untuk memilih. Shift + klik menambah.",
+            State::Line { chain: None } => "Klik titik awal.",
+            State::Line { chain: Some(c) } => {
+                return match c.lock {
+                    Some(l) => format!(
+                        "Terkunci {}. Klik atau ketik panjang. {}",
+                        l.describe(),
+                        if matches!(l, Lock::Angle { .. }) {
+                            "Panah mengganti kunci."
+                        } else {
+                            "Panah yang sama melepas kunci."
+                        }
+                    ),
+                    None => "Klik titik berikut atau ketik panjang. Panah kanan/kiri/atas: sumbu X/Y/Z, bawah: tegak lurus bidang. 30d: miring 30°. Esc: selesai.".into(),
+                };
+            }
+            State::Rectangle { first: None, .. } => "Klik sudut pertama.",
+            State::Rectangle { .. } => "Klik sudut lawan atau ketik ukuran, mis. 5;4.",
+            State::PushPull { armed: None, .. } => "Klik region atau face.",
+            State::PushPull { .. } => "Klik tinggi atau ketik jarak.",
+            State::Move { moving: None, .. } => "Klik benda. C: salin.",
+            State::Move { .. } => "Klik tujuan atau ketik jarak. Panah: kunci sumbu.",
+            State::Rotate { turning: None, .. } => "Klik benda: titik itu jadi poros.",
+            State::Rotate {
+                turning: Some(t), ..
+            } if t.reference.is_none() => "Klik arah nol. Panah: sumbu putar.",
+            State::Rotate { .. } => "Klik atau ketik sudut.",
+            State::Scale { scaling: None, .. } => "Klik benda.",
+            State::Scale { .. } => "Gerakkan kursor lalu klik, atau ketik faktor.",
+            State::Erase { .. } => "Klik tepi untuk menghapus.",
+            State::Round { center: None, .. } => "Klik pusat. 8s: jumlah sisi.",
+            State::Round { .. } => "Klik atau ketik jari-jari.",
+            State::Arc { start: None, .. } => "Klik ujung pertama.",
+            State::Arc { end: None, .. } => "Klik ujung kedua.",
+            State::Arc { .. } => "Klik atau ketik tinggi lengkung.",
+            State::Offset { armed: None, .. } => "Klik region atau face.",
+            State::Offset { .. } => "Klik atau ketik jarak.",
+            State::Tape { from: None, .. } => {
+                "Klik tepi untuk garis panduan, atau titik untuk titik panduan."
+            }
+            State::Tape { .. } => "Gerakkan kursor menjauh, lalu klik atau ketik jarak.",
+            State::Follow { profile: None, .. } => "Klik region atau face sebagai penampang.",
+            State::Follow { .. } => "Klik garis sebagai jalur.",
+        };
+        s.into()
     }
 
     /// Whether a copying toggle means anything to this tool, so C can mean
@@ -925,13 +1128,10 @@ impl Tool {
         match input {
             Input::Hover(ray) => match chain {
                 Some(c) => {
-                    if c.open
-                        && let Some(p) = plane_under(scene, &ray, c.anchor)
-                    {
-                        c.plane = p;
-                    }
-                    let next = next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture);
-                    c.cursor = next.map(|n| n.0);
+                    Self::follow_cursor(scene, c, ray);
+                    let plane = c.next_plane();
+                    let next = next_point(scene, ray, Some(c.anchor), &plane, c.lock, aperture);
+                    c.cursor = next.map(|n| c.ahead(n.0));
                     self.preview.snap = next.and_then(|n| n.1);
                 }
                 None => self.preview.snap = start_snap(scene, ray, aperture),
@@ -944,20 +1144,18 @@ impl Tool {
                             plane,
                             tile,
                             cursor: None,
+                            ray: None,
                             lock: None,
                             open: true,
                         });
                     }
                 }
                 Some(c) => {
-                    if c.open
-                        && let Some(p) = plane_under(scene, &ray, c.anchor)
-                    {
-                        c.plane = p;
-                    }
+                    Self::follow_cursor(scene, c, ray);
+                    let plane = c.next_plane();
                     if let Some((end, _)) =
-                        next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture)
-                        && Self::add_segment(scene, c, end)?
+                        next_point(scene, ray, Some(c.anchor), &plane, c.lock, aperture)
+                        && Self::add_segment(scene, c, c.ahead(end))?
                     {
                         *chain = None;
                     }
@@ -967,29 +1165,42 @@ impl Tool {
                 let Some(c) = chain else {
                     return Err(needs("klik titik awal dulu"));
                 };
-                let Some(Vcb::One(len)) = vcb::parse(&text) else {
-                    return Err(needs("garis butuh satu panjang, mis. 2,5"));
+                let len = match vcb::parse(&text) {
+                    Some(Vcb::One(len)) => len,
+                    Some(Vcb::Angle(degrees)) => return c.aim(degrees),
+                    _ => return Err(needs("garis butuh panjang (2,5) atau sudut (30d)")),
                 };
-                let cursor = c.cursor.ok_or(needs("arahkan kursor dulu"))?;
-                let dir = (cursor - c.anchor)
-                    .normalized()
-                    .map_err(|_| needs("arahkan kursor dulu"))?;
-                let end = on_plane(c.anchor + dir * len, &c.plane);
+                let dir = match c.lock {
+                    Some(Lock::Angle { dir, .. }) => dir,
+                    _ => {
+                        let cursor = c.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                        (cursor - c.anchor)
+                            .normalized()
+                            .map_err(|_| needs("arahkan kursor dulu"))?
+                    }
+                };
+                let end = on_plane(c.anchor + dir * len, &c.next_plane());
                 if Self::add_segment(scene, c, end)? {
                     *chain = None;
                 }
             }
             Input::LockAxis(axis) => {
                 let Some(c) = chain else { return Ok(()) };
-                if c.plane.normal().dot(axis.unit()).abs() > 1e-6 {
-                    return Err(needs("sumbu itu tidak sebidang dengan gambar"));
-                }
-                c.lock = if c.lock == Some(axis) {
+                c.lock = if c.lock == Some(Lock::Axis(axis)) {
                     None
                 } else {
-                    Some(axis)
+                    Some(Lock::Axis(axis))
                 };
                 // It was computed without this lock: a typed length must not use it.
+                c.cursor = None;
+            }
+            Input::LockNormal => {
+                let Some(c) = chain else { return Ok(()) };
+                c.lock = if matches!(c.lock, Some(Lock::Normal(_))) {
+                    None
+                } else {
+                    Some(Lock::Normal(c.plane.normal()))
+                };
                 c.cursor = None;
             }
             Input::ClickAdd(_) | Input::Cancel | Input::ToggleCopy => {}
@@ -997,15 +1208,31 @@ impl Tool {
         Ok(())
     }
 
+    /// Notes where the pointer is. Before the first segment, and with nothing
+    /// locked, the plane also follows it.
+    fn follow_cursor(scene: &mut Scene, c: &mut Chain, ray: PickRay) {
+        c.ray = Some(ray);
+        if c.open
+            && c.lock.is_none()
+            && let Some(p) = plane_under(scene, &ray, c.anchor)
+        {
+            c.plane = p;
+        }
+    }
+
     /// Adds one segment; `true` when it closed a loop, which ends the chain.
     fn add_segment(scene: &mut Scene, c: &mut Chain, end: Point3) -> Result<bool, EditError> {
         if (end - c.anchor).length() < MIN_LEN {
             return Ok(false);
         }
-        let drawn = scene.draw(Some(c.tile), c.plane, &[(c.anchor, end)])?;
+        let plane = c.next_plane();
+        let drawn = scene.draw(Some(c.tile), plane, &[(c.anchor, end)])?;
+        c.plane = plane;
         c.open = false;
         c.anchor = end;
         c.cursor = None;
+        c.ray = None;
+        c.lock = None;
         Ok(drawn.closed)
     }
 
@@ -1060,7 +1287,11 @@ impl Tool {
                     *cursor = None;
                 }
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1155,7 +1386,7 @@ impl Tool {
                 }
             },
             Input::Typed(text) => match (&*turning, vcb::parse(&text)) {
-                (Some(t), Some(Vcb::One(degrees))) => {
+                (Some(t), Some(Vcb::One(degrees) | Vcb::Angle(degrees))) => {
                     if degrees.abs() < 1e-6 {
                         return Err(needs("sudut nol tidak mengubah apa pun"));
                     }
@@ -1185,7 +1416,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::ClickAdd(_) | Input::Cancel => {}
+            Input::ClickAdd(_) | Input::LockNormal | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1258,7 +1489,11 @@ impl Tool {
                 scene.transform(&s.what, &scaling_about(s.center, factor))?;
                 *scaling = None;
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::ToggleCopy
+            | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1312,7 +1547,11 @@ impl Tool {
                     ));
                 }
             },
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         if let (Some(r), Some((c, plane, tile))) = (radius, *center)
             && r >= MIN_LEN
@@ -1374,7 +1613,11 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 sagitta = Some(s * side);
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         if let (Some(s), Some((a, plane, tile)), Some(b)) = (sagitta, *start, *end)
             && let Some((points, center)) = arc_points(a, b, s, &plane)
@@ -1444,7 +1687,11 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 distance = Some(d * side);
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         if let (Some(d), Some(a)) = (distance, armed.as_ref())
             && d.abs() >= MIN_LEN
@@ -1499,7 +1746,7 @@ impl Tool {
                 }
             },
             Input::Typed(text) => {
-                let (Some((a, _)), Some(c)) = (&*from, *cursor) else {
+                let (Some((a, along)), Some(c)) = (&*from, *cursor) else {
                     return Err(needs("klik titik awal lalu arahkan kursor dulu"));
                 };
                 let Some(Vcb::One(len)) = vcb::parse(&text) else {
@@ -1508,12 +1755,16 @@ impl Tool {
                 if len.abs() < MIN_LEN {
                     return Err(needs("jarak pita ukur tidak boleh nol"));
                 }
-                let dir = (c - *a)
+                let dir = tape_span(*a, *along, c)
                     .normalized()
                     .map_err(|_| needs("arahkan kursor dulu"))?;
                 to = Some(*a + dir * len);
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         if let (Some(b), Some((a, along))) = (to, *from)
             && (b - a).length() >= MIN_LEN
@@ -1541,36 +1792,43 @@ impl Tool {
             }
             Input::Click(ray) => {
                 let hit = scene.snap(&pick_query(ray, aperture));
-                match (*profile, hit) {
-                    (None, Some(h)) => {
-                        if let Some((sketch, region)) = h.snap.sketch_region_source {
-                            *profile = Some((h.tile, sketch, region));
-                            *outline = scene.outline(Target::Region {
-                                tile: h.tile,
-                                sketch,
-                                region,
-                            });
-                        } else {
-                            return Err(needs("klik region tertutup sebagai penampang"));
+                match *profile {
+                    None => {
+                        if let Some(armed) = Self::arm(scene, ray) {
+                            *profile = Some(armed.target);
+                            *outline = scene.outline(armed.target);
+                        } else if hit.is_some() {
+                            return Err(needs("klik region atau face sebagai penampang"));
                         }
                     }
-                    (Some((tile, sketch, region)), Some(h)) => {
+                    Some(target) => {
+                        let Some(h) = hit else { return Ok(()) };
                         let Some(path) = h.snap.sketch_source else {
                             return Err(needs("klik garis sebagai jalur"));
+                        };
+                        let tile = match target {
+                            Target::Region { tile, .. } | Target::Solid { tile, .. } => tile,
                         };
                         if h.tile != tile {
                             return Err(needs("penampang dan jalur harus di tile yang sama"));
                         }
-                        scene.follow_me(tile, (sketch, region), path)?;
+                        match target {
+                            Target::Region { sketch, region, .. } => {
+                                scene.follow_me(tile, (sketch, region), path)?
+                            }
+                            Target::Solid { source, .. } => {
+                                scene.follow_me_face(tile, source, path)?
+                            }
+                        }
                         *profile = None;
                         outline.clear();
                     }
-                    _ => {}
                 }
             }
             Input::ClickAdd(_)
             | Input::Typed(_)
             | Input::LockAxis(_)
+            | Input::LockNormal
             | Input::Cancel
             | Input::ToggleCopy => {}
         }
@@ -1602,6 +1860,7 @@ impl Tool {
             Input::Typed(_)
             | Input::ClickAdd(_)
             | Input::LockAxis(_)
+            | Input::LockNormal
             | Input::Cancel
             | Input::ToggleCopy => {}
         }
@@ -1696,7 +1955,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::ClickAdd(_) | Input::Cancel => {}
+            Input::ClickAdd(_) | Input::LockNormal | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1764,7 +2023,11 @@ impl Tool {
                 Self::commit_push_pull(scene, a.target, d)?;
                 *armed = None;
             }
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1840,7 +2103,18 @@ impl Tool {
             },
             State::Erase { hover } => hover.clone(),
             State::Tape { from, cursor } => match (from, cursor) {
-                (Some((a, _)), Some(b)) => vec![(*a, *b)],
+                (Some((a, along)), Some(b)) => {
+                    let span = tape_span(*a, *along, *b);
+                    let end = *a + span;
+                    let mut lines = vec![(*a, end)];
+                    // The guide it would leave.
+                    if let Some(u) = along
+                        && span.cross(*u).length() > MIN_LEN
+                    {
+                        lines.push((end - *u * GUIDE_REACH_M, end + *u * GUIDE_REACH_M));
+                    }
+                    lines
+                }
                 _ => Vec::new(),
             },
             State::Follow { outline, .. } => outline.clone(),

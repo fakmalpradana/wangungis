@@ -17,13 +17,14 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
 - `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. `dissolve` melewati objek biasa, dan menolak bila tidak ada grup atau komponen. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
 - `add_guide_point`, `add_guide_line`, `delete_guides`, `guide_lines`, `edge_direction`: panduan konstruksi. Garis panduan digambar dan bisa di-snap ±200 m dari titiknya (ponytail; Hew menganggapnya tak terbatas).
-- `follow_me(tile, profile, path)`: menyapu region sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile.
+- `follow_me(tile, profile, path)`, `follow_me_face(tile, source, path)`: menyapu region, atau face solid, sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile, satu langkah undo. Hasil dari face menyatu dengan solidnya bila bersentuhan.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
 Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser, tape, follow_me}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
-- Input: `Hover(ray)`, `Click(ray)`, `ClickAdd(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`. `picked_nodes()`: node yang dipilih Select.
+- Input: `Hover(ray)`, `Click(ray)`, `ClickAdd(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `LockNormal`, `Cancel`, `ToggleCopy`. `picked_nodes()`: node yang dipilih Select.
+- `hint()`: apa yang ditunggu tool sekarang, dalam kalimat untuk status bar.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
 - `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).
@@ -31,22 +32,24 @@ Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle
 
 Perilaku:
 - **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang. Klik pertama di tepi atau sudut belum menentukan face mana yang dimaksud, jadi sebelum ada segmen, bidang mengikuti face di bawah kursor yang memuat titik itu.
-- **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
+- **Line:** klik berantai pada bidang yang sama kecuali dikunci keluar darinya, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
 - **Move:** klik benda, lalu klik tujuan atau ketik jarak searah kursor. `ToggleCopy` membuat langkah berikutnya menyalin, lalu kembali ke memindah (`copying()`). Tepat setelah menyalin, `x5` membuat lima salinan sejarak salinan pertama, dan `/5` membuat lima salinan yang mengisi jarak itu; angka baru menggantikan array sebelumnya, dan semuanya tetap satu langkah undo. Benda yang dipindah tidak bisa snap ke dirinya sendiri. Tanpa snap, titik bergerak di bidang horizontal melalui titik dasar, atau di sumbu terkunci.
 - **Circle, Polygon:** klik pusat, lalu klik atau ketik jari-jari. `8s` mengubah jumlah sisi kapan saja; lingkaran minimal 24, bawaan 48; poligon minimal 3, bawaan 6.
 - **Arc:** klik dua ujung, lalu klik atau ketik tinggi lengkung, ke sisi kursor.
 - **Offset:** klik region atau face, lalu klik atau ketik jarak, ke arah kursor; angka negatif membalik arah.
-- **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat. Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
+- **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat (`30` atau `30d`). Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
 - **Scale:** klik benda, lalu gerakkan kursor menjauh atau mendekati pusatnya dan klik, atau ketik faktor. Selalu seragam, terhadap pusat benda. Faktor harus positif.
-- **Tape:** klik titik awal, lalu klik atau ketik jarak; `measure()` memberi jaraknya. Dari tepi menghasilkan garis panduan sejajar; dari titik, atau searah tepi, menghasilkan titik panduan.
-- **Follow Me:** klik region sebagai penampang, lalu klik garis sebagai jalur. Penampang harus tegak lurus jalur di ujungnya; penolakan kernel tampil di status bar.
+- **Tape:** klik titik awal, lalu klik atau ketik jarak; `measure()` memberi jaraknya. Dari tepi menghasilkan garis panduan sejajar: jarak diukur tegak lurus tepi, ke sisi kursor, dan pratinjau menampilkan garis yang akan dibuat. Dari titik, atau searah tepi, menghasilkan titik panduan.
+- **Follow Me:** klik region atau face solid sebagai penampang, lalu klik garis sebagai jalur. Penampang harus tegak lurus jalur di ujungnya; penolakan kernel tampil di status bar.
 - **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.
-- **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci. Pada Line, mengubah kunci melupakan posisi kursor, jadi panjang yang diketik menunggu `Hover` berikutnya dan tidak memakai arah dari sebelum kunci.
+- **Kunci sumbu:** memanggil sumbu yang sama lagi melepas kunci. Pada Line, mengubah kunci melupakan posisi kursor, jadi panjang yang diketik menunggu `Hover` berikutnya dan tidak memakai arah dari sebelum kunci. Kunci Line berlaku satu segmen.
+- **Kunci keluar bidang (Line):** `LockAxis` boleh ke sumbu di luar bidang gambar, dan `LockNormal` mengunci tegak lurus bidang. Segmen itu memakai bidang sumbu melalui titik sebelumnya yang paling menghadap kamera, dan rantai berlanjut di bidang itu, sehingga kunci berurutan tetap bisa menutup region. Bidang sumbu, bukan bidang bebas menghadap mata, supaya gambarnya tidak bergantung pada posisi kamera yang persis.
+- **Sudut (Line):** `30d` mengunci arah 30° dari sumbu terkunci, atau dari sumbu pertama bidang (X di bidang datar, horizontal di bidang lain), ke kuadran tempat kursor berada. Sudut negatif membalik sisi. Mengetik sudut lagi tetap dihitung dari sumbu yang sama. Arahnya satu jalan: panjang ketikan mengikutinya ke mana pun kursor, dan di belakang titik awal pratinjau maupun klik tidak menggambar. Butuh kursor yang sudah bergerak sejak segmen terakhir, untuk menentukan sisi. Bidang gambar baru berubah saat segmen dibuat.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 
-VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan.
+VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan. `30d` atau `30°` untuk sudut dalam derajat.
 
 ## Invariant (diuji di `tests/scene.rs` dan `tests/tools.rs`)
 - Menggerakkan kursor tidak pernah mengedit (property test, semua tool, sinar acak).
@@ -56,6 +59,8 @@ VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4
 - Edit yang ditolak setelah sempat diterapkan kernel juga membersihkan redo proyek, supaya tidak bisa kembali lewat redo.
 - Undo hanya bisa mencapai edit pengguna, bukan metadata tile.
 - Kotak di mana pun dalam ±5 km berada ≤ 1 mm dari yang diminta, tetap solid (`health_report`), dan bertahan melewati undo, redo, dan save/open (property test).
+- Garis terkunci (sumbu, normal, sudut) dari titik acak punya panjang dan arah yang diminta (property test).
+- Follow Me dari persegi di dinding menghasilkan solid sehat dan satu undo mengembalikan proyek (property test).
 - Snap benar melintasi batas tile; titik di belakang face di tile lain tidak menang, walau `Endpoint` berperingkat lebih tinggi dari `OnFace`.
 
 ## Indeks inference
