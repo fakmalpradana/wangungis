@@ -32,7 +32,11 @@ pub fn export(project: &Project, format: &str) -> Result<Vec<u8>, ExportError> {
     match format.as_str() {
         "obj" => obj(project),
         "stl" | "glb" | "gltf" | "3mf" => {
-            if project.tiles.values().all(|d| d.top_level_nodes().is_empty()) {
+            if project
+                .tiles
+                .values()
+                .all(|d| d.top_level_nodes().is_empty())
+            {
                 return Err(ExportError::NothingToExport);
             }
             let doc = project.single().ok_or(ExportError::MultiTile)?;
