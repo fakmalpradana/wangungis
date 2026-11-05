@@ -732,6 +732,46 @@ fn push_pull_with_ctrl_through_the_app() {
     close(d.extents(), [5.0, 4.0, 3.0]);
 }
 
+/// B paints the face under the pointer: the view shows it, undo takes it off.
+#[test]
+fn paint_a_face_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    let blue = |d: &Driver| {
+        let (_, _, px) = d.pixels();
+        px.chunks(4)
+            .filter(|p| i32::from(p[2]) > i32::from(p[0]) + 40)
+            .count()
+    };
+    // The Z axis is blue too.
+    let before = blue(&d);
+    let plain = wangungis_io::export(d.app.scene.project(), "glb").unwrap();
+
+    d.letter(K::B, "b");
+    d.app.set_paint(Some(ready_paint(("Biru", [70, 110, 170]))));
+    d.click([4.5, 4.0, 3.0]);
+    assert_eq!(d.app.error, None);
+    d.frame(vec![]);
+    d.dump("paint");
+    assert!(blue(&d) > before + 500, "the top is blue: {}", blue(&d));
+
+    // The export carries it.
+    let painted = wangungis_io::export(d.app.scene.project(), "glb").unwrap();
+    let has = |b: &[u8], what: &[u8]| b.windows(what.len()).any(|w| w == what);
+    assert!(!has(&plain, b"Biru"), "not painted yet");
+    assert!(has(&painted, b"baseColorFactor") && has(&painted, b"Biru"));
+
+    d.key_with(K::Z, egui::Modifiers::COMMAND);
+    d.frame(vec![]);
+    // No more than before: the row of colors shrinks the view, and the axis in it.
+    assert!(blue(&d) <= before, "undo took it off: {}", blue(&d));
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

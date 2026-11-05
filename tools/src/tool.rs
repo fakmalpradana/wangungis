@@ -11,7 +11,7 @@ use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
 use crate::vcb::{self, Unit, Vcb};
-use crate::{EditError, GUIDE_REACH_M, Hit, Movable, Scene};
+use crate::{EditError, GUIDE_REACH_M, Hit, Movable, Paint, Scene};
 
 /// Smallest length (m) a gesture counts as: below it a click means nothing.
 const MIN_LEN: f64 = 1e-4;
@@ -91,6 +91,10 @@ enum State {
     Rectangle {
         first: Option<(Point3, Plane, TileKey)>,
         cursor: Option<Point3>,
+    },
+    Paint {
+        /// Outline of the face under the pointer.
+        hover: Vec<(Point3, Point3)>,
     },
     PushPull {
         armed: Option<Armed>,
@@ -371,6 +375,8 @@ pub struct Tool {
     aperture: f64,
     /// Bare typed lengths are in this.
     unit: Unit,
+    /// What the Paint Bucket puts on; `None` takes paint off.
+    paint: Option<Paint>,
     preview: Preview,
 }
 
@@ -778,6 +784,7 @@ impl Tool {
             state,
             aperture,
             unit: Unit::default(),
+            paint: None,
             preview: Preview::default(),
         }
     }
@@ -968,6 +975,7 @@ impl Tool {
             State::Rotate { .. } => "Klik atau ketik sudut.",
             State::Scale { scaling: None, .. } => "Klik benda.",
             State::Scale { .. } => "Gerakkan kursor lalu klik, atau ketik faktor.",
+            State::Paint { .. } => "Klik face untuk mengecat. Warna dipilih di baris atas.",
             State::Erase { .. } => "Klik tepi untuk menghapus.",
             State::Round { center: None, .. } => "Klik pusat. 8s: jumlah sisi.",
             State::Round { .. } => "Klik atau ketik jari-jari.",
@@ -993,6 +1001,10 @@ impl Tool {
             self.state,
             State::Move { .. } | State::Rotate { .. } | State::PushPull { .. }
         )
+    }
+
+    pub fn paint(aperture: f64) -> Self {
+        Self::with(State::Paint { hover: Vec::new() }, aperture)
     }
 
     pub fn eraser(aperture: f64) -> Self {
@@ -1048,7 +1060,7 @@ impl Tool {
             State::Move { moving, .. } => moving.is_some(),
             State::Rotate { turning, .. } => turning.is_some(),
             State::Scale { scaling, .. } => scaling.is_some(),
-            State::Erase { .. } => false,
+            State::Erase { .. } | State::Paint { .. } => false,
             State::Round { center, .. } => center.is_some(),
             State::Arc { start, .. } => start.is_some(),
             State::Offset { armed, .. } => armed.is_some(),
@@ -1061,10 +1073,15 @@ impl Tool {
         self.unit = unit;
     }
 
+    pub fn set_paint(&mut self, paint: Option<Paint>) {
+        self.paint = paint;
+    }
+
     /// Back to the start of the tool, dropping stale ids after undo or redo.
     pub fn reset(&mut self) {
         let aperture = self.aperture;
         let unit = self.unit;
+        let paint = self.paint.take();
         *self = match self.state {
             State::Select { .. } => Self::select(aperture),
             State::Line { .. } => Self::line(aperture),
@@ -1082,9 +1099,11 @@ impl Tool {
             State::Arc { .. } => Self::arc(aperture),
             State::Offset { .. } => Self::offset(aperture),
             State::Tape { .. } => Self::tape(aperture),
+            State::Paint { .. } => Self::paint(aperture),
             State::Follow { .. } => Self::follow_me(aperture),
         };
         self.unit = unit;
+        self.paint = paint;
     }
 
     /// The whole things Select has picked: top-level nodes, all in one tile.
@@ -1117,6 +1136,7 @@ impl Tool {
             State::Rotate { .. } => self.handle_rotate(scene, input),
             State::Scale { .. } => self.handle_scale(scene, input),
             State::Erase { .. } => self.handle_erase(scene, input),
+            State::Paint { .. } => self.handle_paint(scene, input),
             State::Round { .. } => self.handle_round(scene, input),
             State::Arc { .. } => self.handle_arc(scene, input),
             State::Offset { .. } => self.handle_offset(scene, input),
@@ -2067,6 +2087,40 @@ impl Tool {
         Ok(true)
     }
 
+    fn handle_paint(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let State::Paint { hover } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => {
+                *hover = scene
+                    .pick_face(&ray)
+                    .and_then(|f| scene.face_shape(f.tile, f.source))
+                    .map_or_else(Vec::new, |(_, outline)| ring(&outline));
+            }
+            Input::Click(ray) => match scene.pick_face(&ray) {
+                Some(f) => scene.paint(f.tile, f.source, self.paint.as_ref())?,
+                None => {
+                    let on_region = scene
+                        .snap(&query(ray, NARROW))
+                        .is_some_and(|h| h.snap.sketch_region_source.is_some());
+                    if on_region {
+                        return Err(needs(
+                            "cat hanya untuk face solid; tarik region menjadi solid dulu",
+                        ));
+                    }
+                }
+            },
+            Input::Typed(_) => return Err(needs("cat tidak memakai angka")),
+            Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::LockNormal
+            | Input::Cancel
+            | Input::ToggleCopy => {}
+        }
+        Ok(())
+    }
+
     fn handle_push_pull(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::PushPull { armed, hover, keep } = &mut self.state else {
@@ -2195,7 +2249,7 @@ impl Tool {
                 }
                 _ => Vec::new(),
             },
-            State::Erase { hover } => hover.clone(),
+            State::Erase { hover } | State::Paint { hover } => hover.clone(),
             State::Tape { from, cursor } => match (from, cursor) {
                 (Some((a, along)), Some(b)) => {
                     let span = tape_span(*a, *along, *b);

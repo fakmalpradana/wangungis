@@ -19,8 +19,8 @@ use inference::{
     rank_distance_bucket,
 };
 use kernel::{
-    Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchIslandId, SketchRegionId,
-    Transform, Vec3,
+    Document, KernelOp, Material, NodeId, ObjectId, Plane, Point3, Rgba8, SketchId, SketchIslandId,
+    SketchRegionId, Transform, Vec3,
 };
 use wangungis_scene::project::{
     Project, ProjectError, TileKey, horizontal_reach, node_points, node_visible,
@@ -80,6 +80,13 @@ fn kernel_err<E: fmt::Debug>(e: E) -> EditError {
 pub struct Hit {
     pub tile: TileKey,
     pub snap: Snap,
+}
+
+/// A flat color for the Paint Bucket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paint {
+    pub name: String,
+    pub color: Rgba8,
 }
 
 /// A face under a ray: `source` is valid in `tile`, `depth` is the distance
@@ -1542,6 +1549,40 @@ impl Scene {
         self.guard_reach(key)?;
         self.record(key);
         Ok(object)
+    }
+
+    /// Paints a solid's face, or takes the paint off with `None`. One undo step,
+    /// and none when the face already looks that way. A material belongs to one
+    /// document, so each tile holds its own of the same color. It stays in the
+    /// tile's palette after an undo, as Hew does not undo palette additions.
+    pub fn paint(
+        &mut self,
+        key: TileKey,
+        source: SnapSource,
+        paint: Option<&Paint>,
+    ) -> Result<(), EditError> {
+        if source.instance.is_some() {
+            return Err(EditError::Unsupported("mengecat isi komponen"));
+        }
+        let inference::ElementRef::Face(face) = source.element else {
+            return Err(EditError::Unsupported("mengecat selain face"));
+        };
+        let doc = self.project.tile_mut(key)?;
+        let material = paint.map(|p| {
+            let same = doc
+                .materials()
+                .iter()
+                .find(|(_, m)| m.color == p.color && !m.has_texture())
+                .map(|(id, _)| id);
+            same.unwrap_or_else(|| doc.add_material(Material::solid(p.name.clone(), p.color)))
+        });
+        if doc.face_material(source.object, face) == material {
+            return Ok(());
+        }
+        doc.paint_face(source.object, face, material)
+            .map_err(kernel_err)?;
+        self.record(key);
+        Ok(())
     }
 
     /// Undoes the latest edit, in whichever tile it happened.

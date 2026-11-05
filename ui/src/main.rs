@@ -19,9 +19,9 @@ use inference::{Axis, PickRay, SnapKind};
 use kernel::{Point3, Vec3};
 use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::{Project, TileKey};
-use wangungis_tools::Scene;
 use wangungis_tools::tool::{Input, Preview, Tool};
 use wangungis_tools::vcb::Unit;
+use wangungis_tools::{Paint, Scene};
 
 /// egui-wgpu 0.37 `register_native_texture` requires Rgba8Unorm; the golden
 /// tests in `render` use the same format.
@@ -33,6 +33,21 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
+/// The Paint Bucket's ready colors.
+const PAINTS: [(&str, [u8; 3]); 12] = [
+    ("Beton", [190, 190, 185]),
+    ("Plester", [240, 238, 230]),
+    ("Bata", [170, 85, 60]),
+    ("Genteng", [175, 75, 45]),
+    ("Kayu", [150, 105, 65]),
+    ("Batu", [150, 140, 125]),
+    ("Baja", [120, 130, 140]),
+    ("Kaca", [150, 200, 220]),
+    ("Aspal", [70, 70, 75]),
+    ("Rumput", [110, 160, 80]),
+    ("Kuning", [235, 200, 80]),
+    ("Biru", [70, 110, 170]),
+];
 /// Unlike the axes, the preview, the snap markers and the pale background.
 const GUIDE_COLOR: [f32; 3] = [0.85, 0.0, 0.55];
 /// Seconds between autosaves of a project with unsaved changes.
@@ -73,6 +88,13 @@ enum Leaving {
 // ponytail: per-window files when two open projects at once is a real use.
 fn default_autosave() -> Option<PathBuf> {
     user_file("autosave.bin")
+}
+
+fn ready_paint((name, [r, g, b]): (&str, [u8; 3])) -> Paint {
+    Paint {
+        name: name.into(),
+        color: kernel::Rgba8::rgb(r, g, b),
+    }
 }
 
 fn user_file(name: &str) -> Option<PathBuf> {
@@ -120,6 +142,8 @@ struct App {
     tool: Tool,
     /// Lengths are shown in this, and bare typed lengths read in it.
     unit: Unit,
+    /// What the Paint Bucket puts on; `None` takes paint off.
+    paint: Option<Paint>,
     /// `None`: the unit is not remembered, as when the home folder is unknown.
     unit_file: Option<PathBuf>,
     /// What the user is typing for the tool.
@@ -185,6 +209,7 @@ impl App {
             scene: empty_scene(),
             tool: Tool::select(0.01),
             unit: Unit::default(),
+            paint: Some(ready_paint(PAINTS[0])),
             unit_file: None,
             typed: String::new(),
             stats: BTreeMap::new(),
@@ -484,10 +509,42 @@ impl App {
     fn switch_tool(&mut self, make: fn(f64) -> Tool) {
         self.tool = make(0.01);
         self.tool.set_unit(self.unit);
+        self.tool.set_paint(self.paint.clone());
         self.typed.clear();
         self.error = None;
         // The parked pointer has something to tell the new tool.
         self.last_pointer = None;
+    }
+
+    fn set_paint(&mut self, paint: Option<Paint>) {
+        self.tool.set_paint(paint.clone());
+        self.paint = paint;
+    }
+
+    /// The colors, shown while the Paint Bucket is the tool.
+    fn paint_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Cat:");
+            for ready in PAINTS {
+                let [r, g, b] = ready.1;
+                let swatch = egui::Button::new("")
+                    .fill(egui::Color32::from_rgb(r, g, b))
+                    .min_size(egui::vec2(20.0, 20.0));
+                if ui.add(swatch).on_hover_text(ready.0).clicked() {
+                    self.set_paint(Some(ready_paint(ready)));
+                }
+            }
+            let held = self.paint.as_ref().map(|p| p.color);
+            let mut rgb = held.map_or([255; 3], |c| [c.r, c.g, c.b]);
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                let name = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                self.set_paint(Some(ready_paint((&name, rgb))));
+            }
+            if ui.button("Hapus cat").clicked() {
+                self.set_paint(None);
+            }
+            ui.label(self.paint.as_ref().map_or("Tanpa cat", |p| &p.name));
+        });
     }
 
     fn set_unit(&mut self, unit: Unit) {
@@ -680,6 +737,7 @@ impl App {
             K::P if self.typed.is_empty() => self.switch_tool(Tool::push_pull),
             K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
             K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
+            K::B if self.typed.is_empty() => self.switch_tool(Tool::paint),
             K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
             K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
             // C copies in the tools that can; everywhere else it is Circle.
@@ -1073,6 +1131,7 @@ impl App {
                     ("Pindah (M)", Tool::move_tool),
                     ("Putar (Q)", Tool::rotate),
                     ("Skala (S)", Tool::scale),
+                    ("Cat (B)", Tool::paint),
                     ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui
@@ -1125,6 +1184,9 @@ impl App {
                 }
             });
         });
+        if self.tool.same_kind(&Tool::paint(0.0)) {
+            egui::Panel::top("paints").show(ui, |ui| self.paint_row(ui));
+        }
         egui::Panel::bottom("hint").show(ui, |ui| {
             ui.label(self.tool.hint());
         });
