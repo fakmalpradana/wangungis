@@ -27,7 +27,7 @@ Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle
 - `Scene::{face_shape, region_shape, region_count, outline}` memberi bidang dan batas untuk tool.
 
 Perilaku:
-- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang.
+- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang. Klik pertama di tepi atau sudut belum menentukan face mana yang dimaksud, jadi sebelum ada segmen, bidang mengikuti face di bawah kursor yang memuat titik itu.
 - **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).

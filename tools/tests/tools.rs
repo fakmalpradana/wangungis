@@ -820,3 +820,26 @@ fn offset_towards_the_cursor_on_regions_and_faces() {
     typed(&mut f, &mut s, "1").unwrap();
     assert_eq!(faces_where(&s, |p| (p.z - 3.0).abs() <= MM), 2);
 }
+
+/// A line starting on the edge between two faces lies on the one the cursor goes
+/// to, whichever the first click's ray happened to hit.
+#[test]
+fn a_line_from_an_edge_follows_the_cursor_to_its_face() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut l = Tool::line(APERTURE);
+    // The top's south edge, then across the top.
+    click(&mut l, &mut s, [12.5, 10.0, 3.0]);
+    assert!(l.busy());
+    hover(&mut l, &mut s, [12.5, 14.0, 3.0]);
+    click(&mut l, &mut s, [12.5, 14.0, 3.0]);
+    assert!(!l.busy(), "it divides the top, which ends the chain");
+    assert_eq!(faces_where(&s, |p| (p.z - 3.0).abs() <= MM), 2);
+    s.undo().unwrap();
+
+    // The same start, then down the wall to its bottom edge.
+    click(&mut l, &mut s, [12.5, 10.0, 3.0]);
+    click(&mut l, &mut s, [12.5, 10.0, 0.0]);
+    assert!(!l.busy());
+    assert_eq!(faces_where(&s, |p| (p.y - 10.0).abs() <= MM), 2);
+}

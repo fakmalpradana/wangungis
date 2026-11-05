@@ -165,6 +165,8 @@ struct Chain {
     tile: TileKey,
     cursor: Option<Point3>,
     lock: Option<Axis>,
+    /// Nothing drawn yet, so the plane may still follow the cursor.
+    open: bool,
 }
 
 /// The active tool. Errors leave the tool where it was, so the user can retry.
@@ -299,6 +301,14 @@ fn first_point(scene: &mut Scene, ray: PickRay, aperture: f64) -> Option<(Point3
         }
     };
     Some((on_plane(p, &plane), plane, tile))
+}
+
+/// The face under the cursor that holds `anchor`. A first click on an edge or
+/// corner cannot tell which of its faces is meant; where the cursor goes next can.
+fn plane_under(scene: &mut Scene, ray: &PickRay, anchor: Point3) -> Option<Plane> {
+    let face = scene.pick_face(ray)?;
+    let (plane, _) = scene.face_shape(face.tile, face.source)?;
+    (plane.signed_distance(anchor).abs() <= ON_PLANE).then_some(plane)
 }
 
 /// A later point of a gesture, kept on `plane`. `anchor` turns on axis inference
@@ -796,6 +806,11 @@ impl Tool {
         match input {
             Input::Hover(ray) => match chain {
                 Some(c) => {
+                    if c.open
+                        && let Some(p) = plane_under(scene, &ray, c.anchor)
+                    {
+                        c.plane = p;
+                    }
                     let next = next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture);
                     c.cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
@@ -811,10 +826,16 @@ impl Tool {
                             tile,
                             cursor: None,
                             lock: None,
+                            open: true,
                         });
                     }
                 }
                 Some(c) => {
+                    if c.open
+                        && let Some(p) = plane_under(scene, &ray, c.anchor)
+                    {
+                        c.plane = p;
+                    }
                     if let Some((end, _)) =
                         next_point(scene, ray, Some(c.anchor), &c.plane, c.lock, aperture)
                         && Self::add_segment(scene, c, end)?
@@ -861,6 +882,7 @@ impl Tool {
             return Ok(false);
         }
         let drawn = scene.draw(Some(c.tile), c.plane, &[(c.anchor, end)])?;
+        c.open = false;
         c.anchor = end;
         c.cursor = None;
         Ok(drawn.closed)
@@ -873,7 +895,10 @@ impl Tool {
         };
         match input {
             Input::Hover(ray) => match first {
-                Some((_, plane, _)) => {
+                Some((a, plane, _)) => {
+                    if let Some(p) = plane_under(scene, &ray, *a) {
+                        *plane = p;
+                    }
                     let next = next_point(scene, ray, None, plane, None, aperture);
                     *cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
@@ -885,6 +910,9 @@ impl Tool {
                     *first = first_point(scene, ray, aperture);
                 }
                 Some((a, plane, tile)) => {
+                    if let Some(p) = plane_under(scene, &ray, *a) {
+                        *plane = p;
+                    }
                     if let Some((b, _)) = next_point(scene, ray, None, plane, None, aperture) {
                         let (w, d) = spans(*a, b, plane);
                         if Self::draw_rectangle(scene, *a, plane, *tile, w, d)? {
