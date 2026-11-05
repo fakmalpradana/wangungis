@@ -225,8 +225,9 @@ pub struct Scene {
     cells: BTreeMap<TileKey, Cells>,
     /// No geometry: answers pure-direction snaps (project axes, axis locks).
     base: InferenceScene,
-    undo: Vec<TileKey>,
-    redo: Vec<TileKey>,
+    /// Edits in order: their tile, and how many Hew steps each took.
+    undo: Vec<(TileKey, u32)>,
+    redo: Vec<(TileKey, u32)>,
     dirty: BTreeSet<TileKey>,
 }
 
@@ -236,6 +237,22 @@ fn offset(p: Point3, c: [f64; 3]) -> Point3 {
 
 fn onset(p: Point3, c: [f64; 3]) -> Point3 {
     Point3::new(p.x + c[0], p.y + c[1], p.z + c[2])
+}
+
+/// The plane of the two faces `edge` divides, when they lie on one plane facing
+/// the same way: such an edge is drawing, any other holds the solid together.
+fn dividing_plane(object: &kernel::Object, edge: kernel::EdgeId) -> Option<Plane> {
+    let he = object.half_edges().values().find(|h| h.edge == edge)?;
+    let twin = &object.half_edges()[he.twin?];
+    let (f, g) = (
+        object.loops()[he.loop_id].face,
+        object.loops()[twin.loop_id].face,
+    );
+    let (p, q) = (object.faces()[f].plane, object.faces()[g].plane);
+    let same = f != g
+        && p.normal().dot(q.normal()) > 1.0 - IN_PLANE
+        && p.signed_distance(q.point()).abs() <= IN_PLANE;
+    same.then_some(p)
 }
 
 /// `t`, given in project-local coordinates, as seen from a tile centered at `c`.
@@ -646,7 +663,12 @@ impl Scene {
 
     /// Records a finished edit on `key` as one project undo step.
     fn record(&mut self, key: TileKey) {
-        self.undo.push(key);
+        self.record_steps(key, 1);
+    }
+
+    /// Records `steps` Hew steps on `key` as one project undo step.
+    fn record_steps(&mut self, key: TileKey, steps: u32) {
+        self.undo.push((key, steps));
         self.redo.clear();
         self.touch(key);
     }
@@ -954,25 +976,10 @@ impl Scene {
                 })
         };
         if source.instance.is_none() {
-            let (a, b) = doc.object(source.object)?.edge_endpoints(edge)?;
-            let on = |p: &Plane| {
-                [a, b]
-                    .iter()
-                    .all(|q| p.signed_distance(*q).abs() <= IN_PLANE)
-            };
-            // An edge on a plane where the object carries drawing may be drawing
-            // itself; drafting refuses it if it is the solid's own.
-            if let Some(plane) = doc
-                .object_drawing_planes(source.object)
-                .iter()
-                .find(|p| on(p))
-            {
-                return Some(Erasable::Line {
-                    tile,
-                    plane: *plane,
-                    a,
-                    b,
-                });
+            let object = doc.object(source.object)?;
+            let (a, b) = object.edge_endpoints(edge)?;
+            if let Some(plane) = dividing_plane(object, edge) {
+                return Some(Erasable::Line { tile, plane, a, b });
             }
         }
         Some(Erasable::Node {
@@ -1009,12 +1016,11 @@ impl Scene {
                 let objects = doc.drawable_objects_on_plane(*plane, None);
                 let (report, _) = doc
                     .draft(*plane, None, &objects, "erase", |sk| {
-                        let near = |p: Point3, q: Point3| (p - q).length() <= IN_PLANE;
                         // Drafting may have split it where other drawing meets it.
                         let on = |p: Point3| {
                             let (u, v) = (*b - *a, p - *a);
-                            let t = v.dot(u) / u.dot(u);
-                            (0.0..=1.0).contains(&t) && (v - u * t).length() <= IN_PLANE
+                            let t = (v.dot(u) / u.dot(u)).clamp(0.0, 1.0);
+                            (v - u * t).length() <= IN_PLANE
                         };
                         let pieces: Vec<_> = sk
                             .edges()
@@ -1022,9 +1028,7 @@ impl Scene {
                             .filter(|(_, e)| {
                                 let (p, q) =
                                     (sk.vertices()[e.from].position, sk.vertices()[e.to].position);
-                                (near(p, *a) && near(q, *b))
-                                    || (near(p, *b) && near(q, *a))
-                                    || (on(p) && on(q))
+                                on(p) && on(q)
                             })
                             .map(|(id, _)| id)
                             .collect();
@@ -1033,12 +1037,7 @@ impl Scene {
                         }
                         Ok(())
                     })
-                    .map_err(|e| match e {
-                        kernel::DocumentError::DraftBoundaryEdgeTouched => EditError::Unsupported(
-                            "tepi solid tidak bisa dihapus sendiri; pilih seluruh objek",
-                        ),
-                        other => kernel_err(other),
-                    })?;
+                    .map_err(kernel_err)?;
                 if !report.objects.is_empty() || !report.sketches.is_empty() {
                     self.record(*tile);
                 }
@@ -1097,7 +1096,7 @@ impl Scene {
     }
 
     /// Makes `count` copies of `m`, each `step` (project-local) past the last.
-    /// One undo step, except drawing copied off its plane: one per copy.
+    /// One undo step.
     pub fn copy(
         &mut self,
         m: &Movable,
@@ -1124,17 +1123,20 @@ impl Scene {
                     .sketch(*sketch)
                     .ok_or(EditError::Kernel("sketch hilang".into()))?
                     .plane();
-                let stays = local.apply_plane(&plane).is_ok_and(|p| {
-                    p.normal().dot(plane.normal()) > 1.0 - IN_PLANE
-                        && plane
-                            .signed_distance(local.apply_point(plane.point()))
-                            .abs()
-                            <= IN_PLANE
-                });
+                // Every copy of every point on the plane: the kernel can draft them.
+                let stays = {
+                    let mut placed: Vec<Point3> =
+                        segments.iter().flat_map(|(a, b)| [*a, *b]).collect();
+                    (0..count.get()).all(|_| {
+                        placed.iter_mut().all(|p| {
+                            *p = local.apply_point(*p);
+                            plane.signed_distance(*p).abs() <= IN_PLANE
+                        })
+                    })
+                };
                 if stays {
                     // One draft: the copies join the drawing and undo together.
-                    let objects = doc.drawable_objects_on_plane(plane, None);
-                    doc.draft(plane, None, &objects, "copy", |sk| {
+                    self.run_draft(key, plane, "copy", |sk| {
                         let mut placed = segments.clone();
                         for _ in 0..count.get() {
                             for (a, b) in &mut placed {
@@ -1143,19 +1145,23 @@ impl Scene {
                                 sk.add_segment(*a, *b)?;
                             }
                         }
-                        Ok(())
-                    })
-                    .map_err(kernel_err)?;
-                    self.record(key);
+                        Ok(false)
+                    })?;
                 } else {
+                    // Hew takes one step per copy: the project counts them as one.
                     let mut t = Transform::IDENTITY;
+                    let mut made = 0;
                     for _ in 0..count.get() {
                         t = t.then(&local);
-                        let doc = self.project.tile_mut(key)?;
-                        doc.copy_sketch_islands(*sketch, &[*island], &t)
-                            .map_err(kernel_err)?;
-                        self.record(key);
+                        if let Err(e) = doc.copy_sketch_islands(*sketch, &[*island], &t) {
+                            for _ in 0..made {
+                                doc.undo().map_err(kernel_err)?;
+                            }
+                            return Err(kernel_err(e));
+                        }
+                        made += 1;
                     }
+                    self.record_steps(key, made);
                 }
             }
         }
@@ -1253,24 +1259,30 @@ impl Scene {
 
     /// Undoes the latest edit, in whichever tile it happened.
     pub fn undo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some(key) = self.undo.last().copied() else {
+        let Some((key, steps)) = self.undo.last().copied() else {
             return Ok(None);
         };
-        self.project.tile_mut(key)?.undo().map_err(kernel_err)?;
+        let doc = self.project.tile_mut(key)?;
+        for _ in 0..steps {
+            doc.undo().map_err(kernel_err)?;
+        }
         self.undo.pop();
-        self.redo.push(key);
+        self.redo.push((key, steps));
         self.touch(key);
         Ok(Some(key))
     }
 
     /// Redoes the latest undone edit.
     pub fn redo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some(key) = self.redo.last().copied() else {
+        let Some((key, steps)) = self.redo.last().copied() else {
             return Ok(None);
         };
-        self.project.tile_mut(key)?.redo().map_err(kernel_err)?;
+        let doc = self.project.tile_mut(key)?;
+        for _ in 0..steps {
+            doc.redo().map_err(kernel_err)?;
+        }
         self.redo.pop();
-        self.undo.push(key);
+        self.undo.push((key, steps));
         self.touch(key);
         Ok(Some(key))
     }

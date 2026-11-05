@@ -1250,3 +1250,63 @@ proptest! {
         prop_assert_eq!(&s.project().save(), &before);
     }
 }
+
+/// A real edge on a face that carries drawing is still a real edge.
+#[test]
+fn a_boundary_edge_of_a_drawn_face_takes_the_solid() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    s.draw(Some(key), top_plane(3.0), &ring_at(3.0, 1.0, 1.0, 2.0, 2.0))
+        .unwrap();
+    let e = erasable(&mut s, [4.0, -30.0, 30.0], [4.0, 0.0, 3.0]);
+    assert!(matches!(e, Erasable::Node { .. }), "{e:?}");
+    s.erase(&e).unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+}
+
+/// Copying drawing off its plane is one project step, whatever the count, and
+/// respacing it twice leaves only the last array.
+#[test]
+fn off_plane_arrays_are_one_step_and_respace_cleanly() {
+    let mut s = scene();
+    draw_rect(&mut s, 0.0, 0.0, 2.0, 2.0);
+    let base = sketch_edges(s.project());
+    let hit = s.snap(&query([1.0, 1.0, 50.0], [1.0, 1.0, 0.0])).unwrap();
+    let m = s.movable_at(&hit).unwrap();
+    let up = Transform::translation(Vec3::new(0.0, 0.0, 3.0));
+
+    s.copy(&m, &up, NonZeroU32::MIN).unwrap();
+    s.respace_copy(&m, &up, NonZeroU32::new(3).unwrap())
+        .unwrap();
+    assert_eq!(sketch_edges(s.project()), base + 12);
+    s.respace_copy(&m, &up, NonZeroU32::new(2).unwrap())
+        .unwrap();
+    assert_eq!(
+        sketch_edges(s.project()),
+        base + 8,
+        "only the last array stays"
+    );
+    s.undo().unwrap();
+    assert_eq!(sketch_edges(s.project()), base, "one step");
+    s.redo().unwrap();
+    assert_eq!(sketch_edges(s.project()), base + 8);
+    s.undo().unwrap();
+    assert_eq!(s.undo().unwrap(), Some(TileKey::ORIGIN));
+    assert_eq!(sketch_edges(s.project()), 0);
+}
+
+/// A copy lying exactly on existing drawing changes nothing, so it is no step:
+/// the project's undo stack must not drift from the tile's.
+#[test]
+fn a_copy_onto_itself_is_no_step() {
+    let mut s = scene();
+    draw_rect(&mut s, 0.0, 0.0, 2.0, 2.0);
+    draw_rect(&mut s, 5.0, 0.0, 2.0, 2.0);
+    let hit = s.snap(&query([1.0, 1.0, 50.0], [1.0, 1.0, 0.0])).unwrap();
+    let m = s.movable_at(&hit).unwrap();
+    let over = Transform::translation(Vec3::new(5.0, 0.0, 0.0));
+    s.copy(&m, &over, NonZeroU32::MIN).unwrap();
+    assert!(s.undo().unwrap().is_some());
+    assert!(s.undo().unwrap().is_some());
+    assert_eq!(s.undo().unwrap(), None, "two drawings, two steps");
+}

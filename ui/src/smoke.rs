@@ -548,59 +548,35 @@ fn box_with_a_door_in_an_array_of_ten() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Ctrl flips copying like the C key, and only in Move.
+/// A bare tap of Ctrl flips copying like the C key; a chord with it does not.
 #[test]
-fn ctrl_toggles_copying_in_move() {
+fn a_ctrl_tap_toggles_copying_in_move() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut d) = Driver::start() else { return };
     d.letter(egui::Key::M, "m");
     d.hold(egui::Modifiers::CTRL);
     d.frame(vec![]);
-    assert!(d.app.tool.copying(), "pressing Ctrl copies");
+    assert!(!d.app.tool.copying(), "nothing until it is released");
     d.hold(egui::Modifiers::NONE);
-    assert!(d.app.tool.copying(), "releasing it changes nothing");
+    d.frame(vec![]);
+    assert!(d.app.tool.copying(), "a tap copies");
     d.hold(egui::Modifiers::CTRL);
     d.hold(egui::Modifiers::NONE);
+    d.frame(vec![]);
+    assert!(!d.app.tool.copying(), "a second tap goes back");
+
+    // Ctrl+S on the way does not count as a tap.
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![egui::Event::Key {
+        key: egui::Key::S,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::CTRL,
+    }]);
+    d.hold(egui::Modifiers::NONE);
+    d.frame(vec![]);
     assert!(!d.app.tool.copying());
-}
-
-#[test]
-fn eraser_takes_a_line_then_the_box() {
-    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(mut d) = Driver::start() else { return };
-    use egui::Key as K;
-    d.letter(K::R, "r");
-    d.click([2.0, 2.0, 0.0]);
-    d.hover([3.0, 3.0, 0.0]);
-    d.value("5;4");
-    d.letter(K::P, "p");
-    d.click([3.5, 3.0, 0.0]);
-    d.value("3");
-
-    // A line across the top, then erase it.
-    d.letter(K::L, "l");
-    d.click([4.5, 2.0, 3.0]);
-    d.click([4.5, 6.0, 3.0]);
-    d.key(K::Escape);
-    let faces = |d: &Driver| {
-        let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
-        let ids = doc.visible_object_ids();
-        ids.first()
-            .map_or(0, |o| doc.object(*o).unwrap().faces().len())
-    };
-    assert_eq!(faces(&d), 7);
-    d.letter(K::E, "e");
-    d.hover([4.5, 4.0, 3.0]);
-    assert!(!d.app.tool.preview().lines.is_empty(), "the line lights up");
-    d.click([4.5, 4.0, 3.0]);
-    assert_eq!(d.app.error, None);
-    assert_eq!(faces(&d), 6, "the top is whole again");
-
-    // A real edge takes the box.
-    d.click([3.5, 2.0, 3.0]);
-    assert_eq!(d.counts(), (0, 0));
-    d.key_with(K::Z, COMMAND);
-    assert_eq!(d.counts(), (1, 12));
 }
 
 /// A box drawn through the real input path.

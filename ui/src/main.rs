@@ -109,6 +109,8 @@ struct App {
     overlay_shown: Option<Preview>,
     last_pointer: Option<egui::Pos2>,
     ctrl_held: bool,
+    /// Another key or button went down while Ctrl was held.
+    ctrl_chord: bool,
     error: Option<String>,
     /// `None`: autosave is off, as when the home folder is unknown.
     autosave: Option<PathBuf>,
@@ -155,6 +157,7 @@ impl App {
             overlay_shown: None,
             last_pointer: None,
             ctrl_held: false,
+            ctrl_chord: false,
             error: None,
             autosave: None,
             autosaved_at: 0.0,
@@ -416,6 +419,25 @@ impl App {
 
     /// Keys and typed text, unless a text box has them.
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // A bare tap of Ctrl flips copying, like the C key; Ctrl+Z or Ctrl+S do not.
+        // Tools without copying ignore it. Tracked even while a text box has the
+        // keyboard, so a chord there does not look like a tap afterwards.
+        let (ctrl, chord) = ctx.input(|i| {
+            let pressed = i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                )
+            });
+            (i.modifiers.ctrl, pressed)
+        });
+        self.ctrl_chord |= ctrl && chord;
+        let tapped = self.ctrl_held && !ctrl && !self.ctrl_chord;
+        if !ctrl {
+            self.ctrl_chord = false;
+        }
+        self.ctrl_held = ctrl;
         // Tab can park focus on a button, where keys would stop reaching the
         // tools and Enter would press it. Only a text box keeps the keyboard.
         if !ctx.text_edit_focused()
@@ -426,13 +448,9 @@ impl App {
         if ctx.text_edit_focused() {
             return;
         }
-        // Ctrl flips copying the moment it goes down, like the C key. Tools
-        // without copying ignore it.
-        let ctrl = ctx.input(|i| i.modifiers.ctrl);
-        if ctrl && !self.ctrl_held {
+        if tapped {
             self.feed(Input::ToggleCopy);
         }
-        self.ctrl_held = ctrl;
         for ev in ctx.input(|i| i.events.clone()) {
             match ev {
                 egui::Event::Text(text) => {

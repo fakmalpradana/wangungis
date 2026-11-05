@@ -843,3 +843,33 @@ fn a_line_from_an_edge_follows_the_cursor_to_its_face() {
     assert!(!l.busy());
     assert_eq!(faces_where(&s, |p| (p.y - 10.0).abs() <= MM), 2);
 }
+
+/// Typing a value that changes nothing leaves no step; the gesture stays open.
+#[test]
+fn identity_values_are_refused() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let saved = s.project().save();
+    let mut r = Tool::rotate(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    assert!(typed(&mut r, &mut s, "0").is_err());
+    assert!(r.busy());
+    let mut t = Tool::scale(APERTURE);
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    assert!(typed(&mut t, &mut s, "1").is_err());
+    assert!(t.busy());
+    assert_eq!(s.project().save(), saved);
+}
+
+/// A lock set after the cursor last moved still rules the typed direction.
+#[test]
+fn typed_move_keeps_to_a_late_lock() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut m, &mut s, [16.0, 15.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    typed(&mut m, &mut s, "2").unwrap();
+    assert_box(&s, [12.0, 10.0, 0.0], [17.0, 14.0, 3.0]);
+}

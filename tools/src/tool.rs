@@ -143,6 +143,8 @@ struct Turning {
 struct Scaling {
     what: Movable,
     center: Point3,
+    /// Where the cursor is read, fixed for the gesture so factors do not jump.
+    plane: Plane,
     /// Distance from the center of the grabbed point.
     grip: f64,
     factor: f64,
@@ -374,16 +376,16 @@ fn move_point(
     ray_on_plane(&ray, &plane).map(|p| (p, None))
 }
 
-/// Where the cursor is in the horizontal plane through `center`, or in the
+/// The plane to read a scaling cursor on: horizontal through `center`, or the
 /// vertical plane facing the eye when looking along the horizontal.
-fn direction_in_plane_point(ray: &PickRay, center: Point3) -> Option<Point3> {
+fn scale_plane(ray: &PickRay, center: Point3) -> Option<Plane> {
     let dir = ray.direction.normalized().ok()?;
     let normal = if dir.z.abs() > 0.1 {
         Vec3::new(0.0, 0.0, 1.0)
     } else {
         Vec3::new(dir.x, dir.y, 0.0).normalized().ok()?
     };
-    ray_on_plane(ray, &Plane::from_point_normal(center, normal).ok()?)
+    Plane::from_point_normal(center, normal).ok()
 }
 
 /// `sides` points around `center` on `plane`, the first towards `toward`.
@@ -1035,6 +1037,9 @@ impl Tool {
             },
             Input::Typed(text) => match (&*turning, vcb::parse(&text)) {
                 (Some(t), Some(Vcb::One(degrees))) => {
+                    if degrees.abs() < 1e-6 {
+                        return Err(needs("sudut nol tidak mengubah apa pun"));
+                    }
                     let snapshot = t.clone();
                     finish(scene, &snapshot, degrees.to_radians(), *copy)?;
                     *turning = None;
@@ -1074,7 +1079,7 @@ impl Tool {
         match input {
             Input::Hover(ray) => match scaling {
                 Some(s) => {
-                    if let Some(p) = direction_in_plane_point(&ray, s.center) {
+                    if let Some(p) = ray_on_plane(&ray, &s.plane) {
                         s.factor = ((p - s.center).length() / s.grip).max(MIN_SCALE);
                     }
                 }
@@ -1091,14 +1096,16 @@ impl Tool {
                     if let Some(hit) = scene.snap(&query(ray, aperture))
                         && let Some(what) = scene.movable_at(&hit)
                         && let Some(center) = scene.movable_center(&what)
+                        && let Some(plane) = scale_plane(&ray, center)
                     {
-                        let p = direction_in_plane_point(&ray, center).unwrap_or(hit.snap.position);
+                        let p = ray_on_plane(&ray, &plane).unwrap_or(hit.snap.position);
                         let grip = (p - center).length();
                         if grip > MIN_LEN {
                             *scaling = Some(Scaling {
                                 lines: scene.movable_lines(&what),
                                 what,
                                 center,
+                                plane,
                                 grip,
                                 factor: 1.0,
                             });
@@ -1107,7 +1114,7 @@ impl Tool {
                     }
                 }
                 Some(s) => {
-                    if let Some(p) = direction_in_plane_point(&ray, s.center) {
+                    if let Some(p) = ray_on_plane(&ray, &s.plane) {
                         s.factor = ((p - s.center).length() / s.grip).max(MIN_SCALE);
                     }
                     if (s.factor - 1.0).abs() > 1e-6 {
@@ -1125,6 +1132,9 @@ impl Tool {
                 };
                 if factor < MIN_SCALE {
                     return Err(needs("faktor skala harus positif"));
+                }
+                if (factor - 1.0).abs() < 1e-6 {
+                    return Err(needs("faktor 1 tidak mengubah apa pun"));
                 }
                 scene.transform(&s.what, &scaling_about(s.center, factor))?;
                 *scaling = None;
@@ -1414,9 +1424,16 @@ impl Tool {
             Input::Typed(text) => match (&*moving, vcb::parse(&text)) {
                 (Some(m), Some(Vcb::One(len))) => {
                     let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
-                    let dir = (cursor - m.base)
-                        .normalized()
-                        .map_err(|_| needs("arahkan kursor dulu"))?;
+                    let toward = cursor - m.base;
+                    // Under a lock the cursor only says which way along the axis:
+                    // it may predate the lock.
+                    let dir = match m.lock {
+                        Some(axis) if toward.dot(axis.unit()) < 0.0 => axis.unit() * -1.0,
+                        Some(axis) => axis.unit(),
+                        None => toward
+                            .normalized()
+                            .map_err(|_| needs("arahkan kursor dulu"))?,
+                    };
                     let m = moving.as_mut().expect("matched above");
                     if Self::finish_move(scene, m, dir * len, *copy, last)? {
                         *moving = None;
