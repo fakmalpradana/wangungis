@@ -641,6 +641,41 @@ fn draw_a_box(d: &mut Driver) {
     assert_eq!(d.counts(), (1, 12));
 }
 
+/// The unit reads back after a restart, rules what is typed, and shows on the tape.
+#[test]
+fn millimeters_from_the_status_bar_to_the_model() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = temp_dir("unit");
+    d.app.unit_file = Some(dir.join("data").join("unit"));
+
+    d.app.set_unit(Unit::Mm);
+    assert_eq!(d.app.error, None);
+    assert_eq!(read_unit(&dir.join("data").join("unit")), Unit::Mm);
+
+    d.letter(K::R, "r");
+    d.click([2.0, 2.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5000;4000");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3000");
+    close(d.extents(), [5.0, 4.0, 3.0]);
+
+    // F and T are units here, not the Offset and Tape tools.
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 3.0]);
+    d.frame(vec![egui::Event::Text("10".into())]);
+    d.letter(K::F, "f");
+    d.letter(K::T, "t");
+    assert_eq!(d.app.typed, "10ft");
+    d.key(K::Enter);
+    assert_eq!(d.app.error, None);
+    close(d.extents(), [5.0, 4.0, 6.048]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

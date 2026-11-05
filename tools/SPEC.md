@@ -49,7 +49,7 @@ Perilaku:
 - **Sudut (Line):** `30d` mengunci arah 30° dari sumbu terkunci, atau dari sumbu pertama bidang (X di bidang datar, horizontal di bidang lain), ke kuadran tempat kursor berada. Sudut negatif membalik sisi. Mengetik sudut lagi tetap dihitung dari sumbu yang sama. Arahnya satu jalan: panjang ketikan mengikutinya ke mana pun kursor, dan di belakang titik awal pratinjau maupun klik tidak menggambar. Butuh kursor yang sudah bergerak sejak segmen terakhir, untuk menentukan sisi. Bidang gambar baru berubah saat segmen dibuat.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 
-VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan. `30d` atau `30°` untuk sudut dalam derajat.
+VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m`/`ft`; tanpa satuan berarti satuan tampilan (`Tool::set_unit`, default m). Hanya nilai yang berarti panjang mengikuti satuan tampilan: faktor skala, derajat, jumlah salinan, dan jumlah sisi tidak. `vcb::parse` membaca tanpa satuan sebagai apa adanya, `vcb::parse_in(text, unit)` untuk panjang. `Unit::format(meter)` menulis panjang dengan presisi tetap per satuan (m 3 desimal, cm 1, mm 0, ft 2), tanda negatif untuk arah berlawanan. `30d` atau `30°` untuk sudut dalam derajat.
 
 ## Invariant (diuji di `tests/scene.rs` dan `tests/tools.rs`)
 - Menggerakkan kursor tidak pernah mengedit (property test, semua tool, sinar acak).

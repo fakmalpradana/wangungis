@@ -9,7 +9,7 @@ use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, T
 use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
-use crate::vcb::{self, Vcb};
+use crate::vcb::{self, Unit, Vcb};
 use crate::{EditError, GUIDE_REACH_M, Hit, Movable, Scene};
 
 /// Smallest length (m) a gesture counts as: below it a click means nothing.
@@ -307,6 +307,8 @@ impl Chain {
 pub struct Tool {
     state: State,
     aperture: f64,
+    /// Bare typed lengths are in this.
+    unit: Unit,
     preview: Preview,
 }
 
@@ -713,6 +715,7 @@ impl Tool {
         Tool {
             state,
             aperture,
+            unit: Unit::default(),
             preview: Preview::default(),
         }
     }
@@ -976,9 +979,14 @@ impl Tool {
         }
     }
 
+    pub fn set_unit(&mut self, unit: Unit) {
+        self.unit = unit;
+    }
+
     /// Back to the start of the tool, dropping stale ids after undo or redo.
     pub fn reset(&mut self) {
         let aperture = self.aperture;
+        let unit = self.unit;
         *self = match self.state {
             State::Select { .. } => Self::select(aperture),
             State::Line { .. } => Self::line(aperture),
@@ -998,6 +1006,7 @@ impl Tool {
             State::Tape { .. } => Self::tape(aperture),
             State::Follow { .. } => Self::follow_me(aperture),
         };
+        self.unit = unit;
     }
 
     /// The whole things Select has picked: top-level nodes, all in one tile.
@@ -1165,7 +1174,7 @@ impl Tool {
                 let Some(c) = chain else {
                     return Err(needs("klik titik awal dulu"));
                 };
-                let len = match vcb::parse(&text) {
+                let len = match vcb::parse_in(&text, self.unit) {
                     Some(Vcb::One(len)) => len,
                     Some(Vcb::Angle(degrees)) => return c.aim(degrees),
                     _ => return Err(needs("garis butuh panjang (2,5) atau sudut (30d)")),
@@ -1274,7 +1283,7 @@ impl Tool {
                 let Some((a, plane, tile)) = first else {
                     return Err(needs("klik sudut pertama dulu"));
                 };
-                let Some(Vcb::Two(w, d)) = vcb::parse(&text) else {
+                let Some(Vcb::Two(w, d)) = vcb::parse_in(&text, self.unit) else {
                     return Err(needs("persegi panjang butuh dua ukuran, mis. 5;4"));
                 };
                 // Typed sizes go toward the cursor's quadrant, as in the preview.
@@ -1533,7 +1542,7 @@ impl Tool {
                     }
                 }
             },
-            Input::Typed(text) => match vcb::parse(&text) {
+            Input::Typed(text) => match vcb::parse_in(&text, self.unit) {
                 Some(Vcb::Sides(n)) => {
                     if !(lowest..=kernel::MAX_CIRCLE_SEGMENTS as u32).contains(&n) {
                         return Err(needs("jumlah sisi di luar batas (lingkaran minimal 24)"));
@@ -1603,7 +1612,7 @@ impl Tool {
                 let (Some((a, plane, _)), Some(b)) = (&*start, *end) else {
                     return Err(needs("klik dua ujung busur dulu"));
                 };
-                let Some(Vcb::One(s)) = vcb::parse(&text) else {
+                let Some(Vcb::One(s)) = vcb::parse_in(&text, self.unit) else {
                     return Err(needs("busur butuh satu tinggi lengkung"));
                 };
                 // Typed heights go to the cursor's side, as in the preview.
@@ -1677,7 +1686,7 @@ impl Tool {
                 let Some(a) = armed else {
                     return Err(needs("klik region atau face dulu"));
                 };
-                let Some(Vcb::One(d)) = vcb::parse(&text) else {
+                let Some(Vcb::One(d)) = vcb::parse_in(&text, self.unit) else {
                     return Err(needs("offset butuh satu jarak"));
                 };
                 // A plain number goes the way the cursor is; a sign flips that.
@@ -1749,7 +1758,7 @@ impl Tool {
                 let (Some((a, along)), Some(c)) = (&*from, *cursor) else {
                     return Err(needs("klik titik awal lalu arahkan kursor dulu"));
                 };
-                let Some(Vcb::One(len)) = vcb::parse(&text) else {
+                let Some(Vcb::One(len)) = vcb::parse_in(&text, self.unit) else {
                     return Err(needs("pita ukur butuh satu jarak"));
                 };
                 if len.abs() < MIN_LEN {
@@ -1919,7 +1928,7 @@ impl Tool {
                     }
                 }
             },
-            Input::Typed(text) => match (&*moving, vcb::parse(&text)) {
+            Input::Typed(text) => match (&*moving, vcb::parse_in(&text, self.unit)) {
                 (Some(m), Some(Vcb::One(len))) => {
                     let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
                     let toward = cursor - m.base;
@@ -2014,7 +2023,7 @@ impl Tool {
                 let Some(a) = armed else {
                     return Err(needs("klik face atau region dulu"));
                 };
-                let Some(Vcb::One(d)) = vcb::parse(&text) else {
+                let Some(Vcb::One(d)) = vcb::parse_in(&text, self.unit) else {
                     return Err(needs("Push/Pull butuh satu jarak, mis. 3"));
                 };
                 if d.abs() < MIN_LEN {

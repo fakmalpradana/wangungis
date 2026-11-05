@@ -21,6 +21,7 @@ use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::{Project, TileKey};
 use wangungis_tools::Scene;
 use wangungis_tools::tool::{Input, Preview, Tool};
+use wangungis_tools::vcb::Unit;
 
 /// egui-wgpu 0.37 `register_native_texture` requires Rgba8Unorm; the golden
 /// tests in `render` use the same format.
@@ -71,8 +72,24 @@ enum Leaving {
 /// The autosave file. One per user: a second window overwrites the first's.
 // ponytail: per-window files when two open projects at once is a real use.
 fn default_autosave() -> Option<PathBuf> {
+    user_file("autosave.bin")
+}
+
+fn user_file(name: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".wangungis").join("autosave.bin"))
+    Some(PathBuf::from(home).join(".wangungis").join(name))
+}
+
+/// The display unit kept in `path`. Missing or unknown means meters: this is
+/// a preference, nothing depends on it surviving.
+// ponytail: per user, not per project. Lengths are stored in meters either way,
+// so a project moves between users unchanged. Per project needs a format change.
+fn read_unit(path: &Path) -> Unit {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    Unit::ALL
+        .into_iter()
+        .find(|u| u.label() == text.trim())
+        .unwrap_or_default()
 }
 
 /// Where the open project lives on disk.
@@ -101,6 +118,10 @@ struct App {
     path: String,
     scene: Scene,
     tool: Tool,
+    /// Lengths are shown in this, and bare typed lengths read in it.
+    unit: Unit,
+    /// `None`: the unit is not remembered, as when the home folder is unknown.
+    unit_file: Option<PathBuf>,
     /// What the user is typing for the tool.
     typed: String,
     stats: BTreeMap<TileKey, TileStats>,
@@ -144,6 +165,11 @@ impl App {
         let mut app = Self::with_render_state(rs, path);
         app.autosave = default_autosave();
         app.recovery = app.autosave.as_ref().is_some_and(|p| p.exists());
+        app.unit_file = user_file("unit");
+        if let Some(p) = &app.unit_file {
+            app.unit = read_unit(p);
+            app.tool.set_unit(app.unit);
+        }
         app
     }
 
@@ -158,6 +184,8 @@ impl App {
             path: path.clone().unwrap_or_default(),
             scene: empty_scene(),
             tool: Tool::select(0.01),
+            unit: Unit::default(),
+            unit_file: None,
             typed: String::new(),
             stats: BTreeMap::new(),
             source: Source::default(),
@@ -455,10 +483,25 @@ impl App {
 
     fn switch_tool(&mut self, make: fn(f64) -> Tool) {
         self.tool = make(0.01);
+        self.tool.set_unit(self.unit);
         self.typed.clear();
         self.error = None;
         // The parked pointer has something to tell the new tool.
         self.last_pointer = None;
+    }
+
+    fn set_unit(&mut self, unit: Unit) {
+        self.unit = unit;
+        self.tool.set_unit(unit);
+        if let Some(p) = &self.unit_file {
+            let written = p
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(p, unit.label()));
+            if let Err(e) = written {
+                self.error = Some(format!("Gagal mengingat satuan: {e}"));
+            }
+        }
     }
 
     /// Runs `edit` on what Select holds, then starts the tool over: the ids it
@@ -842,7 +885,9 @@ fn snap_label(kind: SnapKind) -> &'static str {
 fn typed_accepts(typed: &str, ch: char) -> bool {
     match ch {
         '0'..='9' | '.' | ',' | ';' | '-' | '+' | 'x' | 'X' | '*' | '/' => true,
-        'm' | 'M' | 'c' | 'C' | 's' | 'S' | 'd' | 'D' | '°' | ' ' => !typed.is_empty(),
+        'm' | 'M' | 'c' | 'C' | 'f' | 'F' | 't' | 'T' | 's' | 'S' | 'd' | 'D' | '°' | ' ' => {
+            !typed.is_empty()
+        }
         _ => false,
     }
 }
@@ -1065,9 +1110,21 @@ impl App {
                 } else {
                     &self.typed
                 });
+                let mut unit = self.unit;
+                egui::ComboBox::from_id_salt("unit")
+                    .selected_text(unit.label())
+                    .width(48.0)
+                    .show_ui(ui, |ui| {
+                        for u in Unit::ALL {
+                            ui.selectable_value(&mut unit, u, u.label());
+                        }
+                    });
+                if unit != self.unit {
+                    self.set_unit(unit);
+                }
                 ui.separator();
                 if let Some(m) = self.tool.measure() {
-                    ui.label(format!("Jarak: {m:.3} m"));
+                    ui.label(format!("Jarak: {}", self.unit.format(m)));
                     ui.separator();
                 }
                 if self.tool.copying() {
@@ -1376,5 +1433,22 @@ mod tests {
         assert!(typed_accepts("", 'x') && typed_accepts("", '*') && typed_accepts("", '/'));
         assert!(typed_accepts("5", 'x') && typed_accepts("250", 'c') && typed_accepts("5", ' '));
         assert!(!typed_accepts("5", 'l') && !typed_accepts("", 'p'));
+        assert!(typed_accepts("10", 'f') && typed_accepts("10f", 't'));
+        assert!(!typed_accepts("", 'f') && !typed_accepts("", 't'));
+    }
+
+    #[test]
+    fn the_unit_is_remembered_and_junk_means_meters() {
+        let dir = std::env::temp_dir().join(format!("wangungis-unit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("unit");
+        assert_eq!(read_unit(&file), Unit::M, "no file yet");
+        for (text, want) in [("mm", Unit::Mm), ("ft\n", Unit::Ft), ("parsec", Unit::M)] {
+            std::fs::write(&file, text).unwrap();
+            assert_eq!(read_unit(&file), want, "{text:?}");
+        }
+        std::fs::write(&file, [0xff, 0xfe]).unwrap();
+        assert_eq!(read_unit(&file), Unit::M, "not text");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

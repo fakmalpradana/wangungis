@@ -45,7 +45,7 @@ Legenda:
 | 24 | Inference paralel / tegak lurus (magenta) | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
 | 25 | Prioritas snapping + tooltip | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
 | 26 | VCB: panjang, jarak, sudut, jumlah array | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
-| 27 | Unit dan presisi tampilan (m, mm, ft) | ✓ | ✓ | M | S | 0.1 | — | U | T | belum |
+| 27 | Unit dan presisi tampilan (m, cm, mm, ft) | ✓ | ✓ | M | S | 0.1 | — | U | T | parsial |
 | 28 | Tape Measure + guide line/point | ✓ | ✓ | S | M | 0.1 | — | U | T | parsial |
 | 29 | Protractor | ✓ | ? | C | S | 0.5 | — | U | T | belum |
 | 30 | Inference ke titik di koordinat UTM tanpa galat | – | – | M | M | 0.2 | — | U P | T | belum |

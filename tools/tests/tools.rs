@@ -7,6 +7,7 @@ use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::Project;
 use wangungis_tools::tool::{Input, Target, Tool};
+use wangungis_tools::vcb::Unit;
 use wangungis_tools::{EditError, Scene};
 
 const MM: f64 = 1e-3;
@@ -1428,4 +1429,64 @@ fn shift_taking_back_clears_its_outline() {
     assert!(t.preview().lines.is_empty());
     assert!(!t.busy(), "nothing is held");
     assert_eq!(t.selected(), None);
+}
+
+/// In millimeters, every length reads in mm. Factors, degrees and counts do not.
+#[test]
+fn a_bare_number_follows_the_unit_only_where_it_is_a_length() {
+    let mut s = scene();
+    let mm = |mut t: Tool| {
+        t.set_unit(Unit::Mm);
+        t
+    };
+
+    let mut r = mm(Tool::rectangle(APERTURE));
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [11.0, 11.0, 0.0]);
+    typed(&mut r, &mut s, "5000;4000").unwrap();
+    let mut p = mm(Tool::push_pull(APERTURE));
+    click(&mut p, &mut s, [12.0, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3000").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+
+    let mut m = mm(Tool::move_tool(APERTURE));
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut m, &mut s, [16.0, 12.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    typed(&mut m, &mut s, "2000").unwrap();
+    assert_box(&s, [12.0, 10.0, 0.0], [17.0, 14.0, 3.0]);
+    s.undo().unwrap();
+
+    let mut t = mm(Tool::scale(APERTURE));
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    typed(&mut t, &mut s, "2").unwrap();
+    assert_box(&s, [7.5, 8.0, -1.5], [17.5, 16.0, 4.5]);
+    s.undo().unwrap();
+
+    let mut q = mm(Tool::rotate(APERTURE));
+    click(&mut q, &mut s, [10.0, 10.0, 0.0]);
+    click(&mut q, &mut s, [15.0, 10.0, 0.0]);
+    typed(&mut q, &mut s, "90").unwrap();
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+    s.undo().unwrap();
+
+    // Starting over keeps the unit.
+    let mut p = mm(Tool::push_pull(APERTURE));
+    p.reset();
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "1000").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+proptest! {
+    /// Any text in any unit: no panic, and a length comes out finite.
+    #[test]
+    fn the_value_box_takes_anything(text in "\\PC{0,12}", unit in 0..Unit::ALL.len()) {
+        use wangungis_tools::vcb::{Vcb, parse_in};
+        match parse_in(&text, Unit::ALL[unit]) {
+            Some(Vcb::One(a)) => prop_assert!(a.is_finite()),
+            Some(Vcb::Two(a, b)) => prop_assert!(a.is_finite() && b.is_finite()),
+            _ => {}
+        }
+    }
 }
