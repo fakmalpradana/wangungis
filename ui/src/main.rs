@@ -32,6 +32,8 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
+/// Seconds between autosaves of a project with unsaved changes.
+const AUTOSAVE_S: f64 = 60.0;
 
 fn main() -> eframe::Result {
     let path = std::env::args().nth(1);
@@ -54,6 +56,21 @@ struct TileStats {
     objects: usize,
     triangles: usize,
     bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+/// What is waiting for the answer to "discard unsaved changes?".
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Leaving {
+    New,
+    Open,
+    Close,
+}
+
+/// The autosave file. One per user: a second window overwrites the first's.
+// ponytail: per-window files when two open projects at once is a real use.
+fn default_autosave() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".wangungis").join("autosave.bin"))
 }
 
 /// Where the open project lives on disk.
@@ -93,6 +110,16 @@ struct App {
     last_pointer: Option<egui::Pos2>,
     ctrl_held: bool,
     error: Option<String>,
+    /// `None`: autosave is off, as when the home folder is unknown.
+    autosave: Option<PathBuf>,
+    /// When the last autosave ran, and whether anything changed since.
+    autosaved_at: f64,
+    autosave_stale: bool,
+    /// An autosave left by a session that did not end cleanly.
+    recovery: bool,
+    leaving: Option<Leaving>,
+    /// The user answered: the window may close.
+    closing: bool,
     #[cfg(test)]
     view_rect: egui::Rect,
 }
@@ -103,7 +130,10 @@ impl App {
             .wgpu_render_state
             .clone()
             .expect("eframe started with the wgpu renderer");
-        Self::with_render_state(rs, path)
+        let mut app = Self::with_render_state(rs, path);
+        app.autosave = default_autosave();
+        app.recovery = app.autosave.as_ref().is_some_and(|p| p.exists());
+        app
     }
 
     fn with_render_state(rs: egui_wgpu::RenderState, path: Option<String>) -> Self {
@@ -126,6 +156,12 @@ impl App {
             last_pointer: None,
             ctrl_held: false,
             error: None,
+            autosave: None,
+            autosaved_at: 0.0,
+            autosave_stale: false,
+            recovery: false,
+            leaving: None,
+            closing: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
         };
@@ -149,6 +185,85 @@ impl App {
         }
         self.scene.take_dirty();
         self.orbit = Orbit::default();
+    }
+
+    /// Runs `what`, after asking when that would lose changes.
+    fn leave(&mut self, what: Leaving) {
+        if self.unsaved {
+            self.leaving = Some(what);
+        } else {
+            self.do_leave(what);
+        }
+    }
+
+    fn do_leave(&mut self, what: Leaving) {
+        self.leaving = None;
+        match what {
+            Leaving::New => self.new_project(),
+            Leaving::Open => self.open(),
+            Leaving::Close => {
+                // The user chose to lose the changes, or there were none.
+                self.drop_autosave();
+                self.closing = true;
+            }
+        }
+    }
+
+    fn drop_autosave(&mut self) {
+        self.autosave_stale = false;
+        if let Some(p) = &self.autosave {
+            // Absent is fine: nothing was autosaved yet.
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Writes the autosave when it is due. Not during a gesture: the kernel may
+    /// be mid-edit, and the write is a visible pause on a big model.
+    fn run_autosave(&mut self, now: f64) {
+        let due = self.autosave_stale
+            && !self.tool.busy()
+            && now - self.autosaved_at >= AUTOSAVE_S
+            && !self.recovery;
+        let Some(path) = self.autosave.clone().filter(|_| due) else {
+            return;
+        };
+        self.autosaved_at = now;
+        let bytes = self.scene.project().save();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| write_atomic(&path, &bytes));
+        match written {
+            Ok(()) => self.autosave_stale = false,
+            Err(e) => self.error = Some(format!("Autosave gagal: {e}")),
+        }
+    }
+
+    /// Takes the autosave of the last session as an unsaved new project.
+    fn recover(&mut self) {
+        self.recovery = false;
+        let Some(path) = self.autosave.clone() else {
+            return;
+        };
+        let opened = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| Project::open(&b).map_err(|e| format!("{e:?}")));
+        match opened {
+            Ok(project) => {
+                self.adopt(Scene::new(project));
+                self.source = Source::default();
+                self.path.clear();
+                self.unsaved = true;
+                self.split_on_open = false;
+                self.fit_pending = true;
+            }
+            Err(e) => self.error = Some(format!("Autosave tidak bisa dibuka: {e}")),
+        }
+    }
+
+    fn discard_recovery(&mut self) {
+        self.recovery = false;
+        self.drop_autosave();
     }
 
     fn new_project(&mut self) {
@@ -212,6 +327,7 @@ impl App {
                 self.unsaved = false;
                 self.split_on_open = false;
                 self.error = None;
+                self.drop_autosave();
             }
             Err(e) => self.error = Some(format!("Tidak bisa menyimpan {}: {e}", target.display())),
         }
@@ -243,6 +359,7 @@ impl App {
         let dirty = self.scene.take_dirty();
         if !dirty.is_empty() {
             self.unsaved = true;
+            self.autosave_stale = true;
         }
         for key in dirty {
             self.upload(key);
@@ -661,6 +778,25 @@ impl eframe::App for App {
 impl App {
     /// One frame of the whole window. The smoke test drives this directly.
     fn shell(&mut self, ui: &mut egui::Ui) {
+        let (now, close_asked) = ui.ctx().input(|i| (i.time, i.viewport().close_requested()));
+        if close_asked && !self.closing {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.leave(Leaving::Close);
+        }
+        if self.closing {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        self.run_autosave(now);
+        if self.autosave_stale {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_S));
+        }
+        self.dialogs(ui.ctx());
+        if self.modal() {
+            // Keys and clicks answer the dialog, not the tool.
+            ui.ctx().input_mut(|i| i.events.clear());
+        }
         self.handle_keys(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -668,10 +804,10 @@ impl App {
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Buka").clicked() || enter {
-                    self.open();
+                    self.leave(Leaving::Open);
                 }
                 if ui.button("Baru").clicked() {
-                    self.new_project();
+                    self.leave(Leaving::New);
                 }
                 if ui.button("Simpan").clicked() {
                     self.save();
@@ -791,10 +927,12 @@ impl App {
                 {
                     self.view_rect = rect;
                 }
-                self.navigate(ui, &resp, size);
-                // The panels above were drawn before this input: show it now.
-                if self.pointer_input(&resp, rect, size) {
-                    ui.ctx().request_repaint();
+                if !self.modal() {
+                    self.navigate(ui, &resp, size);
+                    // The panels above were drawn before this input: show it now.
+                    if self.pointer_input(&resp, rect, size) {
+                        ui.ctx().request_repaint();
+                    }
                 }
                 self.refresh_overlay(size.y);
                 self.render();
@@ -802,6 +940,56 @@ impl App {
                     egui::Image::new((v.id, size)).paint_at(ui, rect);
                 }
             });
+    }
+
+    fn modal(&self) -> bool {
+        self.recovery || self.leaving.is_some()
+    }
+
+    /// The questions that must be answered before going on.
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let window = |title: &str| {
+            egui::Window::new(title.to_owned())
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        };
+        if self.recovery {
+            window("Pulihkan pekerjaan?").show(ctx, |ui| {
+                ui.label("Ada autosave dari sesi yang tidak berakhir normal.");
+                ui.horizontal(|ui| {
+                    if ui.button("Pulihkan").clicked() {
+                        self.recover();
+                    }
+                    if ui.button("Buang").clicked() {
+                        self.discard_recovery();
+                    }
+                });
+            });
+        }
+        if let Some(what) = self.leaving {
+            window("Perubahan belum disimpan").show(ctx, |ui| {
+                ui.label("Perubahan terakhir belum disimpan.");
+                ui.horizontal(|ui| {
+                    if ui.button("Simpan").clicked() {
+                        self.save();
+                        if !self.unsaved {
+                            self.do_leave(what);
+                        } else {
+                            // The reason is in the status bar.
+                            self.leaving = None;
+                        }
+                    }
+                    if ui.button("Buang").clicked() {
+                        self.unsaved = false;
+                        self.do_leave(what);
+                    }
+                    if ui.button("Batal").clicked() {
+                        self.leaving = None;
+                    }
+                });
+            });
+        }
     }
 
     /// Middle-drag, or Alt + left-drag on a trackpad: orbit; with Shift: pan.

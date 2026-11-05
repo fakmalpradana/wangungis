@@ -45,7 +45,9 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 13. Tekan **Q**, klik sudut kotak, klik arah nol, ketik `90` lalu Enter. Lalu **S**, klik kotak, ketik `2` lalu Enter: dua kali lebih besar.
 14. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
 
+## Pengaman data
+Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
+
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
 - Belum ada dialog file.
-- Baru dan Buka tidak memperingatkan perubahan yang belum disimpan.

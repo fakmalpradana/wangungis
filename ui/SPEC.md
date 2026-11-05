@@ -13,7 +13,9 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 - **Navigasi:** seret tengah = orbit, Shift+seret tengah = pan. Di trackpad: Alt+seret kiri = orbit, Shift+Alt+seret kiri = pan. Scroll = zoom. **Zoom extents** memasukkan seluruh model ke layar.
 - **Overlay:** sumbu proyek (merah X, hijau Y, biru Z), pratinjau tool (oranye), dan penanda snap (hijau titik ujung, sian titik tengah, merah tepi, biru face).
 - **Simpan** (Cmd/Ctrl+S): proyek satu tile disimpan sebagai `.hew`, selebihnya `.wangun`. File hanya ditimpa bila jenisnya sama, jadi `.hew` yang dipecah atau bertambah tile disimpan di sebelahnya (`kota.hew` menjadi `kota.wangun`; nama lain mendapat tambahan `.wangun`). Path di kotak atas menentukan tujuan, jadi nama baru berarti Save As; kotak kosong berarti file yang sedang dibuka. File lain yang sudah ada tidak pernah ditimpa: Simpan menolak dan meminta nama lain. Penulisan lewat file sementara, sehingga gagal tulis tidak merusak file lama.
-- **Baru:** proyek kosong dan kotak path dikosongkan, tanpa peringatan bila ada perubahan belum disimpan (ponytail; status bar menandai "Belum disimpan").
+- **Baru:** proyek kosong dan kotak path dikosongkan.
+- **Perubahan belum disimpan:** Baru, Buka, dan menutup jendela menanyakan Simpan, Buang, atau Batal lebih dulu.
+- **Autosave** (#100): selama ada perubahan belum disimpan, setiap 60 detik saat tool tidak sedang berjalan, proyek ditulis ke `~/.wangungis/autosave.bin`. File dihapus setelah Simpan atau setelah pengguna memilih Buang. File yang masih ada saat aplikasi dibuka berarti sesi sebelumnya tidak berakhir normal, sehingga aplikasi menawarkan Pulihkan atau Buang. Satu file per pengguna: dua jendela saling menimpa (ponytail).
 - Status bar: nilai yang diketik, jenis snap, galat, nama file, jumlah tile/objek/segitiga, EPSG + origin, status simpan, waktu per frame.
 - Galat baca/simpan/edit ditampilkan di status bar, di samping info model yang masih terbuka, dan tidak membuat aplikasi crash.
 

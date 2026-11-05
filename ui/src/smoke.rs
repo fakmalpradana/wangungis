@@ -599,3 +599,136 @@ fn eraser_takes_a_line_then_the_box() {
     d.key_with(K::Z, COMMAND);
     assert_eq!(d.counts(), (1, 12));
 }
+
+/// A box drawn through the real input path.
+fn draw_a_box(d: &mut Driver) {
+    use egui::Key as K;
+    d.letter(K::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3");
+    assert_eq!(d.counts(), (1, 12));
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn autosave_survives_a_crash_and_goes_after_a_save() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = temp_dir("autosave");
+    let auto = dir.join("data").join("autosave.bin");
+    d.app.autosave = Some(auto.clone());
+
+    draw_a_box(&mut d);
+    d.frame(vec![]);
+    assert!(!auto.exists(), "not yet due");
+    // Not in the middle of a gesture.
+    d.letter(egui::Key::R, "r");
+    d.click([20.0, 20.0, 0.0]);
+    assert!(d.app.tool.busy());
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(!auto.exists(), "the tool is busy");
+    d.key(egui::Key::Escape);
+    d.frame(vec![]);
+    assert!(auto.exists(), "due, and the tool is idle");
+    let opened = Project::open(&std::fs::read(&auto).unwrap()).unwrap();
+    assert_eq!(opened.occupied().count(), 1);
+
+    // No change since: no rewrite.
+    std::fs::remove_file(&auto).unwrap();
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(!auto.exists());
+
+    // An edit makes it stale again, then the "crash": a new session sees it.
+    d.key_with(egui::Key::Z, COMMAND);
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(auto.exists());
+    d.key_with(egui::Key::Z, COMMAND | egui::Modifiers::SHIFT);
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+
+    let mut next = Driver::start().expect("a GPU, as before");
+    next.app.autosave = Some(auto.clone());
+    next.app.recovery = true;
+    // While the question stands, the tools get nothing.
+    next.letter(egui::Key::R, "r");
+    assert!(next.app.tool.same_kind(&Tool::select(0.0)));
+    next.app.recover();
+    next.frame(vec![]);
+    assert_eq!(next.counts(), (1, 12), "the box is back");
+    assert!(next.app.unsaved && next.app.source.path.is_none());
+    assert!(!next.app.modal());
+
+    // Saving makes the autosave pointless.
+    next.app.path = dir.join("uji.hew").to_string_lossy().into_owned();
+    next.key_with(egui::Key::S, COMMAND);
+    assert_eq!(next.app.error, None);
+    assert!(!auto.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn leaving_with_changes_asks_first() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    // Nothing to lose: no question.
+    d.app.leave(Leaving::New);
+    assert_eq!(d.app.leaving, None);
+
+    draw_a_box(&mut d);
+    d.app.leave(Leaving::New);
+    assert_eq!(d.app.leaving, Some(Leaving::New));
+    d.frame(vec![]);
+    assert_eq!(d.counts(), (1, 12), "nothing happens before the answer");
+    d.app.leaving = None;
+
+    // Closing the window: refused until answered.
+    let close = |d: &mut Driver| {
+        d.time += 0.05;
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            time: Some(d.time),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let app = &mut d.app;
+        let mut output = d.ctx.run_ui(input, |ui| app.shell(ui));
+        output.textures_delta.clear();
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .clone()
+    };
+    let cmds = close(&mut d);
+    assert!(
+        cmds.contains(&egui::ViewportCommand::CancelClose),
+        "{cmds:?}"
+    );
+    assert_eq!(d.app.leaving, Some(Leaving::Close));
+    assert!(!d.app.closing);
+
+    // Discarding lets it go.
+    d.app.unsaved = false;
+    d.app.do_leave(Leaving::Close);
+    assert!(d.app.closing);
+    let cmds = close(&mut d);
+    assert!(cmds.contains(&egui::ViewportCommand::Close), "{cmds:?}");
+    assert!(!cmds.contains(&egui::ViewportCommand::CancelClose));
+}
