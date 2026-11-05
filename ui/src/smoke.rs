@@ -736,20 +736,9 @@ fn push_pull_with_ctrl_through_the_app() {
 /// names the corner and the height comes out exact.
 #[test]
 fn push_pull_snaps_through_the_app() {
-    use egui::Key as K;
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut d) = Driver::start() else { return };
-    draw_a_box(&mut d);
-    d.letter(K::R, "r");
-    d.click([12.0, 2.0, 0.0]);
-    d.hover([13.0, 3.0, 0.0]);
-    d.value("5;4");
-    d.letter(K::P, "p");
-    d.click([13.5, 3.0, 0.0]);
-    d.value("6");
-    d.app.fit_pending = true;
-    d.frame(vec![]);
-    d.frame(vec![]);
+    two_boxes(&mut d);
 
     d.click([4.5, 4.0, 3.0]);
     d.hover([12.0, 2.0, 6.0]);
@@ -779,6 +768,55 @@ fn push_pull_snaps_through_the_app() {
         .map(|(_, z)| z)
         .fold(f64::MIN, f64::max);
     assert!((top - 6.0).abs() < 1e-3, "{top}");
+}
+
+/// Two boxes next to each other, 3 m and 6 m tall, in view.
+fn two_boxes(d: &mut Driver) {
+    use egui::Key as K;
+    draw_a_box(d);
+    d.letter(K::R, "r");
+    d.click([12.0, 2.0, 0.0]);
+    d.hover([13.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([13.5, 3.0, 0.0]);
+    d.value("6");
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+}
+
+/// Pick two solids, press P, pull one top: both go up in one undo. Then the same
+/// with Shift+click in the tool.
+#[test]
+fn push_pull_two_solids_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    two_boxes(&mut d);
+
+    d.letter(K::Space, " ");
+    d.click([4.5, 4.0, 3.0]);
+    d.hold(egui::Modifiers::SHIFT);
+    d.click([14.5, 4.0, 6.0]);
+    d.hold(egui::Modifiers::NONE);
+    assert_eq!(d.app.tool.picked_nodes().map(|p| p.1.len()), Some(2));
+    d.letter(K::P, "p");
+    d.click([4.5, 4.0, 3.0]);
+    d.value("1");
+    assert_eq!(d.extents()[2], 7.0, "the taller one moved too");
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.extents()[2], 6.0, "one undo");
+
+    // An undo resets the tool, and the selection with it.
+    d.letter(K::P, "p");
+    d.hold(egui::Modifiers::SHIFT);
+    d.click([4.5, 4.0, 3.0]);
+    d.click([14.5, 4.0, 6.0]);
+    d.hold(egui::Modifiers::NONE);
+    d.value("2");
+    assert_eq!(d.extents()[2], 8.0);
+    assert_eq!(d.app.error, None);
 }
 
 /// B paints the face under the pointer: the view shows it, undo takes it off.

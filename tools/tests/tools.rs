@@ -1826,6 +1826,298 @@ proptest! {
     }
 }
 
+/// Two boxes picked in Select, then P and a click on one top: both tops go up,
+/// in one undo step.
+#[test]
+fn push_pull_takes_the_picked_solids_along() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let saved = s.project().save();
+    let mut sel = Tool::select(APERTURE);
+    click(&mut sel, &mut s, [12.5, 12.0, 3.0]);
+    sel.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 8.0])))
+        .unwrap();
+    let picked = sel.picked_nodes();
+    assert_eq!(picked.as_ref().map(|p| p.1.len()), Some(2));
+
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.carry_selection(&s, picked);
+    assert!(!p.preview().lines.is_empty(), "the pick stays in view");
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut p, &mut s, [12.5, 12.0, 4.0]);
+    let moved_rings = p.preview().lines.len();
+    assert_eq!(moved_rings, 16, "two faces, four sides, ring and rails");
+    typed(&mut p, &mut s, "2").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 5.0]);
+    assert_box(&s, [30.0, 10.0, 0.0], [35.0, 14.0, 10.0]);
+
+    s.undo().unwrap();
+    assert_eq!(s.project().save(), saved, "one undo step");
+    s.redo().unwrap();
+    assert_box(&s, [30.0, 10.0, 0.0], [35.0, 14.0, 10.0]);
+    s.undo().unwrap();
+
+    // A click off the picked solids is a plain pull of that one face.
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.carry_selection(&s, sel.picked_nodes());
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [50.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [52.0, 12.0, 0.0]);
+    typed(&mut r, &mut s, "2;2").unwrap();
+    click(&mut p, &mut s, [51.0, 11.0, 0.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+    assert_box(&s, [30.0, 10.0, 0.0], [35.0, 14.0, 8.0]);
+}
+
+/// A picked group has no face to take along: refused, with nothing moved.
+#[test]
+fn push_pull_refuses_a_picked_group_with_a_message() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let mut sel = Tool::select(APERTURE);
+    click(&mut sel, &mut s, [32.5, 12.0, 8.0]);
+    let (tile, nodes) = sel.picked_nodes().unwrap();
+    s.group(tile, &nodes).unwrap();
+    let mut sel = Tool::select(APERTURE);
+    click(&mut sel, &mut s, [12.5, 12.0, 3.0]);
+    let (_, mut picked) = sel.picked_nodes().unwrap();
+    let group = s.project().tiles[&tile]
+        .top_level_nodes()
+        .into_iter()
+        .find(|n| matches!(n, NodeId::Group(_)))
+        .expect("the group");
+    picked.push(group);
+
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.carry_selection(&s, Some((tile, picked)));
+    let refused = p.handle(&mut s, Input::Click(ray([12.5, 12.0, 3.0])));
+    assert!(
+        matches!(refused, Err(EditError::Unsupported(_))),
+        "{refused:?}"
+    );
+    assert_eq!(s.project().save(), saved);
+    assert!(!p.busy());
+}
+
+/// Shift+click in the tool: two footprints on one plane, then typed. Hew keeps
+/// them in one sketch, so the second's id must outlive the first's extrusion.
+#[test]
+fn push_pull_shift_click_two_regions_of_one_sketch() {
+    let mut s = scene();
+    for (x, y) in [(10.0, 10.0), (30.0, 10.0)] {
+        let mut r = Tool::rectangle(APERTURE);
+        click(&mut r, &mut s, [x, y, 0.0]);
+        hover(&mut r, &mut s, [x + 2.0, y + 2.0, 0.0]);
+        typed(&mut r, &mut s, "5;4").unwrap();
+    }
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 0.0])))
+        .unwrap();
+    p.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 0.0])))
+        .unwrap();
+    typed(&mut p, &mut s, "4").unwrap();
+    assert!(!p.busy());
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+    assert_box(&s, [30.0, 10.0, 0.0], [35.0, 14.0, 4.0]);
+    s.undo().unwrap();
+    assert_eq!(s.project().save(), saved, "one undo step");
+}
+
+/// Two footprints sharing an edge, where extruding one reworks what bounds the
+/// other: both go up, or neither does. The second solid must be the second
+/// footprint, not whatever took its id.
+#[test]
+fn push_pull_two_regions_sharing_an_edge() {
+    let mut s = scene();
+    for x in [10.0, 15.0] {
+        let mut r = Tool::rectangle(APERTURE);
+        click(&mut r, &mut s, [x, 10.0, 0.0]);
+        hover(&mut r, &mut s, [x + 2.0, 12.0, 0.0]);
+        typed(&mut r, &mut s, "5;4").unwrap();
+    }
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 0.0])))
+        .unwrap();
+    p.handle(&mut s, Input::ClickAdd(ray([17.5, 12.0, 0.0])))
+        .unwrap();
+    match typed(&mut p, &mut s, "4") {
+        Ok(()) => {
+            assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+            assert_box(&s, [15.0, 10.0, 0.0], [20.0, 14.0, 4.0]);
+            s.undo().unwrap();
+            assert_eq!(s.project().save(), saved, "one undo step");
+        }
+        Err(_) => assert_eq!(s.project().save(), saved, "nothing moved"),
+    }
+}
+
+/// Two walls and the top of one solid, all the camera sees: stale ids would show
+/// up here as one of them not moving.
+#[test]
+fn push_pull_many_faces_of_one_solid_all_land() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    for at in [[12.5, 12.0, 3.0], [12.5, 10.0, 1.5], [10.0, 12.0, 1.5]] {
+        p.handle(&mut s, Input::ClickAdd(ray(at))).unwrap();
+    }
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [9.0, 9.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+/// Two faces of one solid, each along its own normal.
+#[test]
+fn push_pull_shift_click_two_faces_of_one_solid() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    p.handle(&mut s, Input::ClickAdd(ray([12.5, 10.0, 1.5])))
+        .unwrap();
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 9.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+/// A second Shift+click on a face takes it off again.
+#[test]
+fn push_pull_shift_click_toggles() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    for at in [[12.5, 12.0, 3.0], [32.5, 12.0, 8.0], [12.5, 12.0, 3.0]] {
+        p.handle(&mut s, Input::ClickAdd(ray(at))).unwrap();
+    }
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+    assert_box(&s, [30.0, 10.0, 0.0], [35.0, 14.0, 9.0]);
+    s.undo().unwrap();
+
+    p.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    p.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    assert!(!p.busy(), "the only face taken off: nothing left");
+}
+
+/// After Shift+click the pull starts from zero under the pointer.
+#[test]
+fn push_pull_added_face_does_not_jump() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    p.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 8.0])))
+        .unwrap();
+    let heights: Vec<f64> = p
+        .preview()
+        .lines
+        .iter()
+        .flat_map(|(a, b)| [a.z, b.z])
+        .collect();
+    assert!(
+        heights
+            .iter()
+            .all(|z| (z - 3.0).abs() < 1e-9 || (z - 8.0).abs() < 1e-9),
+        "{heights:?}"
+    );
+}
+
+/// One refused target brings the others back, and leaves no undo step.
+#[test]
+fn push_pull_many_rolls_back_when_one_is_refused() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let saved = s.project().save();
+    let a = s.pick_face(&ray([12.5, 12.0, 3.0])).unwrap();
+    let b = s.pick_face(&ray([32.5, 12.0, 8.0])).unwrap();
+    let targets = [
+        Target::Solid {
+            tile: a.tile,
+            source: a.source,
+        },
+        Target::Solid {
+            tile: b.tile,
+            source: b.source,
+        },
+    ];
+    // The 3 m box would vanish, and it comes first: nothing has moved yet.
+    let refused = s.push_pull_many(&targets, -3.0, false);
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(s.project().save(), saved);
+    assert!(s.can_undo());
+    s.undo().unwrap();
+    s.redo().unwrap();
+    assert_eq!(s.project().save(), saved, "history still whole");
+
+    // The other way round the 8 m box moves first, and has to come back.
+    let flipped = [targets[1], targets[0]];
+    assert!(s.push_pull_many(&flipped, -3.0, false).is_err());
+    assert_eq!(s.project().save(), saved);
+}
+
+/// Targets in two tiles are refused before anything moves.
+#[test]
+fn push_pull_many_stays_in_one_tile() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [1300.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [1302.0, 12.0, 0.0]);
+    typed(&mut r, &mut s, "5;4").unwrap();
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    let far = Input::ClickAdd(ray([1302.5, 12.0, 0.0]));
+    assert!(matches!(
+        p.handle(&mut s, far),
+        Err(EditError::Unsupported(_))
+    ));
+    assert_eq!(s.project().save(), saved);
+}
+
+proptest! {
+    /// Any distance, any face on two solids: sound, exact, one undo.
+    #[test]
+    fn push_pull_many_keeps_solids_sound(
+        d in prop_oneof![-2.5f64..-0.01, 0.01f64..20.0],
+        wall in any::<bool>(),
+        keep in any::<bool>(),
+    ) {
+        let mut s = scene();
+        box_at_10(&mut s);
+        tall_box_at_30(&mut s, 8.0);
+        let saved = s.project().save();
+        let (a, b) = if wall {
+            ([12.5, 10.0, 1.5], [32.5, 10.0, 4.0])
+        } else {
+            ([12.5, 12.0, 3.0], [32.5, 12.0, 8.0])
+        };
+        let mut p = Tool::push_pull(APERTURE / 10.0);
+        if keep {
+            p.handle(&mut s, Input::ToggleCopy).unwrap();
+        }
+        p.handle(&mut s, Input::ClickAdd(ray(a))).unwrap();
+        p.handle(&mut s, Input::ClickAdd(ray(b))).unwrap();
+        typed(&mut p, &mut s, &d.to_string()).unwrap();
+        for doc in s.project().tiles.values() {
+            for id in doc.visible_object_ids() {
+                prop_assert!(doc.object(id).unwrap().validate().is_ok());
+            }
+        }
+        s.undo().unwrap();
+        prop_assert_eq!(s.project().save(), saved);
+    }
+}
+
 /// A sketch region already becomes a new solid: asking for one more is refused.
 #[test]
 fn push_pull_keeping_refuses_a_region_and_leaves_it() {

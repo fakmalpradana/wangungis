@@ -2082,6 +2082,79 @@ impl Scene {
         Ok(object)
     }
 
+    /// Pulls every target by `distance` along its own normal, as one undo step:
+    /// solid faces and regions alike, all in one tile. With `keep`, solid faces
+    /// leave as new solids. One refused means none move.
+    pub fn push_pull_many(
+        &mut self,
+        targets: &[tool::Target],
+        distance: f64,
+        keep: bool,
+    ) -> Result<(), EditError> {
+        use tool::Target;
+        let Some(tile) = targets.first().map(Target::tile) else {
+            return Ok(());
+        };
+        if targets.iter().any(|t| t.tile() != tile) {
+            return Err(EditError::Unsupported(
+                "Push/Pull banyak target harus dalam satu tile",
+            ));
+        }
+        let mark = self.undo.len();
+        for target in targets {
+            let done = match *target {
+                Target::Region { .. } if keep => Err(EditError::Unsupported(
+                    "solid baru hanya dari face solid; region sudah menjadi solid baru tanpa Ctrl",
+                )),
+                Target::Region {
+                    tile,
+                    sketch,
+                    region,
+                } => self.extrude(tile, sketch, region, distance).map(|_| ()),
+                Target::Solid { tile, source } if keep => {
+                    self.extrude_face_new(tile, source, distance).map(|_| ())
+                }
+                Target::Solid { tile, source } => self.push_pull(tile, source, distance),
+            };
+            if let Err(e) = done {
+                if self.undo.len() > mark {
+                    while self.undo.len() > mark {
+                        self.undo()?;
+                    }
+                    // Hew's redo went with the first edit; ours must follow it.
+                    self.redo.clear();
+                }
+                return Err(e);
+            }
+        }
+        let steps = self.undo.split_off(mark).iter().map(|e| e.1).sum();
+        self.undo.push((tile, steps));
+        Ok(())
+    }
+
+    /// The face of `node` that looks along `normal`, furthest that way when it
+    /// has several. Only a loose solid has one: a group or component is edited
+    /// from inside.
+    pub fn matching_face(&self, tile: TileKey, node: NodeId, normal: Vec3) -> Option<SnapSource> {
+        let NodeId::Object(id) = node else {
+            return None;
+        };
+        let object = self.project.tiles.get(&tile)?.object(id)?;
+        object
+            .faces()
+            .iter()
+            .filter(|(_, f)| (f.plane.normal() - normal).length() < kernel::tol::NORMAL_DIRECTION)
+            .max_by(|(_, a), (_, b)| {
+                let along = |p: Point3| (p - Point3::ORIGIN).dot(normal);
+                along(a.plane.point()).total_cmp(&along(b.plane.point()))
+            })
+            .map(|(face, _)| SnapSource {
+                object: id,
+                element: inference::ElementRef::Face(face),
+                instance: None,
+            })
+    }
+
     /// Paints a solid's face, or takes the paint off with `None`. One undo step,
     /// and none when the face already looks that way. A material belongs to one
     /// document, so each tile holds its own of the same color. It stays in the

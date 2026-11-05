@@ -530,7 +530,9 @@ impl App {
     }
 
     fn switch_tool(&mut self, make: fn(f64) -> Tool) {
+        let picked = self.tool.picked_nodes();
         self.tool = make(0.01);
+        self.tool.carry_selection(&self.scene, picked);
         self.tool.set_unit(self.unit);
         self.tool.set_paint(self.paint.clone());
         self.typed.clear();

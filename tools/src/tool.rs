@@ -32,8 +32,8 @@ const IN_PLANE: f64 = 1e-6;
 pub enum Input {
     Hover(PickRay),
     Click(PickRay),
-    /// Shift + click: Select adds to or takes from what is picked. Any other
-    /// tool takes it as a plain click.
+    /// Shift + click: Select and Push/Pull add to or take from what is picked. Any
+    /// other tool takes it as a plain click.
     ClickAdd(PickRay),
     /// Text from the value box, on Enter.
     Typed(String),
@@ -68,6 +68,14 @@ pub enum Target {
     },
 }
 
+impl Target {
+    pub fn tile(&self) -> TileKey {
+        match *self {
+            Target::Solid { tile, .. } | Target::Region { tile, .. } => tile,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct Armed {
     target: Target,
@@ -75,6 +83,9 @@ struct Armed {
     normal: Vec3,
     outline: Vec<Point3>,
     distance: f64,
+    /// Where the free pull counts from: a face added later starts at zero under
+    /// the pointer instead of jumping there.
+    base: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +109,13 @@ enum State {
     },
     PushPull {
         armed: Option<Armed>,
+        /// What moves with `armed`, by the same distance.
+        also: Vec<Armed>,
+        /// Whole solids carried over from Select: a click on a face of one takes
+        /// the matching face of the others along.
+        picked: Vec<(TileKey, NodeId)>,
+        /// Their outline.
+        picked_lines: Vec<(Point3, Point3)>,
         /// Outline of what a click would pick.
         hover: Vec<(Point3, Point3)>,
         /// The face goes out as a new solid, and the old one stays.
@@ -463,7 +481,7 @@ fn pull_to(scene: &mut Scene, ray: PickRay, aperture: f64, armed: &mut Armed) ->
         }
         None => {
             if let Some(d) = along_line(&ray, armed.anchor, armed.normal) {
-                armed.distance = d;
+                armed.distance = d - armed.base;
             }
             None
         }
@@ -865,6 +883,9 @@ impl Tool {
         Self::with(
             State::PushPull {
                 armed: None,
+                also: Vec::new(),
+                picked: Vec::new(),
+                picked_lines: Vec::new(),
                 hover: Vec::new(),
                 keep: false,
             },
@@ -1010,9 +1031,9 @@ impl Tool {
                 ..
             } => "Klik face: menjadi solid baru, solid asal tetap. Ctrl atau C membatalkan.",
             State::PushPull { armed: None, .. } => {
-                "Klik region atau face. Ctrl atau C: buat solid baru dari face."
+                "Klik region atau face. Shift+klik: pilih beberapa. Ctrl atau C: buat solid baru dari face."
             }
-            State::PushPull { .. } => "Klik tinggi atau ketik jarak.",
+            State::PushPull { .. } => "Klik tinggi atau ketik jarak. Shift+klik: tambah face lain.",
             State::Move { moving: None, .. } => "Klik benda. C: salin.",
             State::Move { .. } => "Klik tujuan atau ketik jarak. Panah: kunci sumbu.",
             State::Rotate { turning: None, .. } => "Klik benda: titik itu jadi poros.",
@@ -1169,6 +1190,27 @@ impl Tool {
         self.refresh_lines();
     }
 
+    /// Push/Pull takes over what Select had picked. Any other tool ignores it.
+    pub fn carry_selection(&mut self, scene: &Scene, from: Option<(TileKey, Vec<NodeId>)>) {
+        let State::PushPull {
+            picked,
+            picked_lines,
+            ..
+        } = &mut self.state
+        else {
+            return;
+        };
+        let Some((tile, nodes)) = from else {
+            return;
+        };
+        *picked_lines = nodes
+            .iter()
+            .flat_map(|&node| scene.movable_lines(&Movable::Node { tile, node }))
+            .collect();
+        *picked = nodes.into_iter().map(|node| (tile, node)).collect();
+        self.refresh_lines();
+    }
+
     pub fn picked_nodes(&self) -> Option<(TileKey, Vec<NodeId>)> {
         let State::Select { nodes, .. } = &self.state else {
             return None;
@@ -1179,7 +1221,9 @@ impl Tool {
 
     pub fn handle(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let input = match input {
-            Input::ClickAdd(ray) if !matches!(self.state, State::Select { .. }) => {
+            Input::ClickAdd(ray)
+                if !matches!(self.state, State::Select { .. } | State::PushPull { .. }) =>
+            {
                 Input::Click(ray)
             }
             other => other,
@@ -2185,7 +2229,15 @@ impl Tool {
 
     fn handle_push_pull(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
-        let State::PushPull { armed, hover, keep } = &mut self.state else {
+        let State::PushPull {
+            armed,
+            also,
+            picked,
+            hover,
+            keep,
+            ..
+        } = &mut self.state
+        else {
             unreachable!("dispatched on state")
         };
         match input {
@@ -2198,17 +2250,44 @@ impl Tool {
             },
             Input::Click(ray) => match armed {
                 None => {
-                    *armed = Self::arm(scene, ray);
+                    if let Some(a) = Self::arm(scene, ray) {
+                        *also = Self::matching_faces(scene, &a, picked)?;
+                        *armed = Some(a);
+                    }
                     hover.clear();
                 }
                 Some(a) => {
                     pull_to(scene, ray, aperture, a);
                     if a.distance.abs() >= MIN_LEN {
-                        Self::commit_push_pull(scene, a.target, a.distance, *keep)?;
+                        Self::commit_push_pull(scene, a, also, a.distance, *keep)?;
                         *armed = None;
+                        also.clear();
                     }
                 }
             },
+            Input::ClickAdd(ray) => {
+                let Some(added) = Self::arm(scene, ray) else {
+                    return Ok(());
+                };
+                hover.clear();
+                let Some(first) = armed else {
+                    *armed = Some(added);
+                    return Ok(());
+                };
+                if first.target == added.target {
+                    *armed = (!also.is_empty()).then(|| also.remove(0));
+                } else if let Some(at) = also.iter().position(|a| a.target == added.target) {
+                    also.remove(at);
+                } else if added.target.tile() == first.target.tile() {
+                    also.push(added);
+                } else {
+                    return Err(needs("Push/Pull banyak target harus dalam satu tile"));
+                }
+                if let Some(a) = armed {
+                    a.base = along_line(&ray, a.anchor, a.normal).unwrap_or(0.0);
+                    a.distance = 0.0;
+                }
+            }
             Input::Typed(text) => {
                 let Some(a) = armed else {
                     return Err(needs("klik face atau region dulu"));
@@ -2219,13 +2298,53 @@ impl Tool {
                 if d.abs() < MIN_LEN {
                     return Err(needs("jarak tidak boleh nol"));
                 }
-                Self::commit_push_pull(scene, a.target, d, *keep)?;
+                Self::commit_push_pull(scene, a, also, d, *keep)?;
                 *armed = None;
+                also.clear();
             }
             Input::ToggleCopy => *keep = !*keep,
-            Input::ClickAdd(_) | Input::LockAxis(_) | Input::LockNormal | Input::Cancel => {}
+            Input::LockAxis(_) | Input::LockNormal | Input::Cancel => {}
         }
         Ok(())
+    }
+
+    /// When `first` lies on a solid carried over from Select: the face looking
+    /// the same way on each of the others. One that has none stops the gesture
+    /// with a message, so nothing is quietly left behind.
+    fn matching_faces(
+        scene: &Scene,
+        first: &Armed,
+        picked: &[(TileKey, NodeId)],
+    ) -> Result<Vec<Armed>, EditError> {
+        let Target::Solid { tile, source } = first.target else {
+            return Ok(Vec::new());
+        };
+        let own = (tile, NodeId::Object(source.object));
+        if !picked.contains(&own) {
+            return Ok(Vec::new());
+        }
+        picked
+            .iter()
+            .filter(|p| **p != own)
+            .map(|&(tile, node)| {
+                let source = scene
+                    .matching_face(tile, node, first.normal)
+                    .ok_or(needs(
+                        "objek terpilih lain tidak punya face searah; grup dan komponen diedit lewat Edit isi",
+                    ))?;
+                let (plane, outline) = scene
+                    .face_shape(tile, source)
+                    .ok_or(needs("face objek terpilih tidak ditemukan"))?;
+                Ok(Armed {
+                    target: Target::Solid { tile, source },
+                    anchor: outline[0],
+                    normal: plane.normal(),
+                    outline,
+                    distance: 0.0,
+                    base: 0.0,
+                })
+            })
+            .collect()
     }
 
     /// Picks the region or solid face under the ray: whichever is nearer.
@@ -2270,29 +2389,22 @@ impl Tool {
             normal: plane.normal(),
             outline,
             distance: 0.0,
+            base: 0.0,
         })
     }
 
     fn commit_push_pull(
         scene: &mut Scene,
-        target: Target,
+        first: &Armed,
+        also: &[Armed],
         d: f64,
         keep: bool,
     ) -> Result<(), EditError> {
-        match target {
-            Target::Region { .. } if keep => Err(needs(
-                "solid baru hanya dari face solid; region sudah menjadi solid baru tanpa Ctrl",
-            )),
-            Target::Region {
-                tile,
-                sketch,
-                region,
-            } => scene.extrude(tile, sketch, region, d).map(|_| ()),
-            Target::Solid { tile, source } if keep => {
-                scene.extrude_face_new(tile, source, d).map(|_| ())
-            }
-            Target::Solid { tile, source } => scene.push_pull(tile, source, d),
-        }
+        let targets: Vec<Target> = std::iter::once(first)
+            .chain(also)
+            .map(|a| a.target)
+            .collect();
+        scene.push_pull_many(&targets, d, keep)
     }
 
     /// Rebuilds the preview lines from the state.
@@ -2392,19 +2504,29 @@ impl Tool {
                     lines
                 }
             },
-            State::PushPull { armed, hover, .. } => armed.as_ref().map_or_else(
-                || hover.clone(),
-                |a| {
-                    let moved: Vec<Point3> = a
+            State::PushPull {
+                armed: None,
+                hover,
+                picked_lines,
+                ..
+            } => hover.iter().chain(picked_lines).copied().collect(),
+            State::PushPull {
+                armed: Some(a),
+                also,
+                ..
+            } => std::iter::once(a)
+                .chain(also)
+                .flat_map(|face| {
+                    let moved: Vec<Point3> = face
                         .outline
                         .iter()
-                        .map(|p| *p + a.normal * a.distance)
+                        .map(|p| *p + face.normal * a.distance)
                         .collect();
                     let mut lines = ring(&moved);
-                    lines.extend(a.outline.iter().copied().zip(moved.iter().copied()));
+                    lines.extend(face.outline.iter().copied().zip(moved.iter().copied()));
                     lines
-                },
-            ),
+                })
+                .collect(),
         };
     }
 }
