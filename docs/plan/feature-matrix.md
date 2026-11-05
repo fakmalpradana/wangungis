@@ -42,8 +42,8 @@ Legenda:
 | 21 | Snap on-edge / on-face / center | ✓ | ✓ | M | M | 0.1 | — | U | T | parsial |
 | 22 | Inference sumbu (merah/hijau/biru) | ✓ | ✓ | M | M | F0 | — | U | T | parsial |
 | 23 | Kunci sumbu (Shift, tombol panah) | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
-| 24 | Inference paralel / tegak lurus (magenta) | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
-| 25 | Prioritas snapping + tooltip | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
+| 24 | Inference paralel / tegak lurus (magenta) | ✓ | P | M | M | 0.1 | — | U P | T | parsial |
+| 25 | Prioritas snapping + tooltip | ✓ | ✓ | M | M | 0.1 | — | U | T | parsial |
 | 26 | VCB: panjang, jarak, sudut, jumlah array | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 27 | Unit dan presisi tampilan (m, cm, mm, ft) | ✓ | ✓ | M | S | 0.1 | — | U | T | parsial |
 | 28 | Tape Measure + guide line/point | ✓ | ✓ | S | M | 0.1 | — | U | T | parsial |

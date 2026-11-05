@@ -716,8 +716,11 @@ impl App {
                 .map(|(a, b)| (p3(*a), p3(*b)))
                 .collect(),
         });
+        let inferred = preview
+            .snap
+            .is_some_and(|h| matches!(h.snap.kind, SnapKind::Parallel | SnapKind::Perpendicular));
         groups.push(OverlayLines {
-            color: PREVIEW_COLOR,
+            color: if inferred { GUIDE_COLOR } else { PREVIEW_COLOR },
             lines: preview
                 .lines
                 .iter()
@@ -859,12 +862,30 @@ fn axes_overlay() -> Vec<OverlayLines> {
 
 fn snap_color(kind: SnapKind) -> [f32; 3] {
     match kind {
-        SnapKind::Endpoint => [0.0, 0.7, 0.1],
-        SnapKind::Midpoint => [0.0, 0.7, 0.8],
+        SnapKind::Endpoint | SnapKind::Center | SnapKind::Quadrant => [0.0, 0.7, 0.1],
+        SnapKind::Midpoint | SnapKind::Tangent => [0.0, 0.7, 0.8],
+        SnapKind::Intersection => [0.9, 0.55, 0.0],
         SnapKind::OnEdge => [0.85, 0.1, 0.1],
         SnapKind::OnFace => [0.1, 0.2, 0.9],
-        _ => [0.7, 0.1, 0.7],
+        SnapKind::OnAxis => [0.7, 0.1, 0.7],
+        SnapKind::OnGuide | SnapKind::Parallel | SnapKind::Perpendicular => GUIDE_COLOR,
     }
+}
+
+/// What the snap is, by the pointer, kept inside the view.
+fn paint_tip(ui: &egui::Ui, view: egui::Rect, at: egui::Pos2, text: &str) {
+    let painter = ui.painter_at(view);
+    let white = egui::Color32::WHITE;
+    let text = painter.layout_no_wrap(text.into(), egui::FontId::proportional(12.0), white);
+    let margin = 4.0;
+    let size = text.size();
+    let pos = egui::pos2(
+        (at.x + 14.0).min(view.right() - size.x - margin),
+        (at.y + 16.0).min(view.bottom() - size.y - margin),
+    );
+    let back = egui::Rect::from_min_size(pos, size).expand(3.0);
+    painter.rect_filled(back, 3.0, egui::Color32::from_black_alpha(190));
+    painter.galley(pos, text, white);
 }
 
 fn snap_label(kind: SnapKind) -> &'static str {
@@ -872,10 +893,15 @@ fn snap_label(kind: SnapKind) -> &'static str {
         SnapKind::Endpoint => "Titik ujung",
         SnapKind::Midpoint => "Titik tengah",
         SnapKind::Center => "Titik pusat",
+        SnapKind::Quadrant => "Titik kuadran",
+        SnapKind::Intersection => "Perpotongan",
+        SnapKind::Tangent => "Singgung",
+        SnapKind::OnGuide => "Pada panduan",
         SnapKind::OnEdge => "Pada tepi",
         SnapKind::OnFace => "Pada face",
         SnapKind::OnAxis => "Pada sumbu",
-        _ => "Inferensi",
+        SnapKind::Parallel => "Sejajar tepi",
+        SnapKind::Perpendicular => "Tegak lurus tepi",
     }
 }
 
@@ -1213,6 +1239,9 @@ impl App {
                 if let Some(v) = &self.view {
                     egui::Image::new((v.id, size)).paint_at(ui, rect);
                 }
+                if let (Some(hit), Some(at)) = (self.tool.preview().snap, resp.hover_pos()) {
+                    paint_tip(ui, rect, at, snap_label(hit.snap.kind));
+                }
             });
     }
 
@@ -1435,6 +1464,17 @@ mod tests {
         assert!(!typed_accepts("5", 'l') && !typed_accepts("", 'p'));
         assert!(typed_accepts("10", 'f') && typed_accepts("10f", 't'));
         assert!(!typed_accepts("", 'f') && !typed_accepts("", 't'));
+    }
+
+    #[test]
+    fn every_snap_kind_is_named_apart_and_has_a_color() {
+        let mut names: Vec<_> = SnapKind::ALL.iter().map(|k| snap_label(*k)).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), SnapKind::COUNT);
+        for k in SnapKind::ALL {
+            assert_ne!(snap_color(k), [0.0; 3], "{k:?}");
+        }
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! preview.
 
 use inference::{
-    ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
+    ApertureMode, Axis, ElementRef, PickRay, SOFT_AXIS_APERTURE, Snap, SnapKind, SnapLock,
+    SnapQuery, SnapSource, SnapWeights,
 };
 use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
@@ -240,9 +241,68 @@ struct Chain {
     lock: Option<Lock>,
     /// Nothing drawn yet, so the plane may still follow the cursor.
     open: bool,
+    /// The edge last passed over, or else the segment just drawn: what the
+    /// next segment may run parallel or square to. Unit length.
+    reference: Option<Vec3>,
 }
 
 impl Chain {
+    /// Where the pointer puts the end of the next segment, for hover and click alike.
+    fn target(
+        &mut self,
+        scene: &mut Scene,
+        ray: PickRay,
+        aperture: f64,
+    ) -> Option<(Point3, Option<Hit>)> {
+        let plane = self.next_plane();
+        let (point, hit) = next_point(scene, ray, Some(self.anchor), &plane, self.lock, aperture)?;
+        if let Some(dir) = hit.as_ref().and_then(|h| scene.edge_direction(h)) {
+            self.reference = Some(dir);
+        }
+        Some(self.infer(point, hit, &plane))
+    }
+
+    /// Pulls a free point onto the line through the anchor parallel or square
+    /// to the reference, within Hew's own angle for inferring an axis. Hew
+    /// declares these two snap kinds and never produces them. Anything the
+    /// pointer really is on wins, as does a lock.
+    fn infer(&self, point: Point3, hit: Option<Hit>, plane: &Plane) -> (Point3, Option<Hit>) {
+        let free = hit.as_ref().is_none_or(|h| h.snap.kind == SnapKind::OnFace);
+        let n = plane.normal();
+        let Some(parallel) = self
+            .reference
+            .filter(|r| free && self.lock.is_none() && r.dot(n).abs() <= IN_PLANE)
+        else {
+            return (point, hit);
+        };
+        let span = point - self.anchor;
+        let Ok(seen) = span.normalized() else {
+            return (point, hit);
+        };
+        for (dir, kind) in [
+            (parallel, SnapKind::Parallel),
+            (parallel.cross(n), SnapKind::Perpendicular),
+        ] {
+            if seen.dot(dir).abs() >= SOFT_AXIS_APERTURE.cos() {
+                let position = self.anchor + dir * span.dot(dir);
+                let snap = Snap {
+                    position,
+                    kind,
+                    source: None,
+                    sketch_source: None,
+                    sketch_region_source: None,
+                    sketch_curve_source: None,
+                    direction: Some(dir),
+                    projected_from: None,
+                    crossed_edge: None,
+                };
+                let tile = self.tile;
+                return (position, Some(Hit { tile, snap }));
+            }
+        }
+        (point, hit)
+    }
+
     /// The plane the next segment lies on.
     fn next_plane(&self) -> Plane {
         match self.lock {
@@ -1138,8 +1198,7 @@ impl Tool {
             Input::Hover(ray) => match chain {
                 Some(c) => {
                     Self::follow_cursor(scene, c, ray);
-                    let plane = c.next_plane();
-                    let next = next_point(scene, ray, Some(c.anchor), &plane, c.lock, aperture);
+                    let next = c.target(scene, ray, aperture);
                     c.cursor = next.map(|n| c.ahead(n.0));
                     self.preview.snap = next.and_then(|n| n.1);
                 }
@@ -1156,14 +1215,13 @@ impl Tool {
                             ray: None,
                             lock: None,
                             open: true,
+                            reference: None,
                         });
                     }
                 }
                 Some(c) => {
                     Self::follow_cursor(scene, c, ray);
-                    let plane = c.next_plane();
-                    if let Some((end, _)) =
-                        next_point(scene, ray, Some(c.anchor), &plane, c.lock, aperture)
+                    if let Some((end, _)) = c.target(scene, ray, aperture)
                         && Self::add_segment(scene, c, c.ahead(end))?
                     {
                         *chain = None;
@@ -1238,6 +1296,7 @@ impl Tool {
         let drawn = scene.draw(Some(c.tile), plane, &[(c.anchor, end)])?;
         c.plane = plane;
         c.open = false;
+        c.reference = (end - c.anchor).normalized().ok();
         c.anchor = end;
         c.cursor = None;
         c.ray = None;

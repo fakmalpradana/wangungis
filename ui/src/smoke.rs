@@ -676,6 +676,34 @@ fn millimeters_from_the_status_bar_to_the_model() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The pointer on a corner names it, and the line drawn past an edge runs along it.
+#[test]
+fn a_line_drawn_parallel_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    d.letter(K::L, "l");
+    d.click([20.0, 20.0, 0.0]);
+    d.click([24.0, 23.0, 0.0]);
+    d.key(K::Escape);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+
+    d.click([26.0, 21.0, 0.0]);
+    d.hover([24.0, 23.0, 0.0]);
+    let kind = d.app.tool.preview().snap.map(|h| snap_label(h.snap.kind));
+    assert_eq!(kind, Some("Titik ujung"));
+    d.hover([22.0, 21.5, 0.0]);
+    d.hover([28.0, 22.52, 0.0]);
+    let kind = d.app.tool.preview().snap.map(|h| snap_label(h.snap.kind));
+    assert_eq!(kind, Some("Sejajar tepi"));
+    d.click([28.0, 22.52, 0.0]);
+    assert_eq!(d.app.error, None);
+    d.key(K::Escape);
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

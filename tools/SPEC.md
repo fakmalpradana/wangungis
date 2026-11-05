@@ -68,6 +68,7 @@ VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4
 - Sel menyimpan node dan sketch menurut pusat bounds-nya, plus bounds gabungan untuk menolak sinar secara murah.
 - Indeks sel dibuat saat sinar pertama kali lewat di dekatnya. Edit membuang sel seluruh tile, lalu hanya sel yang dilewati sinar yang dibangun lagi.
 - Scene `base` tanpa geometri menjawab snap arah murni (sumbu proyek, kunci sumbu).
+- **Sejajar dan tegak lurus** (#24): hanya Garis. Hew mendeklarasikan `SnapKind::Parallel` dan `Perpendicular` tetapi tidak pernah menghasilkannya, jadi `Chain::infer` yang membuatnya. Acuannya tepi terakhir yang dilewati kursor, atau segmen yang baru digambar. Dalam `SOFT_AXIS_APERTURE` (5°), titik bebas atau titik di atas face ditarik ke garis lewat titik jangkar. Titik, tepi, sumbu, panduan, dan kunci tetap menang.
 - Hasil digabung menurut `SnapKind::rank_group`, lalu sudut berbobot ke sinar (dengan toleransi seri Hew), lalu jenis, lalu kedalaman. Jawaban "garis kunci kosong" berperingkat terakhir.
 - Oklusi lintas sel: sinar dari mata ke titik snap harus bebas dari face solid di sel mana pun (seperti `is_occluded` Hew), termasuk snap sumbu proyek. Hanya garis kunci kosong yang dikecualikan. Region sketch tidak menutup lintas sel.
 - Ini mendekati, tetapi tidak identik dengan, satu scene global: aturan "reach never steals" Hew tidak terlihat dari luar (`docs/research/spike-a2-native-render.md`).
