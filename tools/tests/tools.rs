@@ -273,9 +273,336 @@ fn axis_lock_keeps_the_line_on_the_axis() {
         "{a:?} {b:?}"
     );
     assert!((a.x - b.x).abs() > 1.0, "{a:?} {b:?}");
-    // Z is not on the ground plane: refused, and the gesture survives.
-    assert!(l.handle(&mut s, Input::LockAxis(Axis::Z)).is_err());
     assert!(l.busy());
+}
+
+/// All the segments drawn, each as its two ends.
+fn segments(s: &Scene) -> Vec<(Point3, Point3)> {
+    let mut out = Vec::new();
+    for (key, doc) in &s.project().tiles {
+        let c = key.center();
+        let up = |p: Point3| Point3::new(p.x + c[0], p.y + c[1], p.z + c[2]);
+        for id in doc.sketch_ids() {
+            let sk = doc.sketch(id).unwrap();
+            for e in sk.edges().values() {
+                out.push((
+                    up(sk.vertices()[e.from].position),
+                    up(sk.vertices()[e.to].position),
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn has_segment(s: &Scene, a: [f64; 3], b: [f64; 3]) {
+    let near = |p: Point3, q: [f64; 3]| (p - Point3::new(q[0], q[1], q[2])).length() <= MM;
+    let all = segments(s);
+    assert!(
+        all.iter()
+            .any(|(p, q)| (near(*p, a) && near(*q, b)) || (near(*p, b) && near(*q, a))),
+        "no segment {a:?} to {b:?} in {all:?}"
+    );
+}
+
+/// An axis off the drawing's plane takes the line off it. Locks one after
+/// another stay on one plane where they can, so they close into a region.
+#[test]
+fn a_locked_axis_leaves_the_plane_and_can_close_a_loop() {
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::Z)).unwrap();
+    assert!(l.hint().contains("sumbu Z"), "{}", l.hint());
+    hover(&mut l, &mut s, [10.0, 10.0, 2.0]);
+    typed(&mut l, &mut s, "4").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0, 10.0, 4.0]);
+    assert!(!l.hint().contains("Terkunci"), "one segment only");
+
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut l, &mut s, [12.0, 10.0, 4.0]);
+    typed(&mut l, &mut s, "3").unwrap();
+    has_segment(&s, [10.0, 10.0, 4.0], [13.0, 10.0, 4.0]);
+
+    l.handle(&mut s, Input::LockAxis(Axis::Z)).unwrap();
+    hover(&mut l, &mut s, [13.0, 10.0, 2.0]);
+    typed(&mut l, &mut s, "4").unwrap();
+    has_segment(&s, [13.0, 10.0, 4.0], [13.0, 10.0, 0.0]);
+
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut l, &mut s, [11.0, 10.0, 0.0]);
+    typed(&mut l, &mut s, "3").unwrap();
+    assert!(!l.busy(), "the loop closed");
+    let regions: usize = s
+        .project()
+        .tiles
+        .iter()
+        .flat_map(|(k, d)| d.sketch_ids().into_iter().map(move |id| (*k, id)))
+        .map(|(k, id)| s.region_count(k, id))
+        .sum();
+    assert_eq!(regions, 1);
+}
+
+/// A lock holds one segment: the next one is free again, on the same plane.
+#[test]
+fn a_lock_holds_one_segment_only() {
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut l, &mut s, [20.0, 17.0, 0.0]);
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [20.0, 10.0, 0.0]);
+    click(&mut l, &mut s, [25.0, 17.0, 0.0]);
+    has_segment(&s, [20.0, 10.0, 0.0], [25.0, 17.0, 0.0]);
+}
+
+/// `30d` turns away from the locked axis, or from X, towards the pointer.
+#[test]
+fn a_typed_angle_turns_towards_the_pointer() {
+    let (c, h) = (
+        10.0 * 30f64.to_radians().cos(),
+        10.0 * 30f64.to_radians().sin(),
+    );
+    for (cursor, end) in [
+        ([20.0, 15.0], [10.0 + c, 10.0 + h]),
+        ([0.0, 15.0], [10.0 - c, 10.0 + h]),
+        ([0.0, 5.0], [10.0 - c, 10.0 - h]),
+        ([20.0, 5.0], [10.0 + c, 10.0 - h]),
+    ] {
+        for lock in [false, true] {
+            let mut s = scene();
+            let mut l = Tool::line(APERTURE);
+            click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+            if lock {
+                l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+            }
+            hover(&mut l, &mut s, [cursor[0], cursor[1], 0.0]);
+            typed(&mut l, &mut s, "30d").unwrap();
+            assert!(l.hint().contains("30° dari X"), "{}", l.hint());
+            hover(&mut l, &mut s, [cursor[0], cursor[1], 0.0]);
+            typed(&mut l, &mut s, "10").unwrap();
+            has_segment(&s, [10.0, 10.0, 0.0], [end[0], end[1], 0.0]);
+        }
+    }
+
+    // Typed again, it starts from the axis again.
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut l, &mut s, [20.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "10d").unwrap();
+    hover(&mut l, &mut s, [20.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "30d").unwrap();
+    hover(&mut l, &mut s, [20.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0 + c, 10.0 + h, 0.0]);
+
+    // A negative angle takes the other side.
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut l, &mut s, [20.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "-30d").unwrap();
+    hover(&mut l, &mut s, [20.0, 5.0, 0.0]);
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0 + c, 10.0 - h, 0.0]);
+
+    // From Z: on the axis plane facing the camera, here y = 10.
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::Z)).unwrap();
+    hover(&mut l, &mut s, [15.0, 10.0, 8.0]);
+    typed(&mut l, &mut s, "30d").unwrap();
+    hover(&mut l, &mut s, [15.0, 10.0, 8.66]);
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0 + h, 10.0, c]);
+    assert!(s.can_undo());
+    s.undo().unwrap();
+    assert!(segments(&s).is_empty());
+}
+
+/// An angle chose one way along the line: a typed length goes that way wherever
+/// the pointer went since, and without it having moved at all. Behind the start
+/// neither the preview nor a click draws anything.
+#[test]
+fn an_angle_goes_one_way() {
+    let (c, h) = (
+        10.0 * 30f64.to_radians().cos(),
+        10.0 * 30f64.to_radians().sin(),
+    );
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    assert!(typed(&mut l, &mut s, "30d").is_err(), "no side to take yet");
+    hover(&mut l, &mut s, [12.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "-30d").unwrap();
+    // The pointer is behind this direction, as it often is with a negative angle.
+    hover(&mut l, &mut s, [12.0, 15.0, 0.0]);
+    assert!(
+        l.preview()
+            .lines
+            .iter()
+            .all(|(a, b)| (*a - *b).length() <= MM)
+    );
+    click(&mut l, &mut s, [12.0, 15.0, 0.0]);
+    assert!(segments(&s).is_empty());
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0 + c, 10.0 - h, 0.0]);
+
+    // Straight after a typed angle, with no hover in between.
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut l, &mut s, [20.0, 15.0, 0.0]);
+    typed(&mut l, &mut s, "30d").unwrap();
+    typed(&mut l, &mut s, "10").unwrap();
+    has_segment(&s, [10.0, 10.0, 0.0], [10.0 + c, 10.0 + h, 0.0]);
+    // The ray of that segment says nothing about the next one.
+    assert!(typed(&mut l, &mut s, "30d").is_err());
+}
+
+/// An angle does not move the drawing's plane until a segment uses it.
+#[test]
+fn an_unused_angle_leaves_the_plane_alone() {
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::Z)).unwrap();
+    hover(&mut l, &mut s, [15.0, 10.0, 8.0]);
+    typed(&mut l, &mut s, "30d").unwrap();
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut l, &mut s, [15.0, 14.0, 0.0]);
+    click(&mut l, &mut s, [15.0, 14.0, 0.0]);
+    has_segment(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 0.0]);
+}
+
+/// Uji asap step 19: a square on a solid's wall, a line straight out of it, and
+/// Follow Me: a rod, one with the box.
+#[test]
+fn follow_me_from_a_square_on_a_wall_along_a_line_out_of_it() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    // Narrow, for points on the face rather than the midpoints of its edges.
+    let mut r = Tool::rectangle(APERTURE / 10.0);
+    click(&mut r, &mut s, [12.0, 10.0, 1.0]);
+    hover(&mut r, &mut s, [13.0, 10.0, 2.0]);
+    typed(&mut r, &mut s, "1;1").unwrap();
+
+    let mut l = Tool::line(APERTURE / 10.0);
+    click(&mut l, &mut s, [12.5, 10.0, 1.5]);
+    l.handle(&mut s, Input::LockNormal).unwrap();
+    assert!(l.hint().contains("tegak lurus"), "{}", l.hint());
+    hover(&mut l, &mut s, [12.5, 8.0, 1.5]);
+    typed(&mut l, &mut s, "4").unwrap();
+    has_segment(&s, [12.5, 10.0, 1.5], [12.5, 6.0, 1.5]);
+    l.handle(&mut s, Input::Cancel).unwrap();
+
+    let saved = s.project().save();
+    let mut f = Tool::follow_me(APERTURE);
+    click(&mut f, &mut s, [12.2, 10.0, 1.8]);
+    assert!(f.busy(), "the square on the wall is a profile");
+    assert_eq!(f.preview().lines.len(), 4);
+    click(&mut f, &mut s, [12.5, 7.0, 1.5]);
+    assert!(!f.busy());
+    let y = bounds(&s)
+        .iter()
+        .map(|(lo, _)| lo[1])
+        .fold(f64::INFINITY, f64::min);
+    assert!((y - 6.0).abs() <= MM, "{y}");
+    assert!(
+        s.project()
+            .tiles
+            .values()
+            .all(|d| d.health_report(None).rows.is_empty())
+    );
+    s.undo().unwrap();
+    assert_eq!(s.project().save(), saved, "one undo step");
+}
+
+proptest! {
+    /// Whatever the lock, angle and pointer, a typed length gives a segment of
+    /// that length in that direction, from the point clicked.
+    #[test]
+    fn locked_lines_keep_length_and_direction(
+        // Off the axes: a click on one rightly snaps to it.
+        x in 1.0..50.0f64,
+        y in 1.0..50.0f64,
+        lock in 0usize..4,
+        degrees in prop::option::of(-180.0..180.0f64),
+        to in prop::array::uniform3(-30.0..30.0f64),
+        len in 0.01..40.0f64,
+    ) {
+        let mut s = scene();
+        let mut l = Tool::line(APERTURE / 100.0);
+        click(&mut l, &mut s, [x, y, 0.0]);
+        let input = match lock {
+            0 => Input::LockAxis(Axis::X),
+            1 => Input::LockAxis(Axis::Y),
+            2 => Input::LockAxis(Axis::Z),
+            _ => Input::LockNormal,
+        };
+        l.handle(&mut s, input).unwrap();
+        let cursor = [x + to[0], y + to[1], to[2]];
+        hover(&mut l, &mut s, cursor);
+        if let Some(d) = degrees {
+            typed(&mut l, &mut s, &format!("{d}d")).unwrap();
+            hover(&mut l, &mut s, cursor);
+        }
+        // Looking straight along the lock leaves no direction: refused, nothing drawn.
+        if typed(&mut l, &mut s, &format!("{len}")).is_err() {
+            prop_assert!(segments(&s).is_empty());
+            return Ok(());
+        }
+        let all = segments(&s);
+        prop_assert_eq!(all.len(), 1);
+        let (a, b) = all[0];
+        let start = Point3::new(x, y, 0.0);
+        let (near, far) = if (a - start).length() < (b - start).length() { (a, b) } else { (b, a) };
+        prop_assert!((near - start).length() <= MM, "{near:?}");
+        let span = far - near;
+        prop_assert!((span.length() - len).abs() <= MM, "{span:?} {len}");
+        let axis = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)]
+            [lock.min(2)];
+        let cos = (span.dot(axis) / span.length()).abs();
+        let want = degrees.map_or(1.0, |d| d.to_radians().cos().abs());
+        prop_assert!((cos - want).abs() <= 1e-6, "{cos} {want}");
+    }
+
+    /// Follow Me on any square on a wall: the solid stays sound, one undo removes it.
+    #[test]
+    fn follow_me_on_a_wall_keeps_solids_sound(
+        x in 11.0..13.5f64,
+        z in 0.5..1.5f64,
+        size in 0.3..1.0f64,
+        len in 0.5..6.0f64,
+    ) {
+        let mut s = scene();
+        box_at_10(&mut s);
+        let mut r = Tool::rectangle(APERTURE / 100.0);
+        click(&mut r, &mut s, [x, 10.0, z]);
+        hover(&mut r, &mut s, [x + 1.0, 10.0, z + 1.0]);
+        typed(&mut r, &mut s, &format!("{size};{size}")).unwrap();
+        let mid = [x + size / 2.0, 10.0, z + size / 2.0];
+        let mut l = Tool::line(APERTURE / 100.0);
+        click(&mut l, &mut s, mid);
+        l.handle(&mut s, Input::LockNormal).unwrap();
+        hover(&mut l, &mut s, [mid[0], 8.0, mid[2]]);
+        typed(&mut l, &mut s, &format!("{len}")).unwrap();
+        let saved = s.project().save();
+        let mut f = Tool::follow_me(APERTURE / 100.0);
+        click(&mut f, &mut s, [mid[0] + size / 4.0, 10.0, mid[2] + size / 4.0]);
+        prop_assert!(f.busy());
+        click(&mut f, &mut s, [mid[0], 10.0 - len / 2.0, mid[2]]);
+        prop_assert!(!f.busy());
+        let y = bounds(&s).iter().map(|(lo, _)| lo[1]).fold(f64::INFINITY, f64::min);
+        prop_assert!((y - (10.0 - len)).abs() <= MM, "{y}");
+        prop_assert!(s.project().tiles.values().all(|d| d.health_report(None).rows.is_empty()));
+        s.undo().unwrap();
+        prop_assert_eq!(s.project().save(), saved);
+    }
 }
 
 /// A length typed after a lock never follows the cursor from before the lock.
@@ -864,6 +1191,18 @@ fn a_line_from_an_edge_follows_the_cursor_to_its_face() {
     assert_eq!(faces_where(&s, |p| (p.y - 10.0).abs() <= MM), 2);
 }
 
+/// Rotate takes an angle with its mark too, as Line does.
+#[test]
+fn rotate_takes_a_marked_angle() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rotate(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    click(&mut r, &mut s, [15.0, 10.0, 0.0]);
+    typed(&mut r, &mut s, "90d").unwrap();
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+}
+
 /// Typing a value that changes nothing leaves no step; the gesture stays open.
 #[test]
 fn identity_values_are_refused() {
@@ -979,6 +1318,23 @@ fn tape_measures_and_leaves_guides_that_snap() {
     assert_eq!(s.guide_lines().len(), 1);
     s.delete_guides().unwrap();
     assert!(s.guide_lines().is_empty());
+    s.undo().unwrap();
+    assert_eq!(s.guide_lines().len(), 1);
+
+    // A cursor off to the side: the distance is still square to the edge.
+    s.delete_guides().unwrap();
+    click(&mut t, &mut s, [12.5, 10.0, 0.0]);
+    hover(&mut t, &mut s, [20.0, 8.0, 0.0]);
+    let m = t.measure().unwrap();
+    assert!((m - 2.0).abs() < 0.05, "{m}");
+    assert_eq!(t.preview().lines.len(), 2, "the span and the guide to come");
+    typed(&mut t, &mut s, "3").unwrap();
+    let (a, b) = s.guide_lines()[0];
+    assert!(
+        (a.y - 7.0).abs() <= MM && (b.y - 7.0).abs() <= MM,
+        "{a:?} {b:?}"
+    );
+    s.undo().unwrap();
     s.undo().unwrap();
     assert_eq!(s.guide_lines().len(), 1);
 

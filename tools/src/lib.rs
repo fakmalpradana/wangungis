@@ -139,7 +139,7 @@ pub enum Erasable {
 }
 
 /// How far (m) either way from its origin a guide line is drawn and snapped to.
-const GUIDE_REACH_M: f64 = 200.0;
+pub(crate) const GUIDE_REACH_M: f64 = 200.0;
 /// Half-size (m) of the cross drawn for a guide point.
 const GUIDE_CROSS_M: f64 = 0.25;
 
@@ -333,6 +333,24 @@ fn guide_extent(guide: &kernel::Guide) -> Vec<Point3> {
         ],
         kernel::Guide::Point { position } => vec![*position],
     }
+}
+
+/// Everything drawn connected to `path`, as a Follow Me route.
+fn follow_route(
+    doc: &Document,
+    path: (SketchId, kernel::SketchEdgeId),
+) -> Result<kernel::FollowMePath, EditError> {
+    let sk = doc
+        .sketch(path.0)
+        .ok_or(EditError::Kernel("sketch hilang".into()))?;
+    let island = sk
+        .island_of_edge(path.1)
+        .and_then(|i| sk.islands().get(i))
+        .ok_or(EditError::Kernel("garis hilang".into()))?;
+    Ok(kernel::FollowMePath::SketchEdges {
+        sketch: path.0,
+        edges: island.edges.clone(),
+    })
 }
 
 /// The inference over one cell. Project axes are the base scene's job.
@@ -1327,18 +1345,31 @@ impl Scene {
         path: (SketchId, kernel::SketchEdgeId),
     ) -> Result<(), EditError> {
         let doc = self.project.tile_mut(tile)?;
-        let sk = doc
-            .sketch(path.0)
-            .ok_or(EditError::Kernel("sketch hilang".into()))?;
-        let island = sk
-            .island_of_edge(path.1)
-            .and_then(|i| sk.islands().get(i))
-            .ok_or(EditError::Kernel("garis hilang".into()))?;
-        let route = kernel::FollowMePath::SketchEdges {
-            sketch: path.0,
-            edges: island.edges.clone(),
-        };
+        let route = follow_route(doc, path)?;
         doc.follow_me(profile.0, profile.1, &route)
+            .map_err(kernel_err)?;
+        self.guard_reach(tile)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Sweeps a solid's face along the drawing connected to `path_edge`, merging
+    /// the result with that solid when they touch. One undo step.
+    pub fn follow_me_face(
+        &mut self,
+        tile: TileKey,
+        source: SnapSource,
+        path: (SketchId, kernel::SketchEdgeId),
+    ) -> Result<(), EditError> {
+        if source.instance.is_some() {
+            return Err(EditError::Unsupported("mengedit isi komponen"));
+        }
+        let inference::ElementRef::Face(face) = source.element else {
+            return Err(EditError::Unsupported("follow me selain pada face"));
+        };
+        let doc = self.project.tile_mut(tile)?;
+        let route = follow_route(doc, path)?;
+        doc.follow_me_face(source.object, face, &route, None)
             .map_err(kernel_err)?;
         self.guard_reach(tile)?;
         self.record(tile);

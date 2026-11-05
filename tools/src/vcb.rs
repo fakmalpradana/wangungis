@@ -5,6 +5,7 @@
 //! (default m) per value, and a sign for the opposite direction.
 //! After a copy: `x5`, `5x`, `*5` or `5*` for five copies, `/5` or `5/` for five
 //! copies spaced evenly up to the copy just made. `8s` for eight sides.
+//! `30d` or `30°` for an angle in degrees.
 
 use std::num::NonZeroU32;
 
@@ -19,6 +20,8 @@ pub enum Vcb {
     Divide(NonZeroU32),
     /// Sides of a circle or polygon.
     Sides(u32),
+    /// An angle, in degrees.
+    Angle(f64),
 }
 
 /// More copies than this in one go is a typing error, not a model.
@@ -44,7 +47,7 @@ fn array(text: &str) -> Option<Vcb> {
 
 fn length(text: &str) -> Option<f64> {
     let t = text.trim().to_ascii_lowercase();
-    let (number, scale) = if let Some(n) = t.strip_suffix("mm") {
+    let (number_text, scale) = if let Some(n) = t.strip_suffix("mm") {
         (n, 1e-3)
     } else if let Some(n) = t.strip_suffix("cm") {
         (n, 1e-2)
@@ -53,7 +56,11 @@ fn length(text: &str) -> Option<f64> {
     } else {
         (t.as_str(), 1.0)
     };
-    let number = number.trim().replace(',', ".");
+    Some(number(number_text)? * scale)
+}
+
+fn number(text: &str) -> Option<f64> {
+    let number = text.trim().replace(',', ".");
     // Plain decimals only: Rust's parser would also take "inf" and "1e3".
     if !number
         .bytes()
@@ -62,7 +69,7 @@ fn length(text: &str) -> Option<f64> {
         return None;
     }
     let v: f64 = number.parse().ok()?;
-    v.is_finite().then_some(v * scale)
+    v.is_finite().then_some(v)
 }
 
 /// `None` when the text is not one or two valid lengths.
@@ -73,6 +80,9 @@ pub fn parse(text: &str) -> Option<Vcb> {
     }
     if let Some(n) = lower.trim().strip_suffix('s') {
         return count(n).map(|n| Vcb::Sides(n.get()));
+    }
+    if let Some(n) = lower.trim().strip_suffix(['d', '°']) {
+        return number(n).map(Vcb::Angle);
     }
     let parts: Vec<&str> = lower.split([';', 'x']).collect();
     match parts[..] {
@@ -91,6 +101,22 @@ mod tests {
         assert_eq!(parse("8s"), Some(Vcb::Sides(8)));
         assert_eq!(parse(" 48S "), Some(Vcb::Sides(48)));
         for t in ["s", "0s", "-3s", "2,5s", "s8"] {
+            assert_eq!(parse(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn angles() {
+        for (t, want) in [
+            ("30d", 30.0),
+            ("30°", 30.0),
+            (" 2,5D ", 2.5),
+            ("-15.5d", -15.5),
+            ("0d", 0.0),
+        ] {
+            assert_eq!(parse(t), Some(Vcb::Angle(want)), "{t}");
+        }
+        for t in ["d", "°", "30dd", "infd", "1e3d", "5;30d", "30md"] {
             assert_eq!(parse(t), None, "{t}");
         }
     }

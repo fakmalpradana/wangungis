@@ -24,9 +24,15 @@ Untuk membuka file: tambahkan `-- path/ke/file.hew`.
 | Batal | Esc |
 | Undo / Redo | Cmd+Z / Shift+Cmd+Z (Ctrl di Windows dan Linux) |
 | Simpan | Cmd+S atau tombol Simpan |
-| Kunci sumbu saat Garis atau Pindah; sumbu putar | Panah kanan = X, kiri = Y, atas = Z |
+| Kunci sumbu saat Garis atau Pindah; sumbu putar | Panah kanan = X, kiri = Y, atas = Z. Saat Garis, sumbu boleh keluar dari bidang gambar |
+| Garis tegak lurus bidang gambar (keluar dari dinding) | Panah bawah |
+| Garis miring | Ketik `30d` lalu Enter: 30° dari sumbu terkunci (tanpa kunci: dari X, atau horizontal di dinding), ke arah kursor. Lalu klik atau ketik panjang |
 
-Format angka: `5`, `2,5`, `5;4`, `5x4`, `250cm`, `1500mm`. Angka negatif untuk arah berlawanan. Tepat setelah menyalin: `x5` untuk lima salinan, `/5` untuk lima salinan yang mengisi jarak salinan pertama.
+Baris di atas status bar selalu menulis apa yang ditunggu tool.
+
+Kunci berlaku untuk satu segmen, lalu lepas sendiri. Sumbu yang keluar dari bidang gambar memakai bidang sumbu yang paling menghadap kamera.
+
+Format angka: `5`, `2,5`, `5;4`, `5x4`, `250cm`, `1500mm`, `30d`. Angka negatif untuk arah berlawanan. Tepat setelah menyalin: `x5` untuk lima salinan, `/5` untuk lima salinan yang mengisi jarak salinan pertama.
 
 Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 
@@ -48,9 +54,15 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 15. Isi kotak atas dengan `/tmp/uji.obj` (atau `.stl`, `.glb`, `.3mf`), tekan **Ekspor**, buka di Blender. Skala dan posisinya harus sama.
 16. Coba tombol tampilan: Atas, Depan, Kanan, Iso.
 17. Tekan **Spasi**, klik kotak, Shift + klik kotak lain, tekan **Grup**. Tekan **M**, geser: keduanya ikut. **Pecah** mengembalikan. **Komponen** lalu salin dengan **M** dan **C**: salinannya berbagi geometri. **Delete** menghapus yang terpilih.
-18. Tekan **T**, klik tepi kotak, gerakkan kursor menjauh (status bar menulis jarak), ketik `2` lalu Enter: garis panduan muncul dan garis baru menempel padanya. **Hapus panduan** menghapusnya.
-19. **Follow Me:** gambar persegi kecil di dinding, gambar garis dari tengah persegi menjauh dari dinding. Klik Follow Me, klik persegi, klik garis: terbentuk batang.
-20. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
+18. **Garis panduan.** Tekan **T**. Klik tepi bawah kotak (penanda merah atau sian). Gerakkan kursor menjauh: garis oranye sepanjang tepi mengikuti, dan status bar menulis jarak tegak lurus dari tepi. Ketik `2` lalu Enter: muncul garis merah muda sepanjang ±200 m, dan status bar menulis "Panduan dibuat". Tekan **R**, dekatkan kursor ke garis itu: titik menempel. **Hapus panduan** menghapusnya.
+19. **Follow Me.**
+    1. Tekan **Zoom extents** supaya kotak besar di layar. Tekan **R**, klik di dinding kotak, jauh dari tepinya, ketik `1;1` lalu Enter: persegi kecil.
+    2. Tekan **L**, klik di tengah persegi. Tekan **panah bawah**. Baris petunjuk menulis "Terkunci tegak lurus bidang".
+    3. Gerakkan kursor menjauh dari dinding, ketik `3` lalu Enter. Tekan **Esc**.
+    4. Klik **Follow Me**, klik persegi (tepinya menyala oranye), klik garis: terbentuk batang menyatu dengan kotak. **Cmd+Z** membatalkannya.
+    5. Di tempat kosong, tekan **L**, klik tanah, tekan **panah atas**, ketik `2` lalu Enter: garis tegak. **Esc**. Klik tanah lagi, gerakkan kursor, ketik `30d` lalu Enter, ketik `2` lalu Enter: garis miring 30° dari X.
+20. **Dua tile, tanpa file besar.** Tekan **Baru**. Tekan **R**, klik dekat titik potong sumbu, gerakkan kursor ke arah sumbu X merah, ketik `800;10` lalu Enter. Tekan **Zoom extents**. Status bar: 1 tile. Klik tanah kosong di dekat ujung jauh, ketik `10;10` lalu Enter. Status bar: 2 tile. Tekan **L**, klik persegi kecil itu, dekatkan kursor ke sudut persegi panjang: penanda hijau muncul walau beda tile.
+21. **Opsional, hanya bila punya model kota.** Buka filenya. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu, lalu Cmd+Z. Lewati langkah ini bila tidak punya file.
 
 ## Pengaman data
 Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
