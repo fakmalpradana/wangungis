@@ -2,13 +2,13 @@
 //! typed text in, geometry out. This is the uji asap without a GPU.
 
 use inference::{Axis, PickRay, SnapKind};
-use kernel::{Point3, Vec3};
+use kernel::{Point3, Rgba8, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::Project;
 use wangungis_tools::tool::{Input, Target, Tool};
 use wangungis_tools::vcb::Unit;
-use wangungis_tools::{EditError, Scene};
+use wangungis_tools::{EditError, Paint, Scene};
 
 const MM: f64 = 1e-3;
 const APERTURE: f64 = 0.01;
@@ -1742,5 +1742,126 @@ proptest! {
         prop_assert!(s.project().tiles.values().all(|d| d.health_report(None).rows.is_empty()));
         s.undo().unwrap();
         prop_assert_eq!(s.project().save(), saved);
+    }
+}
+
+fn paint_of(r: u8, g: u8, b: u8) -> Paint {
+    Paint {
+        name: format!("{r}-{g}-{b}"),
+        color: Rgba8::rgb(r, g, b),
+    }
+}
+
+/// Every painted face's color, with its normal, in every tile.
+fn painted(s: &Scene) -> Vec<([f64; 3], Rgba8)> {
+    let mut out = Vec::new();
+    for doc in s.project().tiles.values() {
+        for o in doc.visible_object_ids() {
+            for (f, face) in doc.object(o).unwrap().faces().iter() {
+                if let Some(m) = doc.face_material(o, f) {
+                    let n = face.plane.normal();
+                    out.push(([n.x, n.y, n.z], doc.material(m).unwrap().color));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// One click paints one face, in one undo step, and changes no geometry.
+#[test]
+fn paint_a_face_and_take_it_back() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let shape = bounds(&s);
+    let red = Rgba8::rgb(200, 30, 30);
+    let mut b = Tool::paint(APERTURE);
+    b.set_paint(Some(paint_of(200, 30, 30)));
+
+    click(&mut b, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(painted(&s), vec![([0.0, 0.0, 1.0], red)]);
+    assert_eq!(bounds(&s), shape);
+
+    // Saves and loads as it is.
+    let saved = s.project().save();
+    let again = Project::open(&saved).unwrap();
+    assert_eq!(again.save(), saved, "byte-identical");
+    assert_eq!(painted(&Scene::new(again)), vec![([0.0, 0.0, 1.0], red)]);
+
+    // The same color again is no step: this undo takes off the first click.
+    click(&mut b, &mut s, [12.5, 12.0, 3.0]);
+    s.undo().unwrap();
+    assert!(painted(&s).is_empty());
+    s.redo().unwrap();
+    assert_eq!(painted(&s).len(), 1);
+
+    // A second face shares the material, and None takes paint off.
+    click(&mut b, &mut s, [12.5, 10.0, 1.5]);
+    assert_eq!(painted(&s).len(), 2);
+    let doc = s.project().tiles.values().next().unwrap();
+    assert_eq!(doc.material_ids().len(), 1, "one color, one material");
+    b.set_paint(None);
+    b.reset();
+    click(&mut b, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(painted(&s).len(), 1);
+}
+
+/// What cannot take paint says so, or does nothing, and leaves the file alone.
+#[test]
+fn paint_refuses_what_is_no_face_of_a_solid() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let mut b = Tool::paint(APERTURE);
+    b.set_paint(Some(paint_of(1, 2, 3)));
+    let saved = s.project().save();
+    assert!(
+        b.handle(&mut s, Input::Click(ray([12.5, 12.0, 0.0])))
+            .is_err(),
+        "a sketch region"
+    );
+    click(&mut b, &mut s, [100.0, 100.0, 0.0]);
+    assert!(typed(&mut b, &mut s, "3").is_err());
+    assert_eq!(s.project().save(), saved);
+
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (key, doc) = s.project().tiles.iter().next().unwrap();
+    let (key, nodes) = (*key, doc.top_level_nodes());
+    s.make_component(key, &nodes).unwrap();
+    let saved = s.project().save();
+    assert!(
+        b.handle(&mut s, Input::Click(ray([12.5, 12.0, 3.0])))
+            .is_err(),
+        "inside a component"
+    );
+    assert_eq!(s.project().save(), saved);
+}
+
+proptest! {
+    /// Clicks anywhere with any colors: geometry and soundness hold, and as many
+    /// undos as steps leave no paint.
+    #[test]
+    fn paint_never_changes_the_shape(
+        clicks in proptest::collection::vec(
+            ((5.0f64..20.0, 5.0f64..20.0, 0.0f64..4.0), any::<(u8, u8, u8)>()),
+            1..8,
+        ),
+    ) {
+        let mut s = scene();
+        box_at_10(&mut s);
+        let shape = bounds(&s);
+        let mut b = Tool::paint(APERTURE);
+        for ((x, y, z), (r, g, bl)) in clicks {
+            b.set_paint(Some(paint_of(r, g, bl)));
+            click(&mut b, &mut s, [x, y, z]);
+            prop_assert_eq!(bounds(&s), shape.clone());
+            prop_assert!(s.project().tiles.values().all(|d| d.health_report(None).rows.is_empty()));
+        }
+        let reload = Project::open(&s.project().save()).unwrap();
+        prop_assert_eq!(bounds(&Scene::new(reload)), shape.clone());
+        while !painted(&s).is_empty() {
+            s.undo().unwrap();
+        }
+        prop_assert_eq!(bounds(&s), shape);
     }
 }

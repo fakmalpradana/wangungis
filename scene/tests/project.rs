@@ -419,3 +419,35 @@ proptest! {
         assert_lossless(&src, &back, split);
     }
 }
+
+/// Paint goes with the solid when a document is split into tiles.
+#[test]
+fn split_keeps_paint() {
+    let mut doc = Document::new();
+    let a = add_box(&mut doc, 0.0, 0.0, 5.0, 4.0, 1);
+    add_box(&mut doc, 3_000.0, 0.0, 5.0, 4.0, 2);
+    let red = doc.add_material(kernel::Material::solid(
+        "Merah",
+        kernel::Rgba8::rgb(200, 0, 0),
+    ));
+    let face = doc.object(a).unwrap().faces().iter().next().unwrap().0;
+    doc.paint_face(a, face, Some(red)).unwrap();
+
+    let p = Project::open(&Project::from_document(doc).unwrap().save()).unwrap();
+    assert!(p.single().is_none(), "split");
+    let colors: Vec<_> = p
+        .occupied()
+        .flat_map(|(_, d)| {
+            d.visible_object_ids().into_iter().flat_map(move |o| {
+                d.object(o)
+                    .unwrap()
+                    .faces()
+                    .iter()
+                    .filter_map(|(f, _)| d.face_material(o, f))
+                    .map(|m| d.material(m).unwrap().color)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    assert_eq!(colors, vec![kernel::Rgba8::rgb(200, 0, 0)]);
+}

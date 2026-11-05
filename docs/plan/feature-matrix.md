@@ -82,7 +82,7 @@ Legenda:
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 49 | Paint Bucket + library material | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
+| 49 | Paint Bucket + library material | ✓ | ✓ | M | M | 0.1 | — | U P G | T | parsial |
 | 50 | Tekstur gambar + posisi tekstur | ✓ | ✓ | S | M | 0.4 | image crate | G | T+R | belum |
 | 51 | Material PBR dasar | P | – | C | M | 0.5 | — | G | T | belum |
 | 52 | Tekstur fasad dari foto (rectify) | – | – | C | L | 0.5+ | — | G | T | belum |
