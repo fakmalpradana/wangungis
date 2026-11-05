@@ -84,6 +84,23 @@ fn kernel_err<E: fmt::Debug>(e: E) -> EditError {
     EditError::Kernel(text)
 }
 
+fn node_kind(node: NodeId) -> &'static str {
+    match node {
+        NodeId::Object(_) => "Objek",
+        NodeId::Group(_) => "Grup",
+        NodeId::Instance(_) => "Komponen",
+    }
+}
+
+/// The name given to `node` itself.
+fn own_name(doc: &Document, node: NodeId) -> Option<&str> {
+    match node {
+        NodeId::Object(o) => doc.object_name(o),
+        NodeId::Group(g) => doc.group_name(g),
+        NodeId::Instance(i) => doc.instance_name(i),
+    }
+}
+
 fn tag_path(name: &str) -> Result<Vec<String>, EditError> {
     let path: Vec<String> = name.split('/').map(str::trim).map(str::to_owned).collect();
     if path.is_empty() || path.iter().any(String::is_empty) {
@@ -129,6 +146,22 @@ fn drawable(doc: &Document, plane: Plane) -> Vec<ObjectId> {
 pub struct Hit {
     pub tile: TileKey,
     pub snap: Snap,
+}
+
+/// One line of the Outliner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineRow {
+    pub tile: TileKey,
+    pub node: NodeId,
+    /// The top-level node it sits under, itself if it is one.
+    pub top: NodeId,
+    pub depth: usize,
+    pub name: String,
+    pub kind: &'static str,
+    pub has_children: bool,
+    /// Hidden by the user, not by a tag.
+    pub hidden: bool,
+    pub expanded: bool,
 }
 
 /// A flat color for the Paint Bucket.
@@ -891,19 +924,91 @@ impl Scene {
     /// A name for `node`, for telling the user what is open.
     pub fn node_name(&self, tile: TileKey, node: NodeId) -> String {
         let doc = self.project.tiles.get(&tile);
-        let named = doc.and_then(|doc| match node {
-            NodeId::Object(o) => doc.object_name(o),
-            NodeId::Group(g) => doc.group_name(g),
-            NodeId::Instance(i) => doc
-                .instance_name(i)
-                .or_else(|| doc.component_name(doc.instance_def(i)?)),
+        let named = doc.and_then(|doc| {
+            own_name(doc, node).or_else(|| match node {
+                NodeId::Instance(i) => doc.component_name(doc.instance_def(i)?),
+                _ => None,
+            })
         });
-        let kind = match node {
-            NodeId::Object(_) => "Objek",
-            NodeId::Group(_) => "Grup",
-            NodeId::Instance(_) => "Komponen",
+        named.map_or_else(|| node_kind(node).into(), Into::into)
+    }
+
+    /// The project as the Outliner lists it: top-level nodes, and under them the
+    /// members of the groups in `expanded`. Walks every top-level node, so call
+    /// it when something changed, not every frame.
+    pub fn outline_rows(&self, expanded: &BTreeSet<(TileKey, NodeId)>) -> Vec<OutlineRow> {
+        let mut rows = Vec::new();
+        for (&tile, doc) in &self.project.tiles {
+            for top in doc.top_level_nodes() {
+                self.push_outline(&mut rows, doc, tile, (top, top), 0, expanded);
+            }
+        }
+        rows
+    }
+
+    fn push_outline(
+        &self,
+        rows: &mut Vec<OutlineRow>,
+        doc: &Document,
+        tile: TileKey,
+        (top, node): (NodeId, NodeId),
+        depth: usize,
+        expanded: &BTreeSet<(TileKey, NodeId)>,
+    ) {
+        let children = match node {
+            NodeId::Group(g) => doc.group_members(g).unwrap_or_default(),
+            _ => Vec::new(),
         };
-        named.map_or_else(|| kind.into(), Into::into)
+        let open = expanded.contains(&(tile, node));
+        rows.push(OutlineRow {
+            tile,
+            node,
+            top,
+            depth,
+            name: self.node_name(tile, node),
+            kind: node_kind(node),
+            has_children: !children.is_empty(),
+            hidden: doc.node_user_hidden(node),
+            expanded: open,
+        });
+        if open {
+            for child in children {
+                self.push_outline(rows, doc, tile, (top, child), depth + 1, expanded);
+            }
+        }
+    }
+
+    /// Hides or shows a node. View state, not undoable, like a tag's.
+    pub fn set_node_hidden(&mut self, tile: TileKey, node: NodeId, hidden: bool) {
+        if let Some(doc) = self.project.tiles.get_mut(&tile) {
+            doc.set_node_user_hidden(node, hidden);
+            self.touch(tile);
+        }
+    }
+
+    /// Names a node, one undo step; a blank name clears it. The same name again
+    /// is no step, as Hew records none.
+    pub fn rename_node(
+        &mut self,
+        tile: TileKey,
+        node: NodeId,
+        name: &str,
+    ) -> Result<(), EditError> {
+        self.check_nodes(tile, &[node])?;
+        let name = name.trim();
+        let name = (!name.is_empty()).then(|| name.to_owned());
+        let doc = self.project.tile_mut(tile)?;
+        if own_name(doc, node) == name.as_deref() {
+            return Ok(());
+        }
+        doc.set_node_name(node, name).map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Whether `node` may be picked and edited now.
+    pub fn node_in_scope(&self, tile: TileKey, node: NodeId) -> bool {
+        self.check_nodes(tile, &[node]).is_ok() && self.project.tiles.contains_key(&tile)
     }
 
     /// Opens a group or component for editing in place, as one undo step. Its

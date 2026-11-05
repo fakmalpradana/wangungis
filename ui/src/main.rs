@@ -10,7 +10,7 @@ mod camera;
 #[cfg(test)]
 mod smoke;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use camera::Orbit;
@@ -21,7 +21,7 @@ use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::{Project, TileKey, node_visible};
 use wangungis_tools::tool::{Input, Preview, Tool};
 use wangungis_tools::vcb::Unit;
-use wangungis_tools::{Paint, Scene};
+use wangungis_tools::{OutlineRow, Paint, Scene};
 
 /// egui-wgpu 0.37 `register_native_texture` requires Rgba8Unorm; the golden
 /// tests in `render` use the same format.
@@ -148,6 +148,10 @@ struct App {
     unit_file: Option<PathBuf>,
     /// What the user is typing for the tool.
     typed: String,
+    /// The Outliner's lines and what is open in it, refreshed when something changed.
+    outline_rows: Vec<OutlineRow>,
+    outline_expanded: BTreeSet<(TileKey, NodeId)>,
+    outline_rename: String,
     /// The project's tags, refreshed when something changed.
     tag_rows: Vec<(String, bool)>,
     /// New tag and per-row rename text in the Tags panel.
@@ -217,6 +221,9 @@ impl App {
             paint: Some(ready_paint(PAINTS[0])),
             unit_file: None,
             typed: String::new(),
+            outline_rows: Vec::new(),
+            outline_expanded: BTreeSet::new(),
+            outline_rename: String::new(),
             tag_rows: Vec::new(),
             tag_name: String::new(),
             tag_renames: BTreeMap::new(),
@@ -262,7 +269,9 @@ impl App {
             self.upload(key);
         }
         self.scene.take_dirty();
-        self.tag_rows = self.scene.tags();
+        // The ids belong to the project before.
+        self.outline_expanded.clear();
+        self.refresh_lists();
         self.orbit = Orbit::default();
     }
 
@@ -484,7 +493,7 @@ impl App {
     fn sync_edits(&mut self) {
         let dirty = self.scene.take_dirty();
         if !dirty.is_empty() {
-            self.tag_rows = self.scene.tags();
+            self.refresh_lists();
             self.unsaved = true;
             self.autosave_stale = true;
             // Guides are in the overlay.
@@ -596,6 +605,127 @@ impl App {
         }
         self.tool.reset();
         self.sync_edits();
+    }
+
+    /// What the side panel lists. Walks the project: not for every frame.
+    fn refresh_lists(&mut self) {
+        self.tag_rows = self.scene.tags();
+        self.outline_rows = self.scene.outline_rows(&self.outline_expanded);
+    }
+
+    fn outline_toggle(&mut self, tile: TileKey, node: NodeId) {
+        if !self.outline_expanded.remove(&(tile, node)) {
+            self.outline_expanded.insert((tile, node));
+        }
+        self.outline_rows = self.scene.outline_rows(&self.outline_expanded);
+    }
+
+    /// Picks the top-level node a row sits under: what is inside needs opening.
+    fn outline_pick(&mut self, tile: TileKey, top: NodeId) {
+        self.error = None;
+        self.typed.clear();
+        self.tool.pick_node(&self.scene, tile, top);
+    }
+
+    fn outline_open(&mut self, tile: TileKey, top: NodeId) {
+        self.outline_pick(tile, top);
+        if !matches!(top, NodeId::Object(_)) {
+            self.enter_picked();
+        }
+    }
+
+    fn set_node_visible(&mut self, tile: TileKey, node: NodeId, visible: bool) {
+        self.scene.set_node_hidden(tile, node, !visible);
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn rename_picked(&mut self, name: &str) {
+        let name = name.to_owned();
+        self.on_picked(move |s, t, n| match n {
+            [node] => s.rename_node(t, *node, &name),
+            _ => Err(wangungis_tools::EditError::Unsupported(
+                "mengubah nama lebih dari satu benda sekaligus",
+            )),
+        });
+    }
+
+    fn outline_panel(&mut self, ui: &mut egui::Ui) {
+        enum Action {
+            Toggle(TileKey, NodeId),
+            Pick(TileKey, NodeId),
+            Open(TileKey, NodeId),
+            Visible(TileKey, NodeId, bool),
+            Rename,
+        }
+        let mut action = None;
+        egui::CollapsingHeader::new("Outliner")
+            .default_open(true)
+            .show(ui, |ui| {
+                let picked = self.tool.picked_nodes();
+                let many_tiles = self.scene.project().tiles.len() > 1;
+                let height = ui.spacing().interact_size.y;
+                // Only the lines in view are laid out: a city has tens of thousands.
+                egui::ScrollArea::vertical()
+                    .id_salt("outliner")
+                    .max_height(280.0)
+                    .auto_shrink([false, true])
+                    .show_rows(ui, height, self.outline_rows.len(), |ui, lines| {
+                        for row in &self.outline_rows[lines] {
+                            ui.horizontal(|ui| {
+                                ui.add_space(row.depth as f32 * 12.0);
+                                if row.has_children {
+                                    let mark = if row.expanded { "-" } else { "+" };
+                                    if ui.small_button(mark).clicked() {
+                                        action = Some(Action::Toggle(row.tile, row.node));
+                                    }
+                                }
+                                let mut visible = !row.hidden;
+                                if ui.checkbox(&mut visible, "").changed() {
+                                    action = Some(Action::Visible(row.tile, row.node, visible));
+                                }
+                                let held = picked
+                                    .as_ref()
+                                    .is_some_and(|(t, n)| *t == row.tile && n.contains(&row.node));
+                                let text = if many_tiles {
+                                    format!("{} [{},{}]", row.name, row.tile.i, row.tile.j)
+                                } else {
+                                    row.name.clone()
+                                };
+                                let line = ui.selectable_label(held, text);
+                                if line.double_clicked() {
+                                    action = Some(Action::Open(row.tile, row.top));
+                                } else if line.clicked() {
+                                    action = Some(Action::Pick(row.tile, row.top));
+                                }
+                            });
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.outline_rename).desired_width(120.0),
+                    );
+                    if ui
+                        .add_enabled(picked.is_some(), egui::Button::new("Ubah nama"))
+                        .clicked()
+                    {
+                        action = Some(Action::Rename);
+                    }
+                });
+            });
+        match action {
+            Some(Action::Toggle(tile, node)) => self.outline_toggle(tile, node),
+            Some(Action::Pick(tile, top)) => self.outline_pick(tile, top),
+            Some(Action::Open(tile, top)) => self.outline_open(tile, top),
+            Some(Action::Visible(tile, node, visible)) => {
+                self.set_node_visible(tile, node, visible);
+            }
+            Some(Action::Rename) => {
+                let name = std::mem::take(&mut self.outline_rename);
+                self.rename_picked(&name);
+            }
+            None => {}
+        }
     }
 
     fn tag_picked(&mut self, name: &str) {
@@ -729,6 +859,7 @@ impl App {
     }
 
     /// What is open for editing, for the status bar.
+    // ponytail: an open group shows as "Grup", Hew gives no name while it is hidden.
     fn session_label(&self) -> Option<String> {
         let (tile, stack) = self.scene.session()?;
         let names: Vec<_> = stack
@@ -1446,7 +1577,10 @@ impl App {
             .default_size(250.0)
             .resizable(true)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.tags_panel(ui));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.outline_panel(ui);
+                    self.tags_panel(ui);
+                });
             });
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
