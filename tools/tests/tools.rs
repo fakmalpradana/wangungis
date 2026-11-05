@@ -1704,6 +1704,128 @@ fn push_pull_keeping_the_solid() {
     assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
 }
 
+/// A second box, 5 x 4 x `height`, standing clear of `box_at_10`.
+fn tall_box_at_30(s: &mut Scene, height: f64) {
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, s, [30.0, 10.0, 0.0]);
+    hover(&mut r, s, [32.0, 12.0, 0.0]);
+    typed(&mut r, s, "5;4").unwrap();
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, s, [32.5, 12.0, 0.0]);
+    typed(&mut p, s, &height.to_string()).unwrap();
+}
+
+/// Pulling a top face up to what another solid offers: a corner, an edge, a
+/// parallel face. The height comes out exact, and the marker says what it took.
+#[test]
+fn push_pull_snaps_to_other_geometry() {
+    for (at, kind) in [
+        ([30.0, 10.0, 8.0], SnapKind::Endpoint),
+        ([32.5, 10.0, 8.0], SnapKind::Midpoint),
+        ([31.0, 10.0, 8.0], SnapKind::OnEdge),
+        ([32.5, 12.0, 8.0], SnapKind::OnFace),
+    ] {
+        let mut s = scene();
+        box_at_10(&mut s);
+        tall_box_at_30(&mut s, 8.0);
+        let mut p = Tool::push_pull(APERTURE);
+        click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+        hover(&mut p, &mut s, at);
+        assert_eq!(p.preview().snap.map(|h| h.snap.kind), Some(kind), "{at:?}");
+        click(&mut p, &mut s, at);
+        assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 8.0]);
+    }
+}
+
+/// The same, downwards and into the solid.
+#[test]
+fn push_pull_snaps_downward_too() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 1.5);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    click(&mut p, &mut s, [30.0, 10.0, 1.5]);
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 1.5]);
+}
+
+/// With the old solid kept, the new one takes the snapped height as well.
+#[test]
+fn push_pull_keeping_the_solid_snaps() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let mut p = Tool::push_pull(APERTURE);
+    p.handle(&mut s, Input::ToggleCopy).unwrap();
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    click(&mut p, &mut s, [30.0, 10.0, 8.0]);
+    has_box(&s, [10.0, 10.0, 3.0], [15.0, 14.0, 8.0]);
+}
+
+/// Over the face it just picked, the pull follows the pointer: that face's own
+/// plane does not hold it at zero, and neither does a wall it is not square to.
+#[test]
+fn push_pull_is_not_held_by_what_gives_no_height() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut p, &mut s, [13.5, 12.5, 3.0]);
+    assert_eq!(p.preview().snap, None, "own plane");
+    let lines = p.preview().lines.clone();
+    let top = lines
+        .iter()
+        .flat_map(|(a, b)| [a.z, b.z])
+        .fold(f64::MIN, f64::max);
+    assert!(top > 3.0 + MM, "the pull moved: {top}");
+
+    // A wall of the same solid, seen from outside.
+    hover(&mut p, &mut s, [12.5, 10.0, 1.5]);
+    assert_eq!(p.preview().snap, None, "wall");
+}
+
+/// A typed distance wins over whatever the pointer rests on.
+#[test]
+fn push_pull_typed_beats_the_snap() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 8.0);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut p, &mut s, [30.0, 10.0, 8.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+proptest! {
+    /// Any target height: exact, sound, and one undo away from where it began.
+    #[test]
+    fn push_pull_to_a_corner_is_exact(
+        // From 2 m up, so the bottom corners stay out of the pointer's reach:
+        // snapping to those flattens the solid, which the kernel refuses.
+        target in 2.0f64..40.0,
+        along in 0.1f64..4.9,
+    ) {
+        let mut s = scene();
+        box_at_10(&mut s);
+        tall_box_at_30(&mut s, target);
+        prop_assume!((target - 3.0).abs() > 0.01);
+        let saved = s.project().save();
+        let mut p = Tool::push_pull(APERTURE);
+        click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+        hover(&mut p, &mut s, [30.0 + along, 10.0, target]);
+        click(&mut p, &mut s, [30.0 + along, 10.0, target]);
+        assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, target]);
+        for doc in s.project().tiles.values() {
+            for id in doc.visible_object_ids() {
+                prop_assert!(doc.object(id).unwrap().validate().is_ok());
+            }
+        }
+        s.undo().unwrap();
+        prop_assert_eq!(s.project().save(), saved);
+    }
+}
+
 /// A sketch region already becomes a new solid: asking for one more is refused.
 #[test]
 fn push_pull_keeping_refuses_a_region_and_leaves_it() {

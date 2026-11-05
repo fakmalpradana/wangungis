@@ -433,6 +433,53 @@ fn along_line(ray: &PickRay, at: Point3, along: Vec3) -> Option<f64> {
     (s >= 0.0).then_some(t)
 }
 
+/// Sets how far a picked face is pulled for this ray, and returns what it
+/// snapped to. A snap only gives a height, as the face moves along its normal.
+/// Nothing that gives one, and the nearest point on the normal decides.
+fn pull_to(scene: &mut Scene, ray: PickRay, aperture: f64, armed: &mut Armed) -> Option<Hit> {
+    let snapped = scene.snap(&query(ray, aperture)).and_then(|hit| {
+        let gives_height = match hit.snap.kind {
+            SnapKind::Endpoint
+            | SnapKind::Center
+            | SnapKind::Quadrant
+            | SnapKind::Intersection
+            | SnapKind::Midpoint
+            | SnapKind::OnEdge => true,
+            // Only a face square to the pull has one height wherever the ray lands.
+            SnapKind::OnFace => surface_under(scene, &hit).is_some_and(|plane| {
+                plane.normal().cross(armed.normal).length() < kernel::tol::NORMAL_DIRECTION
+            }),
+            _ => false,
+        };
+        let d = (hit.snap.position - armed.anchor).dot(armed.normal);
+        // The picked face's own plane would hold it at zero while the ray is
+        // still over the face.
+        (gives_height && d.abs() >= MIN_LEN).then_some((d, hit))
+    });
+    match snapped {
+        Some((d, hit)) => {
+            armed.distance = d;
+            Some(hit)
+        }
+        None => {
+            if let Some(d) = along_line(&ray, armed.anchor, armed.normal) {
+                armed.distance = d;
+            }
+            None
+        }
+    }
+}
+
+/// The plane of the solid face or sketch region an `OnFace` snap landed on.
+fn surface_under(scene: &Scene, hit: &Hit) -> Option<Plane> {
+    let shape = match (hit.snap.source, hit.snap.sketch_region_source) {
+        (Some(source), _) => scene.face_shape(hit.tile, source),
+        (None, Some((sketch, region))) => scene.region_shape(hit.tile, sketch, region),
+        (None, None) => None,
+    };
+    shape.map(|(plane, _)| plane)
+}
+
 /// In-plane directions: world X projected onto a near-horizontal plane,
 /// otherwise horizontal and upward along the plane.
 fn plane_axes(plane: &Plane) -> (Vec3, Vec3) {
@@ -2143,11 +2190,7 @@ impl Tool {
         };
         match input {
             Input::Hover(ray) => match armed {
-                Some(a) => {
-                    if let Some(s) = along_line(&ray, a.anchor, a.normal) {
-                        a.distance = s;
-                    }
-                }
+                Some(a) => self.preview.snap = pull_to(scene, ray, aperture, a),
                 None => {
                     self.preview.snap = scene.snap(&query(ray, aperture));
                     *hover = Self::arm(scene, ray).map_or_else(Vec::new, |a| ring(&a.outline));
@@ -2159,6 +2202,7 @@ impl Tool {
                     hover.clear();
                 }
                 Some(a) => {
+                    pull_to(scene, ray, aperture, a);
                     if a.distance.abs() >= MIN_LEN {
                         Self::commit_push_pull(scene, a.target, a.distance, *keep)?;
                         *armed = None;
