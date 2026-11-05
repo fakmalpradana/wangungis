@@ -86,6 +86,9 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face,
 32. **Impor point cloud.** **Berkas > Impor point cloud**, pilih `.las`. Jendela progres muncul di kanan bawah dan aplikasi tetap bisa dipakai; **Batal** menghentikannya. Setelah selesai, kamera memuat seluruh awan. Status menulis jumlah titik. Orbit dan zoom: nilai apakah terasa ringan, dan catat bila tersendat. Tutup lalu impor file yang sama lagi: harus nyaris seketika.
 33. **Membangun di atas awan.** Dari tampilan atas, tekan **R**, klik sudut bangunan: tooltip menulis "Titik awan". Klik sudut seberang, lalu **P**, klik persegi itu, arahkan ke titik di atap, klik: tembok berhenti setinggi atap. Untuk menggambar di tanah di bawah atap, klik titik tanah, atau matikan **Snap ke titik** di panel. Simpan, buka lagi: awan ikut muncul. Berkas `<proyek>.pointcloud.json` harus ikut bila proyek disalin.
 34. **Ukuran titik dan potong area.** Geser **ukuran titik** di panel: langsung berubah. Tekan **K**, dari tampilan atas klik dua sudut mengelilingi satu bangunan: titik di luar kotak hilang, dan yang di dalam menjadi lebih rapat. Klik tanda silang di tengah sisi atas, gerakkan, klik lagi: sisi turun. Coba dari samping, dengan snap ke titik atap. **Tampilkan semua** memunculkan semuanya, **Potong aktif** menghidupkan lagi kotak yang sama. Nilai apakah cara memilihnya cukup mudah.
+35. **Ukuran titik per awan.** Impor dua `.las`. Di panel, tiap awan punya slider **ukuran titik** sendiri: menggeser satu tidak mengubah yang lain. Simpan, buka lagi: ukurannya tetap.
+36. **Geser awan.** Tekan **J**, klik satu titik pada awan, gerakkan: awan mengikuti kursor. Arahkan ke sudut kotak, tepi, atap, sumbu, atau origin: penanda muncul, klik: titik tadi tepat di sana. Panah mengunci sumbu, dan jarak bisa diketik. Esc membatalkan, **Cmd+Z** mengembalikan. Panel menulis jarak geser dari koordinat LAS, dan **Kembalikan posisi** memulangkannya. Tombol **Geser** di panel mengizinkan titik acuan di mana saja, misalnya sudut model. Nilai: apakah tool terpisah dari **M** terasa wajar.
+
 
 ## Pengaman data
 Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
@@ -93,6 +96,7 @@ Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpa
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
 - Jendela berkas di Windows dan Linux belum diuji manusia. Di Linux butuh xdg-desktop-portal atau zenity.
+- Geser awan hanya translasi, belum putar.
 - Point cloud: hanya `.las`, belum `.laz`. Tanpa reproyeksi, jadi EPSG berbeda ditolak. Warna dari RGB berkas, atau dari ketinggian bila tidak ada; belum ada warna atau saring per kelas. Kotak potong sejajar sumbu, belum bisa diputar. Solid menutupi titik di dalamnya. Cache di `~/.wangungis/cache/` memakai ±35% ukuran LAS dan belum dibersihkan otomatis.
 - Selama komponen dibuka, salinan lainnya hilang dari layar sampai ditutup.
 - Tidak bisa menggambar pada bidang yang berisi gambar di sisi lain batas grup. Misalnya, garis bebas di dalam grup yang menempel di tanah menghalangi garis baru di tanah di luar grup. Aplikasi menolak dengan pesan.

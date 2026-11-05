@@ -11,8 +11,10 @@ Mengimpor LAS menjadi cache ringan yang dapat dibaca per area dan per tingkat de
 - `CloudFile::read(chunk, start, count)` membaca bagian chunk tanpa melewati ujungnya.
 - `ChunkInfo::world(point)` mengubah posisi kuantisasi menjadi koordinat dunia.
 
-- `CloudSet`: awan-awan satu proyek, dimiliki `tools::Scene`. `add(file, source)`, `remove(id)`, `set_visible(id, on)`. Tiap frame: `poll()` mengambil hasil baca, `plan(&View)` memilih jumlah titik per chunk dan meminta yang kurang, `take_changed(f)` memberi chunk yang berubah untuk diunggah, `draws()` memberi daftar gambar. `busy()` berarti masih ada bacaan berjalan. `pick(origin, dir, aperture)` memberi titik di bawah sinar. `bounds()` memberi batas lokal proyek.
-- Pengaturan publik di `CloudSet`: `frame` (posisi dunia dari nol proyek), `draw_budget` (bawaan 2 juta titik), `load_budget` (bawaan 5 juta titik), `point_size` (1 sampai 8 titik layar), `snap`, `slice`, `slice_on`. `active_slice()` memberi kotak yang berlaku.
+- `CloudSet`: awan-awan satu proyek, dimiliki `tools::Scene`. `add(file, source)`, `remove(id)`, `set_visible(id, on)`. Tiap frame: `poll()` mengambil hasil baca, `plan(&View)` memilih jumlah titik per chunk dan meminta yang kurang, `take_changed(f)` memberi chunk yang berubah untuk diunggah, `draws()` memberi daftar gambar. `busy()` berarti masih ada bacaan berjalan. `pick(origin, dir, aperture)` memberi id awan dan titik di bawah sinar. `bounds()` memberi batas lokal proyek.
+- Per awan (`Cloud`): `point_size` (1 sampai 8 titik layar, lewat `set_point_size`) dan `offset` (meter dari posisinya di LAS, lewat `set_offset`, angka tidak finite ditolak). LAS dan cache tidak berubah; menggeser tidak mengunggah ulang.
+- Pengaturan publik di `CloudSet`: `frame` (posisi dunia dari nol proyek), `draw_budget` (bawaan 2 juta titik), `load_budget` (bawaan 5 juta titik), `point_size` (ukuran untuk awan baru), `snap`, `slice`, `slice_on`, `moving` (awan yang sedang digeser, yang tidak bisa dipilih `pick`). `active_slice()` memberi kotak yang berlaku.
+- Berkas pendamping menyimpan ukuran dan offset per awan. Berkas lama tanpa keduanya tetap terbaca: ukuran dari `point_size` berkas, offset nol.
 - `saved(dir)`, `apply_saved(&SavedClouds)`, `saved_clouds_path(project)`: berkas pendamping `<proyek>.pointcloud.json`. Nilainya diperiksa dan dipotong ke rentang saat dibaca.
 
 ## Cara kerja LOD

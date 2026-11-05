@@ -1797,6 +1797,25 @@ fn push_pull_typed_beats_the_snap() {
     assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
 }
 
+/// A point in reach beats an edge under the pointer, as everywhere in Hew: near the
+/// top of a 2 m wall, the middle of its corner edge wins. Found by CI at random.
+#[test]
+fn push_pull_prefers_a_midpoint_in_reach() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    tall_box_at_30(&mut s, 2.0);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    let at = [34.05414695318391, 10.0, 2.0];
+    hover(&mut p, &mut s, at);
+    assert_eq!(
+        p.preview().snap.map(|h| h.snap.kind),
+        Some(SnapKind::Midpoint)
+    );
+    click(&mut p, &mut s, at);
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 1.0]);
+}
+
 proptest! {
     /// Any target height: exact, sound, and one undo away from where it began.
     #[test]
@@ -1811,7 +1830,9 @@ proptest! {
         tall_box_at_30(&mut s, target);
         prop_assume!((target - 3.0).abs() > 0.01);
         let saved = s.project().save();
-        let mut p = Tool::push_pull(APERTURE);
+        // Narrow, or the middle of a short wall's edge is in reach too, and outranks
+        // the top edge: see `push_pull_prefers_a_midpoint_in_reach`.
+        let mut p = Tool::push_pull(APERTURE / 10.0);
         click(&mut p, &mut s, [12.5, 12.0, 3.0]);
         hover(&mut p, &mut s, [30.0 + along, 10.0, target]);
         click(&mut p, &mut s, [30.0 + along, 10.0, target]);

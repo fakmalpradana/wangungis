@@ -147,9 +147,22 @@ fn drawable(doc: &Document, plane: Plane) -> Vec<ObjectId> {
 pub struct Hit {
     pub tile: TileKey,
     pub snap: Snap,
-    /// It is a point of a point cloud, not geometry. `snap.kind` is `Endpoint`, as
-    /// Hew's list has nothing else for an exact spot.
-    pub cloud: bool,
+    /// It is a point of this point cloud, not geometry. `snap.kind` is `Endpoint`,
+    /// as Hew's list has nothing else for an exact spot.
+    pub cloud: Option<u32>,
+}
+
+/// One entry of the project's undo history.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Step {
+    /// An edit: its tile, and how many Hew steps it took.
+    Edit(TileKey, u32),
+    /// A point cloud moved. It lives outside every document.
+    Cloud {
+        id: u32,
+        from: [f64; 3],
+        to: [f64; 3],
+    },
 }
 
 /// One line of the Outliner.
@@ -324,9 +337,10 @@ pub struct Scene {
     cells: BTreeMap<TileKey, Cells>,
     /// No geometry: answers pure-direction snaps (project axes, axis locks).
     base: InferenceScene,
-    /// Edits in order: their tile, and how many Hew steps each took.
-    undo: Vec<(TileKey, u32)>,
-    redo: Vec<(TileKey, u32)>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// A cloud changed place since [`Scene::take_clouds_moved`] last asked.
+    clouds_moved: bool,
     dirty: BTreeSet<TileKey>,
     /// The drawing that belongs to the open session. Hew does not say for a
     /// group, except by closing it on a copy, so this is kept across hovers.
@@ -546,6 +560,7 @@ impl Scene {
             base: InferenceScene::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            clouds_moved: false,
             dirty: BTreeSet::new(),
             open_sketches: Vec::new(),
             clouds: CloudSet::default(),
@@ -827,7 +842,7 @@ impl Scene {
             let hit = Hit {
                 tile: key,
                 snap,
-                cloud: false,
+                cloud: None,
             };
             found.push((rank, angle, depth, hit, aim));
         };
@@ -885,12 +900,32 @@ impl Scene {
         None
     }
 
+    /// The cloud's point under a ray, whatever else is there.
+    pub fn cloud_under(&self, ray: PickRay, aperture: f64) -> Option<Hit> {
+        let unit = PickRay {
+            origin: ray.origin,
+            direction: ray.direction.normalized().ok()?,
+        };
+        self.cloud_snap(&SnapQuery {
+            ray: unit,
+            anchor: None,
+            lock: None,
+            aperture,
+            aperture_mode: inference::ApertureMode::Cone,
+            constraint_plane: None,
+            weights: inference::SnapWeights::default(),
+            soft_axis_aperture_scale: None,
+            off_plane_points: false,
+            see_through_points: false,
+        })
+    }
+
     /// The cloud's point under a unit ray. Under a lock or on a drawing plane it
     /// lands on that line or plane, and says where it came from.
     fn cloud_snap(&self, query: &SnapQuery) -> Option<Hit> {
         let o = query.ray.origin;
         let d = query.ray.direction;
-        let at = self
+        let (id, at) = self
             .clouds
             .pick([o.x, o.y, o.z], [d.x, d.y, d.z], query.aperture)?;
         let point = Point3::new(at[0], at[1], at[2]);
@@ -921,7 +956,7 @@ impl Scene {
                 projected_from: (position != point).then_some(point),
                 crossed_edge: None,
             },
-            cloud: true,
+            cloud: Some(id),
         })
     }
 
@@ -1289,7 +1324,7 @@ impl Scene {
                 }
             }
         }
-        self.undo.push((key, steps));
+        self.undo.push(Step::Edit(key, steps));
         self.redo.clear();
         self.touch(key);
     }
@@ -2195,8 +2230,17 @@ impl Scene {
                 return Err(e);
             }
         }
-        let steps = self.undo.split_off(mark).iter().map(|e| e.1).sum();
-        self.undo.push((tile, steps));
+        // Everything since the mark came from the loop above: edits on this tile.
+        let steps = self
+            .undo
+            .split_off(mark)
+            .iter()
+            .map(|e| match e {
+                Step::Edit(_, steps) => *steps,
+                Step::Cloud { .. } => 0,
+            })
+            .sum();
+        self.undo.push(Step::Edit(tile, steps));
         Ok(())
     }
 
@@ -2256,33 +2300,94 @@ impl Scene {
         Ok(())
     }
 
-    /// Undoes the latest edit, in whichever tile it happened.
+    /// Puts a point cloud at `to` from its place in the LAS, as one undo step. `from`
+    /// is where the step goes back to: a gesture has moved it along the way.
+    pub fn move_cloud(&mut self, id: u32, from: [f64; 3], to: [f64; 3]) -> Result<(), EditError> {
+        if !to
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= PROJECT_BOUND_M)
+        {
+            return Err(EditError::Unsupported("awan digeser terlalu jauh"));
+        }
+        if self.clouds.offset_of(id).is_none() {
+            return Err(EditError::Unsupported("awan itu sudah dilepas"));
+        }
+        self.clouds.set_offset(id, to);
+        self.undo.push(Step::Cloud { id, from, to });
+        self.redo.clear();
+        self.clouds_moved = true;
+        Ok(())
+    }
+
+    /// Whether a cloud changed place since the last call, as its offset is saved.
+    pub fn take_clouds_moved(&mut self) -> bool {
+        std::mem::take(&mut self.clouds_moved)
+    }
+
+    /// Takes off steps of clouds no longer in the project: they have nothing to do.
+    fn drop_gone_clouds(stack: &mut Vec<Step>, clouds: &CloudSet) {
+        while let Some(Step::Cloud { id, .. }) = stack.last() {
+            if clouds.offset_of(*id).is_some() {
+                return;
+            }
+            stack.pop();
+        }
+    }
+
+    /// Undoes the latest edit, in whichever tile it happened. `None` also when it
+    /// moved a point cloud, which belongs to no tile.
     pub fn undo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some((key, steps)) = self.undo.last().copied() else {
+        Self::drop_gone_clouds(&mut self.undo, &self.clouds);
+        let Some(step) = self.undo.last().copied() else {
             return Ok(None);
         };
-        let doc = self.project.tile_mut(key)?;
-        for _ in 0..steps {
-            doc.undo().map_err(kernel_err)?;
-        }
+        let key = match step {
+            Step::Edit(key, steps) => {
+                let doc = self.project.tile_mut(key)?;
+                for _ in 0..steps {
+                    doc.undo().map_err(kernel_err)?;
+                }
+                Some(key)
+            }
+            Step::Cloud { id, from, .. } => {
+                self.clouds.set_offset(id, from);
+                self.clouds_moved = true;
+                None
+            }
+        };
         self.undo.pop();
-        self.redo.push((key, steps));
-        self.touch(key);
-        Ok(Some(key))
+        self.redo.push(step);
+        if let Some(key) = key {
+            self.touch(key);
+        }
+        Ok(key)
     }
 
     /// Redoes the latest undone edit.
     pub fn redo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some((key, steps)) = self.redo.last().copied() else {
+        Self::drop_gone_clouds(&mut self.redo, &self.clouds);
+        let Some(step) = self.redo.last().copied() else {
             return Ok(None);
         };
-        let doc = self.project.tile_mut(key)?;
-        for _ in 0..steps {
-            doc.redo().map_err(kernel_err)?;
-        }
+        let key = match step {
+            Step::Edit(key, steps) => {
+                let doc = self.project.tile_mut(key)?;
+                for _ in 0..steps {
+                    doc.redo().map_err(kernel_err)?;
+                }
+                Some(key)
+            }
+            Step::Cloud { id, to, .. } => {
+                self.clouds.set_offset(id, to);
+                self.clouds_moved = true;
+                None
+            }
+        };
         self.redo.pop();
-        self.undo.push((key, steps));
-        self.touch(key);
-        Ok(Some(key))
+        self.undo.push(step);
+        if let Some(key) = key {
+            self.touch(key);
+        }
+        Ok(key)
     }
 }

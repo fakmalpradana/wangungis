@@ -49,8 +49,8 @@ pub struct View {
     pub view_proj: [[f32; 4]; 4],
     /// Pixels per unit of size at distance 1.
     pub focal_px: f64,
-    /// A point's edge in those pixels.
-    pub point_px: f64,
+    /// Pixels per screen point. A point's edge is its cloud's size times this.
+    pub scale: f64,
 }
 
 #[derive(Debug)]
@@ -73,6 +73,11 @@ pub struct Cloud {
     pub source: PathBuf,
     pub info: CloudInfo,
     pub visible: bool,
+    /// Edge of a drawn point, in screen points.
+    pub point_size: f32,
+    /// Where it was moved to from its place in the LAS, in meters. The LAS and the
+    /// cache stay as they are.
+    pub offset: [f64; 3],
     chunks: Vec<Chunk>,
 }
 
@@ -107,6 +112,11 @@ pub struct SavedCloud {
     /// Relative to the project's folder when it lies inside it.
     pub path: PathBuf,
     pub visible: bool,
+    /// `None` in files from before each cloud had its own: the file's `point_size`.
+    #[serde(default)]
+    pub point_size: Option<f32>,
+    #[serde(default)]
+    pub offset: [f64; 3],
 }
 
 /// The companion file of a project at `project`.
@@ -141,6 +151,10 @@ pub struct DrawChunk {
     pub id: u32,
     pub chunk: usize,
     pub count: u32,
+    /// The cloud's, in screen points.
+    pub point_size: f32,
+    /// The cloud's.
+    pub offset: [f64; 3],
 }
 
 /// A chunk whose points changed, to be uploaded again.
@@ -148,7 +162,7 @@ pub struct DrawChunk {
 pub struct ChangedChunk<'a> {
     pub id: u32,
     pub chunk: usize,
-    /// Project-local.
+    /// Project-local, before the cloud's offset: moving needs no upload.
     pub min: [f64; 3],
     pub size: [f64; 3],
     pub points: &'a [CloudPoint],
@@ -163,13 +177,15 @@ pub struct CloudSet {
     pub draw_budget: u64,
     /// Most points in memory.
     pub load_budget: u64,
-    /// Edge of a drawn point, in screen points.
+    /// Edge of a drawn point for a cloud that has not been given its own.
     pub point_size: f32,
     /// Points can be snapped to.
     pub snap: bool,
     /// The box last drawn, kept while it is off.
     pub slice: Option<Slice>,
     pub slice_on: bool,
+    /// The cloud being moved, which nothing should snap to: it travels with the pointer.
+    pub moving: Option<u32>,
     jobs: Option<Sender<Job>>,
     answers: Option<Receiver<Answer>>,
     in_flight: usize,
@@ -194,6 +210,7 @@ impl Default for CloudSet {
             snap: true,
             slice: None,
             slice_on: false,
+            moving: None,
             jobs: None,
             answers: None,
             in_flight: 0,
@@ -289,6 +306,8 @@ impl CloudSet {
             source,
             info,
             visible: true,
+            point_size: self.point_size,
+            offset: [0.0; 3],
             chunks,
         });
         id
@@ -296,6 +315,9 @@ impl CloudSet {
 
     pub fn remove(&mut self, id: u32) {
         self.clouds.retain(|c| c.id != id);
+        if self.moving == Some(id) {
+            self.moving = None;
+        }
         self.removed.push(id);
         self.send(Job::Remove(id));
     }
@@ -309,6 +331,28 @@ impl CloudSet {
         if let Some(c) = self.clouds.iter_mut().find(|c| c.id == id) {
             c.visible = visible;
         }
+    }
+
+    pub fn set_point_size(&mut self, id: u32, size: f32) {
+        if let Some(c) = self.clouds.iter_mut().find(|c| c.id == id)
+            && size.is_finite()
+        {
+            c.point_size = size.clamp(MIN_POINT_SIZE, MAX_POINT_SIZE);
+        }
+    }
+
+    /// Puts a cloud at `offset` from its place in the LAS. Takes effect on the next
+    /// plan, with nothing to read or upload. Not a finite number: nothing happens.
+    pub fn set_offset(&mut self, id: u32, offset: [f64; 3]) {
+        if let Some(c) = self.clouds.iter_mut().find(|c| c.id == id)
+            && offset.iter().all(|v| v.is_finite())
+        {
+            c.offset = offset;
+        }
+    }
+
+    pub fn offset_of(&self, id: u32) -> Option<[f64; 3]> {
+        self.clouds.iter().find(|c| c.id == id).map(|c| c.offset)
     }
 
     fn send(&self, job: Job) {
@@ -331,6 +375,8 @@ impl CloudSet {
                         .strip_prefix(dir)
                         .map_or_else(|_| c.source.clone(), std::path::Path::to_owned),
                     visible: c.visible,
+                    point_size: Some(c.point_size),
+                    offset: c.offset,
                 })
                 .collect(),
             point_size: self.point_size,
@@ -367,8 +413,8 @@ impl CloudSet {
     pub fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
         let mut out = None;
         for c in self.clouds.iter().filter(|c| c.visible) {
-            let lo: [f64; 3] = std::array::from_fn(|k| c.info.min[k] - self.frame[k]);
-            let hi: [f64; 3] = std::array::from_fn(|k| c.info.max[k] - self.frame[k]);
+            let lo: [f64; 3] = std::array::from_fn(|k| c.info.min[k] - self.frame[k] + c.offset[k]);
+            let hi: [f64; 3] = std::array::from_fn(|k| c.info.max[k] - self.frame[k] + c.offset[k]);
             out = Some(match out {
                 None => (lo, hi),
                 Some((a, b)) => {
@@ -426,7 +472,6 @@ impl CloudSet {
     pub fn plan(&mut self, view: &View) {
         let slice = self.active_slice();
         let frame = self.frame;
-        let px = view.point_px.max(1.0);
         let total_chunks: usize = self.clouds.iter().map(|c| c.chunks.len()).sum();
         // Every chunk keeps a little, so that any view starts with something.
         let floor = (self.load_budget / 10).min(self.draw_budget / 2);
@@ -435,9 +480,12 @@ impl CloudSet {
         let mut sum = 0u64;
         let mut seen: Vec<(f64, usize, usize)> = Vec::new();
         for (i, cloud) in self.clouds.iter_mut().enumerate() {
+            let px = (f64::from(cloud.point_size) * view.scale).max(1.0);
+            let offset = cloud.offset;
             for (j, chunk) in cloud.chunks.iter_mut().enumerate() {
                 let most = chunk.info.count.min(MAX_CHUNK_POINTS);
-                let min: [f64; 3] = std::array::from_fn(|k| chunk.info.min[k] - frame[k]);
+                let min: [f64; 3] =
+                    std::array::from_fn(|k| chunk.info.min[k] - frame[k] + offset[k]);
                 let size = chunk.info.size;
                 let shown = cloud.visible
                     && slice.is_none_or(|s| s.overlaps(min, size))
@@ -485,6 +533,8 @@ impl CloudSet {
                         id: c.id,
                         chunk: j,
                         count: chunk.draw as u32,
+                        point_size: c.point_size,
+                        offset: c.offset,
                     })
                 })
             })
@@ -583,20 +633,26 @@ impl CloudSet {
 
     /// The point under a project-local ray, among what is on screen: the nearest
     /// surface inside the cone, then the point closest to the ray on it.
-    pub fn pick(&self, origin: [f64; 3], dir: [f64; 3], aperture: f64) -> Option<[f64; 3]> {
+    pub fn pick(&self, origin: [f64; 3], dir: [f64; 3], aperture: f64) -> Option<(u32, [f64; 3])> {
         if !self.snap || !aperture.is_finite() || aperture <= 0.0 {
             return None;
         }
         let tan = aperture.min(1.5).tan();
         let tan2 = tan * tan;
         let slice = self.active_slice();
-        let mut hits: Vec<(f64, f64, [f64; 3])> = Vec::new();
-        for cloud in self.clouds.iter().filter(|c| c.visible) {
+        let mut hits: Vec<(f64, f64, [f64; 3], u32)> = Vec::new();
+        let moving = self.moving;
+        for cloud in self
+            .clouds
+            .iter()
+            .filter(|c| c.visible && Some(c.id) != moving)
+        {
             for c in &cloud.chunks {
                 if c.draw == 0 {
                     continue;
                 }
-                let min: [f64; 3] = std::array::from_fn(|k| c.info.min[k] - self.frame[k]);
+                let min: [f64; 3] =
+                    std::array::from_fn(|k| c.info.min[k] - self.frame[k] + cloud.offset[k]);
                 if !cone_meets_box(origin, dir, tan, min, c.info.size) {
                     continue;
                 }
@@ -617,9 +673,10 @@ impl CloudSet {
                         continue;
                     }
                     let world = c.info.world(p);
-                    let local: [f64; 3] = std::array::from_fn(|k| world[k] - self.frame[k]);
+                    let local: [f64; 3] =
+                        std::array::from_fn(|k| world[k] - self.frame[k] + cloud.offset[k]);
                     if slice.is_none_or(|s| s.contains(local)) {
-                        hits.push((f64::from(along), f64::from(off2), local));
+                        hits.push((f64::from(along), f64::from(off2), local, cloud.id));
                     }
                 }
             }
@@ -628,7 +685,7 @@ impl CloudSet {
         hits.into_iter()
             .filter(|h| h.0 <= nearest * (1.0 + SAME_SURFACE))
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|h| h.2)
+            .map(|h| (h.3, h.2))
     }
 }
 

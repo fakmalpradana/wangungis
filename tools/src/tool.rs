@@ -160,8 +160,25 @@ fn set_grip(slice: &mut Slice, grip: Grip, value: f64) {
     }
 }
 
+/// A point cloud on its way somewhere.
+#[derive(Debug, Clone, PartialEq)]
+struct MovingCloud {
+    id: u32,
+    base: Point3,
+    /// Its offset before the gesture, to go back to.
+    from: [f64; 3],
+    cursor: Option<Point3>,
+    lock: Option<Axis>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum State {
+    /// Moves a whole point cloud, by a point of it to a point of anything.
+    CloudMove {
+        /// Chosen in the panel: any point will do as the base.
+        target: Option<u32>,
+        moving: Option<MovingCloud>,
+    },
     /// Draws and adjusts the box that hides the points outside it.
     CloudSlice {
         first: Option<Point3>,
@@ -405,7 +422,7 @@ impl Chain {
                     crossed_edge: None,
                 };
                 let tile = self.tile;
-                let cloud = false;
+                let cloud = None;
                 return (position, Some(Hit { tile, snap, cloud }));
             }
         }
@@ -825,6 +842,36 @@ fn move_point(
     ray_on_plane(&ray, &plane).map(|p| (p, None))
 }
 
+/// The offset that brings a moved cloud's base to `to`.
+fn moved_offset(m: &MovingCloud, to: Point3) -> [f64; 3] {
+    let d = to - m.base;
+    [m.from[0] + d.x, m.from[1] + d.y, m.from[2] + d.z]
+}
+
+/// Where a moved cloud's base point lands: a snap on anything but itself, the locked
+/// axis, or the horizontal plane through the base.
+fn cloud_point(
+    scene: &mut Scene,
+    ray: PickRay,
+    m: &MovingCloud,
+    aperture: f64,
+) -> Option<(Point3, Option<Hit>)> {
+    let q = SnapQuery {
+        anchor: Some(m.base),
+        lock: m.lock.map(SnapLock::Axis),
+        ..query(ray, aperture)
+    };
+    if let Some(h) = scene.snap(&q) {
+        return Some((h.snap.position, Some(h)));
+    }
+    if let Some(axis) = m.lock {
+        let u = axis.unit();
+        return Some((m.base + u * along_line(&ray, m.base, u)?, None));
+    }
+    let plane = Plane::from_point_normal(m.base, Vec3::new(0.0, 0.0, 1.0)).ok()?;
+    ray_on_plane(&ray, &plane).map(|p| (p, None))
+}
+
 /// The plane to read a scaling cursor on: horizontal through `center`, or the
 /// vertical plane facing the eye when looking along the horizontal.
 fn scale_plane(ray: &PickRay, center: Point3) -> Option<Plane> {
@@ -1026,6 +1073,24 @@ impl Tool {
         )
     }
 
+    /// Moves a point cloud: click a point of it, then where that point should go.
+    pub fn cloud_move(aperture: f64) -> Self {
+        Self::with(
+            State::CloudMove {
+                target: None,
+                moving: None,
+            },
+            aperture,
+        )
+    }
+
+    /// Makes `id` the cloud this tool moves, so that the base can be any point.
+    pub fn set_cloud_target(&mut self, id: u32) {
+        if let State::CloudMove { target, .. } = &mut self.state {
+            *target = Some(id);
+        }
+    }
+
     /// The box that hides the points outside it.
     pub fn cloud_slice(aperture: f64) -> Self {
         Self::with(
@@ -1187,6 +1252,17 @@ impl Tool {
             }
             State::Rectangle { first: None, .. } => "Klik sudut pertama.",
             State::Rectangle { .. } => "Klik sudut lawan atau ketik ukuran, mis. 5;4.",
+            State::CloudMove {
+                moving: Some(_), ..
+            } => {
+                "Klik tujuan: titik, tepi, face, sumbu, atau origin. Atau ketik jarak. Panah: kunci sumbu. Esc membatalkan."
+            }
+            State::CloudMove {
+                target: Some(_), ..
+            } => "Klik titik acuan, boleh di mana saja. Titik itu yang akan ditaruh di tujuan.",
+            State::CloudMove { .. } => {
+                "Klik sebuah titik pada awan. Titik itu yang akan ditaruh di tujuan."
+            }
             State::CloudSlice { first: Some(_), .. } => {
                 "Klik sudut seberang. Tinggi kotak mengikuti seluruh awan."
             }
@@ -1293,6 +1369,7 @@ impl Tool {
     /// True while a gesture is under way, so Esc means "cancel it".
     pub fn busy(&self) -> bool {
         match &self.state {
+            State::CloudMove { moving, .. } => moving.is_some(),
             State::CloudSlice { first, holding, .. } => first.is_some() || holding.is_some(),
             State::Select {
                 selected, nodes, ..
@@ -1326,6 +1403,7 @@ impl Tool {
         let unit = self.unit;
         let paint = self.paint.take();
         *self = match self.state {
+            State::CloudMove { .. } => Self::cloud_move(aperture),
             State::CloudSlice { .. } => Self::cloud_slice(aperture),
             State::Select { .. } => Self::select(aperture),
             State::Line { .. } => Self::line(aperture),
@@ -1412,11 +1490,19 @@ impl Tool {
             {
                 scene.clouds.slice = Some(before);
             }
+            if let State::CloudMove {
+                moving: Some(m), ..
+            } = &self.state
+            {
+                scene.clouds.set_offset(m.id, m.from);
+                scene.clouds.moving = None;
+            }
             self.reset();
             return Ok(());
         }
         let hovering = matches!(input, Input::Hover(_));
         match &self.state {
+            State::CloudMove { .. } => self.handle_cloud_move(scene, input),
             State::CloudSlice { .. } => self.handle_cloud_slice(scene, input),
             State::Select { .. } => self.handle_select(scene, input),
             State::Line { .. } => self.handle_line(scene, input),
@@ -2411,6 +2497,115 @@ impl Tool {
         Ok(())
     }
 
+    fn handle_cloud_move(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::CloudMove { target, moving } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => match moving {
+                Some(m) => {
+                    let next = cloud_point(scene, ray, m, aperture);
+                    if let Some((p, _)) = next {
+                        scene.clouds.set_offset(m.id, moved_offset(m, p));
+                        m.cursor = Some(p);
+                    }
+                    self.preview.snap = next.and_then(|n| n.1);
+                }
+                None => {
+                    // Asked for a point of a cloud, an axis or a face in front of it
+                    // is not the answer.
+                    self.preview.snap = match target {
+                        Some(_) => scene.snap(&query(ray, aperture)),
+                        None => scene.cloud_under(ray, aperture),
+                    };
+                }
+            },
+            Input::Click(ray) => match moving {
+                None => {
+                    if scene.clouds.is_empty() {
+                        return Err(needs("impor point cloud dulu"));
+                    }
+                    let hit = match target {
+                        Some(_) => scene.snap(&query(ray, aperture)),
+                        None => scene.cloud_under(ray, aperture),
+                    };
+                    let Some(id) = target.or(hit.and_then(|h| h.cloud)) else {
+                        return Err(needs("klik sebuah titik pada awan"));
+                    };
+                    let Some(from) = scene.clouds.offset_of(id) else {
+                        return Err(needs("awan itu sudah dilepas"));
+                    };
+                    let ground = Plane::from_point_normal(Point3::ORIGIN, Vec3::new(0.0, 0.0, 1.0))
+                        .expect("a unit normal");
+                    let Some(base) = hit
+                        .map(|h| h.snap.position)
+                        .or_else(|| ray_on_plane(&ray, &ground))
+                    else {
+                        return Ok(());
+                    };
+                    scene.clouds.moving = Some(id);
+                    *moving = Some(MovingCloud {
+                        id,
+                        base,
+                        from,
+                        cursor: None,
+                        lock: None,
+                    });
+                }
+                Some(m) => {
+                    if let Some((p, _)) = cloud_point(scene, ray, m, aperture)
+                        && Self::finish_cloud_move(scene, m, p)?
+                    {
+                        *moving = None;
+                    }
+                }
+            },
+            Input::Typed(text) => {
+                let Some(m) = moving else {
+                    return Err(needs("klik sebuah titik pada awan dulu"));
+                };
+                let Some(Vcb::One(len)) = vcb::parse_in(&text, self.unit) else {
+                    return Err(needs("geser awan butuh satu jarak, mis. 3"));
+                };
+                let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                let toward = cursor - m.base;
+                let dir = match m.lock {
+                    Some(axis) if toward.dot(axis.unit()) < 0.0 => axis.unit() * -1.0,
+                    Some(axis) => axis.unit(),
+                    None => toward
+                        .normalized()
+                        .map_err(|_| needs("arahkan kursor dulu"))?,
+                };
+                let p = m.base + dir * len;
+                if Self::finish_cloud_move(scene, m, p)? {
+                    *moving = None;
+                }
+            }
+            Input::LockAxis(axis) => {
+                if let Some(m) = moving {
+                    m.lock = (m.lock != Some(axis)).then_some(axis);
+                }
+            }
+            Input::ClickAdd(_) | Input::LockNormal | Input::Cancel | Input::ToggleCopy => {}
+        }
+        Ok(())
+    }
+
+    /// `false` for a displacement too short to mean anything: the gesture stays open.
+    fn finish_cloud_move(
+        scene: &mut Scene,
+        m: &MovingCloud,
+        to: Point3,
+    ) -> Result<bool, EditError> {
+        if (to - m.base).length() < MIN_LEN {
+            return Ok(false);
+        }
+        scene.move_cloud(m.id, m.from, moved_offset(m, to))?;
+        scene.clouds.moving = None;
+        Ok(true)
+    }
+
     fn handle_cloud_slice(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::CloudSlice {
@@ -2672,6 +2867,10 @@ impl Tool {
     fn refresh_lines(&mut self) {
         let aperture = self.aperture;
         self.preview.lines = match &self.state {
+            State::CloudMove {
+                moving: Some(m), ..
+            } => m.cursor.iter().map(|c| (m.base, *c)).collect(),
+            State::CloudMove { .. } => Vec::new(),
             State::CloudSlice {
                 first: Some(a),
                 cursor,

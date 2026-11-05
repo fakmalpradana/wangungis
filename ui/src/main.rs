@@ -25,8 +25,8 @@ use wangungis_pointcloud::{
     Progress, SavedCloud, SavedClouds, View as CloudView, saved_clouds_path,
 };
 use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
-use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::{Project, TileKey, node_visible};
+use wangungis_scene::{PROJECT_BOUND_M, ProjectOrigin};
 use wangungis_tools::tool::{Input, Preview, Tool};
 use wangungis_tools::vcb::Unit;
 use wangungis_tools::{OutlineRow, Paint, Scene};
@@ -431,6 +431,8 @@ impl App {
     /// file window has already asked about replacing `chosen`. It has not asked
     /// about a name changed here, so that one never replaces anything.
     fn save_to(&mut self, chosen: &Path) {
+        // Only what was put down gets saved, not what is still on its way.
+        self.cancel_gesture();
         self.notice = None;
         let project = self.scene.project();
         let single = project.single().is_some();
@@ -488,6 +490,7 @@ impl App {
     /// Takes a cloud out of the project. With the last one gone, what was placed by
     /// it goes too, so that the next cloud starts clean.
     fn remove_cloud(&mut self, id: u32) {
+        self.cancel_gesture();
         self.scene.clouds.remove(id);
         self.unsaved = true;
         self.autosave_stale = true;
@@ -496,6 +499,30 @@ impl App {
             self.scene.clouds.slice = None;
             self.scene.clouds.slice_on = false;
         }
+    }
+
+    /// Starts moving one cloud, whichever point is clicked as the base.
+    fn start_cloud_move(&mut self, id: u32) {
+        self.switch_tool(Tool::cloud_move);
+        self.tool.set_cloud_target(id);
+    }
+
+    /// Puts a moved cloud back where the LAS has it, as one undo step.
+    fn reset_cloud_offset(&mut self, id: u32) {
+        self.cancel_gesture();
+        if let Some(from) = self.scene.clouds.offset_of(id)
+            && let Err(e) = self.scene.move_cloud(id, from, [0.0; 3])
+        {
+            self.error = Some(e.to_string());
+        }
+        self.sync_edits();
+    }
+
+    /// Ends what the tool holds, the way Esc does: a gesture may have moved something
+    /// on its way, and only the tool knows where it came from.
+    fn cancel_gesture(&mut self) {
+        // Cancel never refuses.
+        let _ = self.tool.handle(&mut self.scene, Input::Cancel);
     }
 
     /// Reads the companion file of a project just opened, if it has one.
@@ -518,6 +545,8 @@ impl App {
                 source: dir.join(cloud.path),
                 visible: cloud.visible,
                 restoring: true,
+                point_size: cloud.point_size.unwrap_or(saved.point_size),
+                offset: cloud.offset,
             });
             self.next_cloud_import();
         }
@@ -529,6 +558,8 @@ impl App {
             source,
             visible: true,
             restoring: false,
+            point_size: self.scene.clouds.point_size,
+            offset: [0.0; 3],
         });
         self.next_cloud_import();
     }
@@ -587,6 +618,8 @@ impl App {
                     self.clouds_missing.push(SavedCloud {
                         path: job.queued.source,
                         visible: job.queued.visible,
+                        point_size: Some(job.queued.point_size),
+                        offset: job.queued.offset,
                     });
                 }
             }
@@ -602,6 +635,8 @@ impl App {
             source,
             visible,
             restoring,
+            point_size,
+            offset,
         } = queued;
         let epsg = file.info.epsg;
         let project_epsg = self.scene.project().origin.map(|o| o.epsg).or_else(|| {
@@ -657,6 +692,13 @@ impl App {
         let points = file.info.points;
         let id = self.scene.clouds.add(file, source);
         self.scene.clouds.set_visible(id, visible);
+        self.scene.clouds.set_point_size(id, point_size);
+        // From a file that may have been edited: as far as a move could take it.
+        if offset.iter().all(|v| v.abs() <= PROJECT_BOUND_M) {
+            self.scene.clouds.set_offset(id, offset);
+        } else {
+            note = Some("Offset awan di berkas pendamping di luar batas proyek, jadi diabaikan.");
+        }
         self.fit_pending = true;
         if !restoring {
             self.unsaved = true;
@@ -671,13 +713,12 @@ impl App {
     /// Brings the clouds up to this view: takes in what was read, decides what to
     /// draw, uploads what changed.
     fn update_clouds(&mut self, cam: &wangungis_render::Camera, viewport: [u32; 2]) {
-        let point_px = self.scene.clouds.point_size * self.ppp;
         let height = f64::from(viewport[1].max(1));
         let view = CloudView {
             eye: cam.eye,
             view_proj: cam.view_proj_at_eye(),
             focal_px: height / (2.0 * (f64::from(cam.fovy) / 2.0).tan()),
-            point_px: f64::from(point_px),
+            scale: f64::from(self.ppp),
         };
         let clouds = &mut self.scene.clouds;
         clouds.poll();
@@ -696,7 +737,7 @@ impl App {
             cam,
             clouds.draws(),
             viewport,
-            point_px,
+            self.ppp,
             clouds.active_slice(),
         );
     }
@@ -802,6 +843,10 @@ impl App {
 
     /// Re-uploads whatever the last edit touched.
     fn sync_edits(&mut self) {
+        if self.scene.take_clouds_moved() {
+            self.unsaved = true;
+            self.autosave_stale = true;
+        }
         let dirty = self.scene.take_dirty();
         if !dirty.is_empty() {
             self.refresh_lists();
@@ -848,6 +893,7 @@ impl App {
 
     fn switch_tool(&mut self, make: fn(f64) -> Tool) {
         let picked = self.tool.picked_nodes();
+        self.cancel_gesture();
         self.tool = make(0.01);
         self.tool.carry_selection(&self.scene, picked);
         self.tool.set_unit(self.unit);
@@ -1206,6 +1252,7 @@ impl App {
         &mut self,
         step: fn(&mut Scene) -> Result<Option<TileKey>, wangungis_tools::EditError>,
     ) {
+        self.cancel_gesture();
         match step(&mut self.scene) {
             Ok(_) => self.error = None,
             Err(e) => self.error = Some(e.to_string()),
@@ -1352,6 +1399,7 @@ impl App {
             K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
             K::B if self.typed.is_empty() => self.switch_tool(Tool::paint),
             K::K if self.typed.is_empty() => self.switch_tool(Tool::cloud_slice),
+            K::J if self.typed.is_empty() => self.switch_tool(Tool::cloud_move),
             K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
             K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
             // C copies in the tools that can; everywhere else it is Circle.
@@ -1566,7 +1614,7 @@ fn paint_tip(ui: &egui::Ui, view: egui::Rect, at: egui::Pos2, text: &str) {
 
 /// What a snap is called on screen. A point of a cloud is not a model's corner.
 fn hit_label(hit: &wangungis_tools::Hit) -> &'static str {
-    if hit.cloud {
+    if hit.cloud.is_some() {
         "Titik awan"
     } else {
         snap_label(hit.snap.kind)
@@ -1633,6 +1681,8 @@ struct QueuedCloud {
     visible: bool,
     /// The project's companion file names it, so it changes nothing to save.
     restoring: bool,
+    point_size: f32,
+    offset: [f64; 3],
 }
 
 /// A LAS on its way to becoming a cache.
@@ -1859,6 +1909,7 @@ impl App {
                     ("Skala (S)", Tool::scale),
                     ("Cat (B)", Tool::paint),
                     ("Potong area (K)", Tool::cloud_slice),
+                    ("Geser awan (J)", Tool::cloud_move),
                     ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui
@@ -2069,14 +2120,23 @@ impl App {
         egui::CollapsingHeader::new("Point cloud")
             .default_open(true)
             .show(ui, |ui| {
-                let rows: Vec<(u32, String, u64, bool)> = self
+                let rows: Vec<_> = self
                     .scene
                     .clouds
                     .clouds()
                     .iter()
-                    .map(|c| (c.id, c.name(), c.info.points, c.visible))
+                    .map(|c| {
+                        (
+                            c.id,
+                            c.name(),
+                            c.info.points,
+                            c.visible,
+                            c.point_size,
+                            c.offset,
+                        )
+                    })
                     .collect();
-                for (id, name, points, mut visible) in rows {
+                for (id, name, points, mut visible, mut size, offset) in rows {
                     ui.horizontal(|ui| {
                         if ui.checkbox(&mut visible, &name).changed() {
                             self.scene.clouds.set_visible(id, visible);
@@ -2091,6 +2151,43 @@ impl App {
                         }
                     });
                     ui.weak(format!("{:.1} juta titik", points as f64 / 1e6));
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut size, MIN_POINT_SIZE..=MAX_POINT_SIZE)
+                                .text("ukuran titik"),
+                        )
+                        .changed()
+                    {
+                        self.scene.clouds.set_point_size(id, size);
+                        self.unsaved = true;
+                        self.autosave_stale = true;
+                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("Geser")
+                            .on_hover_text("Klik titik acuan, lalu tujuannya. Snap ke apa pun.")
+                            .clicked()
+                        {
+                            self.start_cloud_move(id);
+                        }
+                        if offset != [0.0; 3]
+                            && ui
+                                .small_button("Kembalikan posisi")
+                                .on_hover_text("Ke koordinat aslinya di LAS.")
+                                .clicked()
+                        {
+                            self.reset_cloud_offset(id);
+                        }
+                    });
+                    if offset != [0.0; 3] {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(190, 130, 30),
+                            format!(
+                                "Digeser {:.3}, {:.3}, {:.3} m dari koordinat LAS",
+                                offset[0], offset[1], offset[2]
+                            ),
+                        );
+                    }
                 }
                 for missing in self.clouds_missing.clone() {
                     ui.colored_label(
@@ -2115,15 +2212,6 @@ impl App {
                     self.unsaved = true;
                 }
                 if ui.checkbox(&mut clouds.snap, "Snap ke titik").changed() {
-                    self.unsaved = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut clouds.point_size, MIN_POINT_SIZE..=MAX_POINT_SIZE)
-                            .text("ukuran titik"),
-                    )
-                    .changed()
-                {
                     self.unsaved = true;
                 }
                 ui.separator();

@@ -720,8 +720,10 @@ fn cloud_pixels(
         id: 7,
         chunk: 0,
         count,
+        point_size: point_px,
+        offset: [0.0; 3],
     }];
-    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], point_px, slice);
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 1.0, slice);
     shoot(dq, &r, &cam)
 }
 
@@ -795,8 +797,10 @@ fn points_and_solids_share_the_depth_buffer() {
         id: 7,
         chunk: 0,
         count: 4096,
+        point_size: 3.0,
+        offset: [0.0; 3],
     }];
-    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 3.0, None);
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 1.0, None);
     let (open, _) = shoot(&dq, &r, &cam);
     let doc = box_doc(1.0, 1.0);
     r.add_tile(&dq.0, [0.0; 3], &TileMesh::from_document(&doc).unwrap());
@@ -826,8 +830,10 @@ fn cloud_chunks_replace_and_go() {
         id: 7,
         chunk: 0,
         count: 4096,
+        point_size: 3.0,
+        offset: [0.0; 3],
     }];
-    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 3.0, None);
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 1.0, None);
     let (few, calls) = shoot(&dq, &r, &cam);
     assert_eq!(calls, 1);
     assert!(red(&few) > 0);
@@ -835,4 +841,56 @@ fn cloud_chunks_replace_and_go() {
     let (none, calls) = shoot(&dq, &r, &cam);
     assert_eq!(calls, 0);
     assert_eq!(red(&none), 0);
+}
+
+/// Two chunks at two sizes: each covers what its own size says, and the screen's
+/// scale multiplies both.
+#[test]
+fn each_chunk_draws_at_its_own_size() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let at = [0.0; 3];
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    add_cloud_grid(&mut r, &dq.0, at, 64);
+    let cam = camera(at);
+    let shot = |r: &mut Renderer, size: f32, scale: f32| {
+        let draws = [DrawChunk {
+            id: 7,
+            chunk: 0,
+            count: 4096,
+            point_size: size,
+            offset: [0.0; 3],
+        }];
+        r.prepare_clouds(&dq.1, &cam, &draws, [W, H], scale, None);
+        red(&shoot(&dq, r, &cam).0)
+    };
+    let small = shot(&mut r, 1.0, 1.0);
+    let big = shot(&mut r, 5.0, 1.0);
+    assert!(big > 2 * small, "{big} {small}");
+    assert_eq!(shot(&mut r, 2.5, 2.0), big, "same pixels either way");
+}
+
+/// A chunk uploaded at home and offset to UTM looks as it does uploaded there, and
+/// the offset takes no upload.
+#[test]
+fn an_offset_is_the_same_as_being_there() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let far = [710_386.5, 9_316_096.9, 3.0];
+    let (there, _) = cloud_pixels(&dq, far, 4096, 2.0, None);
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    add_cloud_grid(&mut r, &dq.0, [0.0; 3], 64);
+    let cam = camera(far);
+    let draws = [DrawChunk {
+        id: 7,
+        chunk: 0,
+        count: 4096,
+        point_size: 2.0,
+        offset: far,
+    }];
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 1.0, None);
+    let (moved, _) = shoot(&dq, &r, &cam);
+    assert!(red(&moved) > 500);
+    let d = diff(&there, &moved);
+    assert!(d <= 0.001, "{:.3}% differ", d * 100.0);
 }
