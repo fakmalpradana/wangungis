@@ -62,12 +62,15 @@ Catatan:
 
 Alasan: masing-masing menguji satu risiko terukur dari spike (render, inference, kernel). Ketiganya cukup untuk **uji asap** pertama 3D engineer: menggambar kotak 5×4×3 m lalu undo/redo.
 
-Ketiganya **belum** cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disalin 10× dalam array). Kriteria itu juga butuh:
-- Move + copy/array (#10).
-- Auto-split face (#14).
-- Jumlah array lewat VCB (#26).
+Ketiganya belum cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disalin 10× dalam array).
 
-Ketiga fitur ini menjadi urutan berikutnya.
+**Status kriteria keluar v0.1 (2026-11-05):**
+- Tugas referensi: **lulus otomatis** di `ui/src/smoke.rs`, lewat `App` asli dengan input egui sintetis di GPU offscreen, di CI 3 OS. Belum dicoba manusia di jendela asli.
+- Undo/redo dan replay deterministik: **lulus** di `tools/tests/replay.rs`, 10.002 sesi acak, dengan `PROPTEST_CASES=10000`.
+- Save, load, save byte-identik: **lulus** di test yang sama.
+- Rilis `v0.1.0`: **belum**. Butuh keputusan pemilik karena publik, dan uji beta 3D engineer.
+
+Fitur v0.1 yang sudah ada dicatat di `feature-matrix.md`. Yang belum: Follow Me (#8), Push/Pull Ctrl (#7), inference paralel (#24), Tape Measure (#28), Group/Component (#42–#44), Tags dan Outliner (#45–#46), Paint Bucket (#49), shortcut yang bisa diubah (#97).
 
 ## Fase 0 — Fondasi dan spike
 
