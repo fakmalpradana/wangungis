@@ -65,12 +65,13 @@ Alasan: masing-masing menguji satu risiko terukur dari spike (render, inference,
 Ketiganya belum cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disalin 10× dalam array).
 
 **Status kriteria keluar v0.1 (2026-11-05):**
-- Tugas referensi: **lulus otomatis** di `ui/src/smoke.rs`, lewat `App` asli dengan input egui sintetis di GPU offscreen, di CI 3 OS. Belum dicoba manusia di jendela asli.
-- Undo/redo dan replay deterministik: **lulus** di `tools/tests/replay.rs`, 10.002 sesi acak, dengan `PROPTEST_CASES=10000`.
+- Tugas referensi: **lulus otomatis** di `ui/src/smoke.rs`, lewat `App` asli dengan input egui sintetis di GPU offscreen, di CI 3 OS.
+- Uji asap langkah 1-20: **lulus oleh pemilik** di jendela asli (macOS). Langkah 22-29 untuk fitur baru belum diuji manusia.
+- Undo/redo dan replay deterministik: **lulus** di `tools/tests/replay.rs` dengan `PROPTEST_CASES=10000`, kini termasuk cat, solid baru, grup, komponen, sesi edit, tag, dan nama.
 - Save, load, save byte-identik: **lulus** di test yang sama.
 - Rilis `v0.1.0`: **belum**. Butuh keputusan pemilik karena publik, dan uji beta 3D engineer.
 
-Fitur v0.1 yang sudah ada dicatat di `feature-matrix.md`. Yang belum: Push/Pull Ctrl (#7), inference paralel (#24), unit tampilan (#27), edit isi grup di tempat (#42), Tags dan Outliner (#45–#46), Paint Bucket (#49), proyeksi paralel (#33), shortcut yang bisa diubah (#97). Urutannya sebaiknya mengikuti umpan balik 3D engineer.
+Pemilik memutuskan pada 2026-11-05 bahwa #7, #24, #25, #27, #42, #45, #46, #49 wajib sebelum rilis; semuanya kini ada. Ditunda sesudah rilis: shortcut yang bisa diubah (#97) dan proyeksi paralel (#33, masih parsial).
 
 ## Fase 0 — Fondasi dan spike
 

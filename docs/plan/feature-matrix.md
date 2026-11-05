@@ -14,7 +14,7 @@ Legenda:
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Half-edge mesh + validator invariant | – | ✓ | M | XL | F0 | — | U P | T | belum |
+| 1 | Half-edge mesh + validator invariant | – | ✓ | M | XL | F0 | — | U P | R | parsial |
 | 2 | Line tool | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 3 | Rectangle (+ rotated) | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
 | 4 | Circle / Polygon | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
@@ -59,7 +59,7 @@ Legenda:
 | 33 | Proyeksi perspektif / paralel, view standar | ✓ | ✓ | M | S | 0.1 | — | G | T | parsial |
 | 34 | Edge rendering gaya CAD (profil, garis) | ✓ | ✓ | M | L | F0/0.1 | wgpu/three.js | G | T+R | parsial |
 | 35 | Face style (shaded, textured, X-ray, wireframe) | ✓ | ? | S | M | 0.5 | — | G | T | belum |
-| 36 | Rendering RTC untuk koordinat besar | – | – | M | M | F0 | — | G P | T | belum |
+| 36 | Rendering RTC untuk koordinat besar | – | – | M | M | F0 | — | G P | T | parsial |
 | 37 | Culling + LOD rendering + instancing | P | ? | M | L | 0.2 | — | B | T | belum |
 | 38 | Shadows tergeolokasi (tanggal/jam) | ✓ | – | S | L | 0.5 | solar position (asumsi crate) | G U | T+R | belum |
 | 39 | Section plane (+ fill) | ✓ | P | S | L | 0.5 | — | G | T | belum |

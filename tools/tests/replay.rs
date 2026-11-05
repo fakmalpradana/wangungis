@@ -5,11 +5,11 @@
 use std::num::NonZeroU32;
 
 use inference::{ApertureMode, PickRay, SnapQuery, SnapWeights};
-use kernel::{Plane, Point3, Transform, Vec3};
+use kernel::{NodeId, Plane, Point3, Rgba8, Transform, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
-use wangungis_scene::project::Project;
-use wangungis_tools::{Hit, Scene};
+use wangungis_scene::project::{Project, TileKey};
+use wangungis_tools::{Hit, Movable, Paint, Scene};
 
 const UTM49S: ProjectOrigin = ProjectOrigin {
     epsg: 32749,
@@ -73,6 +73,44 @@ enum Op {
         x: i8,
         y: i8,
     },
+    /// Push/Pull with Ctrl: the face leaves as a new solid.
+    Keep {
+        x: i8,
+        y: i8,
+        h: i8,
+    },
+    Paint {
+        x: i8,
+        y: i8,
+        color: u8,
+    },
+    Group {
+        x: i8,
+        y: i8,
+    },
+    Component {
+        x: i8,
+        y: i8,
+    },
+    Enter {
+        x: i8,
+        y: i8,
+    },
+    /// Opens whatever group or component there is, so sessions really happen.
+    EnterAny,
+    /// Groups the first solid there is, so there are groups to open.
+    GroupAny,
+    Leave,
+    Tag {
+        x: i8,
+        y: i8,
+    },
+    /// Shows or hides the tag `Tag` gives.
+    HideTag(bool),
+    Rename {
+        x: i8,
+        y: i8,
+    },
     Undo,
     Redo,
 }
@@ -90,7 +128,18 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (at.clone(), at.clone(), -180i16..180).prop_map(|(x, y, degrees)| Op::Turn { x, y, degrees }),
         1 => (at.clone(), at.clone(), 3u8..30).prop_map(|(x, y, tenths)| Op::Scale { x, y, tenths }),
         1 => (at.clone(), at.clone(), -10i8..10).prop_map(|(x, y, tenths)| Op::Offset { x, y, tenths }),
-        1 => (at.clone(), at).prop_map(|(x, y)| Op::Erase { x, y }),
+        1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Erase { x, y }),
+        2 => (at.clone(), at.clone(), -5i8..6).prop_map(|(x, y, h)| Op::Keep { x, y, h }),
+        2 => (at.clone(), at.clone(), 0u8..4).prop_map(|(x, y, color)| Op::Paint { x, y, color }),
+        1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Group { x, y }),
+        1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Component { x, y }),
+        2 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Enter { x, y }),
+        3 => Just(Op::EnterAny),
+        2 => Just(Op::GroupAny),
+        2 => Just(Op::Leave),
+        1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Tag { x, y }),
+        1 => any::<bool>().prop_map(Op::HideTag),
+        1 => (at.clone(), at).prop_map(|(x, y)| Op::Rename { x, y }),
         2 => Just(Op::Undo),
         1 => Just(Op::Redo),
     ]
@@ -129,6 +178,14 @@ fn below(s: &mut Scene, x: f64, y: f64) -> Option<Hit> {
         off_plane_points: false,
         see_through_points: false,
     })
+}
+
+/// The node Move would take at (x, y).
+fn node_at(s: &mut Scene, x: f64, y: f64) -> Option<(TileKey, NodeId)> {
+    match inside(s, x, y).and_then(|h| s.movable_at(&h))? {
+        Movable::Node { tile, node } => Some((tile, node)),
+        Movable::Island { .. } => None,
+    }
 }
 
 /// A refused op is fine: refusals must leave the project as it was, which the
@@ -209,6 +266,74 @@ fn apply(s: &mut Scene, op: &Op) {
         Op::Erase { x, y } => {
             if let Some(e) = below(s, f(x), f(y)).and_then(|h| s.erasable_at(&h)) {
                 let _ = s.erase(&e);
+            }
+        }
+        Op::Keep { x, y, h } => {
+            if let Some(hit) = inside(s, f(x), f(y))
+                && let Some(source) = hit.snap.source
+                && h != 0
+            {
+                let _ = s.extrude_face_new(hit.tile, source, f(h));
+            }
+        }
+        Op::Paint { x, y, color } => {
+            if let Some(hit) = inside(s, f(x), f(y))
+                && let Some(source) = hit.snap.source
+            {
+                let paint = (color > 0).then(|| Paint {
+                    name: format!("Warna {color}"),
+                    color: Rgba8::rgb(color * 60, 40, 200 - color * 40),
+                });
+                let _ = s.paint(hit.tile, source, paint.as_ref());
+            }
+        }
+        Op::Group { x, y } => {
+            if let Some((tile, node)) = node_at(s, f(x), f(y)) {
+                let _ = s.group(tile, &[node]);
+            }
+        }
+        Op::Component { x, y } => {
+            if let Some((tile, node)) = node_at(s, f(x), f(y)) {
+                let _ = s.make_component(tile, &[node]);
+            }
+        }
+        Op::Enter { x, y } => {
+            if let Some((tile, node)) = node_at(s, f(x), f(y)) {
+                let _ = s.enter(tile, node);
+            }
+        }
+        Op::EnterAny => {
+            let found = s
+                .outline_rows(&Default::default())
+                .into_iter()
+                .find(|r| !matches!(r.node, NodeId::Object(_)) && s.node_in_scope(r.tile, r.node));
+            if let Some(r) = found {
+                let _ = s.enter(r.tile, r.node);
+            }
+        }
+        Op::GroupAny => {
+            let found = s
+                .outline_rows(&Default::default())
+                .into_iter()
+                .find(|r| matches!(r.node, NodeId::Object(_)) && s.node_in_scope(r.tile, r.node));
+            if let Some(r) = found {
+                let _ = s.group(r.tile, &[r.node]);
+            }
+        }
+        Op::Leave => {
+            let _ = s.leave();
+        }
+        Op::Tag { x, y } => {
+            if let Some((tile, node)) = node_at(s, f(x), f(y)) {
+                let _ = s.tag_nodes(tile, &[node], "Lantai");
+            }
+        }
+        Op::HideTag(hidden) => {
+            let _ = s.set_tag_hidden("Lantai", hidden);
+        }
+        Op::Rename { x, y } => {
+            if let Some((tile, node)) = node_at(s, f(x), f(y)) {
+                let _ = s.rename_node(tile, node, "Rumah");
             }
         }
         Op::Undo => {
@@ -295,6 +420,10 @@ fn session(ops: &[Op]) -> Result<(Scene, Vec<u8>), TestCaseError> {
             prop_assert!(could_undo || s.can_undo() || !s.can_redo());
         }
     }
+    // A file never holds an open group, so what it holds compares only when closed.
+    while s.leave().unwrap() {
+        assert_valid(&s, &Op::Leave)?;
+    }
     let bytes = s.project().save();
     Ok((s, bytes))
 }
@@ -331,6 +460,13 @@ proptest! {
             assert_valid(&s, &Op::Undo)?;
         }
         let empty = Project::new(Some(UTM49S)).unwrap();
-        prop_assert_eq!(s.project().save(), empty.save());
+        prop_assert_eq!(content(s.project()), content(&empty));
+        prop_assert!(s.session().is_none());
+        // Hew's palette and tag registry keep their entries through undo. Nothing
+        // else may remain, so the file is the empty one when neither was touched.
+        let registers = ops.iter().any(|o| matches!(o, Op::Paint { .. } | Op::Tag { .. } | Op::HideTag(_)));
+        if !registers {
+            prop_assert_eq!(s.project().save(), empty.save());
+        }
     }
 }
