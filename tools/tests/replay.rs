@@ -9,6 +9,7 @@ use kernel::{NodeId, Plane, Point3, Rgba8, Transform, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::{Project, TileKey};
+use wangungis_tools::tool::Target;
 use wangungis_tools::{Hit, Movable, Paint, Scene};
 
 const UTM49S: ProjectOrigin = ProjectOrigin {
@@ -79,6 +80,15 @@ enum Op {
         y: i8,
         h: i8,
     },
+    /// Push/Pull on two things at once, sharing one undo step.
+    PullTwo {
+        x: i8,
+        y: i8,
+        x2: i8,
+        y2: i8,
+        h: i8,
+        keep: bool,
+    },
     Paint {
         x: i8,
         y: i8,
@@ -130,6 +140,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (at.clone(), at.clone(), -10i8..10).prop_map(|(x, y, tenths)| Op::Offset { x, y, tenths }),
         1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Erase { x, y }),
         2 => (at.clone(), at.clone(), -5i8..6).prop_map(|(x, y, h)| Op::Keep { x, y, h }),
+        3 => (at.clone(), at.clone(), at.clone(), at.clone(), -5i8..6, any::<bool>())
+            .prop_map(|(x, y, x2, y2, h, keep)| Op::PullTwo { x, y, x2, y2, h, keep }),
         2 => (at.clone(), at.clone(), 0u8..4).prop_map(|(x, y, color)| Op::Paint { x, y, color }),
         1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Group { x, y }),
         1 => (at.clone(), at.clone()).prop_map(|(x, y)| Op::Component { x, y }),
@@ -274,6 +286,36 @@ fn apply(s: &mut Scene, op: &Op) {
                 && h != 0
             {
                 let _ = s.extrude_face_new(hit.tile, source, f(h));
+            }
+        }
+        Op::PullTwo {
+            x,
+            y,
+            x2,
+            y2,
+            h,
+            keep,
+        } => {
+            let target = |s: &mut Scene, x, y| {
+                let hit = inside(s, f(x), f(y))?;
+                match (hit.snap.source, hit.snap.sketch_region_source) {
+                    (Some(source), _) => Some(Target::Solid {
+                        tile: hit.tile,
+                        source,
+                    }),
+                    (None, Some((sketch, region))) => Some(Target::Region {
+                        tile: hit.tile,
+                        sketch,
+                        region,
+                    }),
+                    _ => None,
+                }
+            };
+            if let (Some(a), Some(b)) = (target(s, x, y), target(s, x2, y2))
+                && h != 0
+                && a != b
+            {
+                let _ = s.push_pull_many(&[a, b], f(h), keep);
             }
         }
         Op::Paint { x, y, color } => {
