@@ -15,12 +15,15 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
 - `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
 - `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
+- `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. `dissolve` melewati objek biasa, dan menolak bila tidak ada grup atau komponen. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
+- `add_guide_point`, `add_guide_line`, `delete_guides`, `guide_lines`, `edge_direction`: panduan konstruksi. Garis panduan digambar dan bisa di-snap ±200 m dari titiknya (ponytail; Hew menganggapnya tak terbatas).
+- `follow_me(tile, profile, path)`: menyapu region sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
-Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
-- Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`.
+Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser, tape, follow_me}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
+- Input: `Hover(ray)`, `Click(ray)`, `ClickAdd(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`. `picked_nodes()`: node yang dipilih Select.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
 - `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).
@@ -37,6 +40,8 @@ Perilaku:
 - **Offset:** klik region atau face, lalu klik atau ketik jarak, ke arah kursor; angka negatif membalik arah.
 - **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat. Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
 - **Scale:** klik benda, lalu gerakkan kursor menjauh atau mendekati pusatnya dan klik, atau ketik faktor. Selalu seragam, terhadap pusat benda. Faktor harus positif.
+- **Tape:** klik titik awal, lalu klik atau ketik jarak; `measure()` memberi jaraknya. Dari tepi menghasilkan garis panduan sejajar; dari titik, atau searah tepi, menghasilkan titik panduan.
+- **Follow Me:** klik region sebagai penampang, lalu klik garis sebagai jalur. Penampang harus tegak lurus jalur di ujungnya; penolakan kernel tampil di status bar.
 - **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.
 - **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci. Pada Line, mengubah kunci melupakan posisi kursor, jadi panjang yang diketik menunggu `Hover` berikutnya dan tidak memakai arah dari sebelum kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.

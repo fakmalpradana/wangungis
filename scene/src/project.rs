@@ -490,7 +490,7 @@ fn tile_origin(project: ProjectOrigin, key: TileKey) -> ProjectOrigin {
     }
 }
 
-/// No node and no drawn line: nothing a user could see or would miss.
+/// No node, drawn line or guide: nothing a user could see or would miss.
 fn is_blank(doc: &Document) -> bool {
     doc.top_level_nodes().is_empty()
         && doc
@@ -498,6 +498,7 @@ fn is_blank(doc: &Document) -> bool {
             .iter()
             .filter_map(|s| doc.sketch(*s))
             .all(|s| s.edges().is_empty())
+        && doc.guide_ids().is_empty()
 }
 
 /// An empty tile. The round trip drops the metadata's undo steps, so the

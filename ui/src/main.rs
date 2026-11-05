@@ -32,6 +32,7 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
+const GUIDE_COLOR: [f32; 3] = [0.45, 0.45, 0.6];
 /// Seconds between autosaves of a project with unsaved changes.
 const AUTOSAVE_S: f64 = 60.0;
 
@@ -115,6 +116,8 @@ struct App {
     /// Another key or button went down while Ctrl was held.
     ctrl_chord: bool,
     error: Option<String>,
+    /// What just succeeded, until the next input replaces it.
+    notice: Option<String>,
     /// `None`: autosave is off, as when the home folder is unknown.
     autosave: Option<PathBuf>,
     /// When the last autosave ran, and whether anything changed since.
@@ -166,6 +169,7 @@ impl App {
             ctrl_held: false,
             ctrl_chord: false,
             error: None,
+            notice: None,
             autosave: None,
             autosaved_at: 0.0,
             autosave_stale: false,
@@ -280,6 +284,7 @@ impl App {
 
     fn new_project(&mut self) {
         self.error = None;
+        self.notice = None;
         self.adopt(empty_scene());
         self.source = Source::default();
         // Simpan writes to this box next: it must not still name the old file.
@@ -290,6 +295,7 @@ impl App {
 
     fn open(&mut self) {
         self.error = None;
+        self.notice = None;
         let opened = std::fs::read(&self.path)
             .map_err(|e| format!("Tidak bisa membaca {}: {e}", self.path))
             .and_then(|bytes| {
@@ -313,6 +319,7 @@ impl App {
     }
 
     fn save(&mut self) {
+        self.notice = None;
         let project = self.scene.project();
         let single = project.single().is_some();
         let target = match save_target(&self.source, &self.path, single) {
@@ -345,6 +352,46 @@ impl App {
         }
     }
 
+    /// Writes the project to the path box as the format its extension names.
+    /// Never over an existing file.
+    fn export(&mut self) {
+        self.notice = None;
+        let target = PathBuf::from(self.path.trim());
+        let format = target
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .filter(|e| wangungis_io::FORMATS.contains(&e.as_str()));
+        let Some(format) = format else {
+            self.error = Some(format!(
+                "Isi kotak atas dengan path ber-ekstensi: {}.",
+                wangungis_io::FORMATS.join(", ")
+            ));
+            return;
+        };
+        if target.exists() {
+            self.error = Some(format!("{} sudah ada. Pakai nama lain.", target.display()));
+            return;
+        }
+        let written = wangungis_io::export(self.scene.project(), &format)
+            .map_err(|e| match e {
+                wangungis_io::ExportError::MultiTile => {
+                    "Format ini hanya untuk proyek satu tile. Pakai .obj.".to_string()
+                }
+                wangungis_io::ExportError::NothingToExport => {
+                    "Tidak ada solid untuk diekspor.".to_string()
+                }
+                other => format!("Ekspor gagal: {other:?}"),
+            })
+            .and_then(|bytes| write_atomic(&target, &bytes).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => {
+                self.error = None;
+                self.notice = Some(format!("Diekspor ke {}", target.display()));
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
     /// Rebuilds one tile's mesh and numbers from its document.
     fn upload(&mut self, key: TileKey) {
         let Some(doc) = self.scene.project().tiles.get(&key) else {
@@ -372,6 +419,8 @@ impl App {
         if !dirty.is_empty() {
             self.unsaved = true;
             self.autosave_stale = true;
+            // Guides are in the overlay.
+            self.overlay_shown = None;
         }
         for key in dirty {
             self.upload(key);
@@ -379,11 +428,14 @@ impl App {
     }
 
     fn feed(&mut self, input: Input) {
+        if !matches!(input, Input::Hover(_)) {
+            self.notice = None;
+        }
         match input {
             Input::Hover(_) => self.moved_since_click = true,
             // What a click picked sits pixels from the pointer, because of
             // snapping. That is no direction until the mouse moves.
-            Input::Click(_) => self.moved_since_click = false,
+            Input::Click(_) | Input::ClickAdd(_) => self.moved_since_click = false,
             // Anything else changes what the parked pointer means to the tool.
             _ if self.moved_since_click => self.last_pointer = None,
             _ => {}
@@ -401,6 +453,35 @@ impl App {
         self.error = None;
         // The parked pointer has something to tell the new tool.
         self.last_pointer = None;
+    }
+
+    /// Runs `edit` on what Select holds, then starts the tool over: the ids it
+    /// held may be gone.
+    fn on_picked(
+        &mut self,
+        edit: impl FnOnce(
+            &mut Scene,
+            TileKey,
+            &[kernel::NodeId],
+        ) -> Result<(), wangungis_tools::EditError>,
+    ) {
+        self.notice = None;
+        let Some((tile, nodes)) = self.tool.picked_nodes() else {
+            self.error = Some("Pilih objek dulu dengan Pilih (Spasi).".into());
+            return;
+        };
+        match edit(&mut self.scene, tile, &nodes) {
+            Ok(()) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn delete_picked(&mut self) {
+        if self.tool.picked_nodes().is_some() {
+            self.on_picked(|s, t, n| s.delete_nodes(t, n));
+        }
     }
 
     fn undo(&mut self) {
@@ -450,11 +531,15 @@ impl App {
                     e,
                     egui::Event::Key { pressed: true, .. }
                         | egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
                 )
             });
             (i.modifiers.ctrl, pressed)
         });
-        self.ctrl_chord |= ctrl && chord;
+        // Held last frame counts: Ctrl can go up in the frame the key goes down.
+        self.ctrl_chord |= (ctrl || self.ctrl_held) && chord;
         let tapped = self.ctrl_held && !ctrl && !self.ctrl_chord;
         if !ctrl {
             self.ctrl_chord = false;
@@ -526,9 +611,10 @@ impl App {
                 self.error = None;
                 self.feed(Input::Typed(text));
             }
-            K::Backspace => {
+            K::Backspace if !self.typed.is_empty() => {
                 self.typed.pop();
             }
+            K::Delete | K::Backspace => self.delete_picked(),
             K::Escape => {
                 self.typed.clear();
                 self.error = None;
@@ -557,6 +643,7 @@ impl App {
             K::G if self.typed.is_empty() => self.switch_tool(Tool::polygon),
             K::A if self.typed.is_empty() => self.switch_tool(Tool::arc),
             K::F if self.typed.is_empty() => self.switch_tool(Tool::offset),
+            K::T if self.typed.is_empty() => self.switch_tool(Tool::tape),
             _ => {}
         }
     }
@@ -570,6 +657,15 @@ impl App {
         }
         let p3 = |p: Point3| [p.x, p.y, p.z];
         let mut groups = axes_overlay();
+        groups.push(OverlayLines {
+            color: GUIDE_COLOR,
+            lines: self
+                .scene
+                .guide_lines()
+                .iter()
+                .map(|(a, b)| (p3(*a), p3(*b)))
+                .collect(),
+        });
         groups.push(OverlayLines {
             color: PREVIEW_COLOR,
             lines: preview
@@ -881,6 +977,9 @@ impl App {
                 if ui.button("Simpan").clicked() {
                     self.save();
                 }
+                if ui.button("Ekspor").clicked() {
+                    self.export();
+                }
                 ui.separator();
                 for (label, make) in [
                     ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
@@ -891,6 +990,8 @@ impl App {
                     ("Busur (A)", Tool::arc),
                     ("Push/Pull (P)", Tool::push_pull),
                     ("Offset (F)", Tool::offset),
+                    ("Follow Me", Tool::follow_me),
+                    ("Ukur (T)", Tool::tape),
                     ("Pindah (M)", Tool::move_tool),
                     ("Putar (Q)", Tool::rotate),
                     ("Skala (S)", Tool::scale),
@@ -916,8 +1017,33 @@ impl App {
                 {
                     self.redo();
                 }
+                if ui.button("Hapus panduan").clicked() {
+                    match self.scene.delete_guides() {
+                        Ok(()) => self.error = None,
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                    self.sync_edits();
+                }
+                if ui.button("Grup").clicked() {
+                    self.on_picked(|s, t, n| s.group(t, n));
+                }
+                if ui.button("Komponen").clicked() {
+                    self.on_picked(|s, t, n| s.make_component(t, n));
+                }
+                if ui.button("Pecah").clicked() {
+                    self.on_picked(|s, t, n| s.dissolve(t, n));
+                }
+                ui.separator();
                 if ui.button("Zoom extents").clicked() {
                     self.fit_pending = true;
+                }
+                ui.separator();
+                for (label, yaw, pitch) in camera::VIEWS {
+                    if ui.button(label).clicked() {
+                        self.orbit.yaw = yaw;
+                        self.orbit.pitch = pitch;
+                        self.camera_moved();
+                    }
                 }
             });
         });
@@ -930,6 +1056,10 @@ impl App {
                     &self.typed
                 });
                 ui.separator();
+                if let Some(m) = self.tool.measure() {
+                    ui.label(format!("Jarak: {m:.3} m"));
+                    ui.separator();
+                }
                 if self.tool.copying() {
                     ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
                     ui.separator();
@@ -940,6 +1070,10 @@ impl App {
                 }
                 if let Some(e) = &self.error {
                     ui.colored_label(egui::Color32::RED, e);
+                    ui.separator();
+                }
+                if let Some(n) = &self.notice {
+                    ui.label(n);
                     ui.separator();
                 }
                 ui.label(format!(
@@ -1126,7 +1260,13 @@ impl App {
             // A click answers instead of the value; left over, it would block
             // the tool letters and feed the next Enter.
             self.typed.clear();
-            self.feed(Input::Click(ray_at(&self.orbit, p)));
+            let ray = ray_at(&self.orbit, p);
+            let shift = resp.ctx.input(|i| i.modifiers.shift);
+            self.feed(if shift {
+                Input::ClickAdd(ray)
+            } else {
+                Input::Click(ray)
+            });
             fed = true;
         }
         fed

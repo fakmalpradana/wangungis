@@ -5,7 +5,7 @@
 use inference::{
     ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
-use kernel::{Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
+use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
@@ -29,6 +29,9 @@ const MIN_ARC_SIDES: usize = 4;
 pub enum Input {
     Hover(PickRay),
     Click(PickRay),
+    /// Shift + click: Select adds to or takes from what is picked. Any other
+    /// tool takes it as a plain click.
+    ClickAdd(PickRay),
     /// Text from the value box, on Enter.
     Typed(String),
     /// Toggles a lock to this axis.
@@ -74,6 +77,8 @@ enum State {
     Select {
         selected: Option<Target>,
         outline: Vec<(Point3, Point3)>,
+        /// Whole things picked, for grouping and deleting.
+        nodes: Vec<(TileKey, NodeId)>,
     },
     Line {
         chain: Option<Chain>,
@@ -125,6 +130,15 @@ enum State {
         armed: Option<Armed>,
         cursor: Option<Point3>,
         hover: Vec<(Point3, Point3)>,
+    },
+    Tape {
+        /// The start, and the edge direction when it lies on an edge.
+        from: Option<(Point3, Option<Vec3>)>,
+        cursor: Option<Point3>,
+    },
+    Follow {
+        profile: Option<(TileKey, SketchId, SketchRegionId)>,
+        outline: Vec<(Point3, Point3)>,
     },
 }
 
@@ -555,6 +569,7 @@ impl Tool {
             State::Select {
                 selected: None,
                 outline: Vec::new(),
+                nodes: Vec::new(),
             },
             aperture,
         )
@@ -664,6 +679,37 @@ impl Tool {
         )
     }
 
+    pub fn tape(aperture: f64) -> Self {
+        Self::with(
+            State::Tape {
+                from: None,
+                cursor: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn follow_me(aperture: f64) -> Self {
+        Self::with(
+            State::Follow {
+                profile: None,
+                outline: Vec::new(),
+            },
+            aperture,
+        )
+    }
+
+    /// What the Tape reads now, in meters.
+    pub fn measure(&self) -> Option<f64> {
+        match &self.state {
+            State::Tape {
+                from: Some((a, _)),
+                cursor: Some(b),
+            } => Some((*b - *a).length()),
+            _ => None,
+        }
+    }
+
     /// Whether a copying toggle means anything to this tool, so C can mean
     /// Circle everywhere else.
     pub fn can_copy(&self) -> bool {
@@ -709,7 +755,9 @@ impl Tool {
     /// True while a gesture is under way, so Esc means "cancel it".
     pub fn busy(&self) -> bool {
         match &self.state {
-            State::Select { selected, .. } => selected.is_some(),
+            State::Select {
+                selected, nodes, ..
+            } => selected.is_some() || !nodes.is_empty(),
             State::Line { chain } => chain.is_some(),
             State::Rectangle { first, .. } => first.is_some(),
             State::PushPull { armed, .. } => armed.is_some(),
@@ -720,6 +768,8 @@ impl Tool {
             State::Round { center, .. } => center.is_some(),
             State::Arc { start, .. } => start.is_some(),
             State::Offset { armed, .. } => armed.is_some(),
+            State::Tape { from, .. } => from.is_some(),
+            State::Follow { profile, .. } => profile.is_some(),
         }
     }
 
@@ -742,10 +792,27 @@ impl Tool {
             State::Round { .. } => Self::circle(aperture),
             State::Arc { .. } => Self::arc(aperture),
             State::Offset { .. } => Self::offset(aperture),
+            State::Tape { .. } => Self::tape(aperture),
+            State::Follow { .. } => Self::follow_me(aperture),
         };
     }
 
+    /// The whole things Select has picked: top-level nodes, all in one tile.
+    pub fn picked_nodes(&self) -> Option<(TileKey, Vec<NodeId>)> {
+        let State::Select { nodes, .. } = &self.state else {
+            return None;
+        };
+        let tile = nodes.first()?.0;
+        Some((tile, nodes.iter().map(|n| n.1).collect()))
+    }
+
     pub fn handle(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let input = match input {
+            Input::ClickAdd(ray) if !matches!(self.state, State::Select { .. }) => {
+                Input::Click(ray)
+            }
+            other => other,
+        };
         if input == Input::Cancel {
             self.reset();
             return Ok(());
@@ -763,6 +830,8 @@ impl Tool {
             State::Round { .. } => self.handle_round(scene, input),
             State::Arc { .. } => self.handle_arc(scene, input),
             State::Offset { .. } => self.handle_offset(scene, input),
+            State::Tape { .. } => self.handle_tape(scene, input),
+            State::Follow { .. } => self.handle_follow(scene, input),
         }?;
         if !hovering {
             // A click or typed value ends what the marker described.
@@ -773,30 +842,78 @@ impl Tool {
     }
 
     fn handle_select(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
-        match input {
-            Input::Hover(ray) => self.preview.snap = scene.snap(&pick_query(ray, self.aperture)),
-            Input::Click(ray) => {
-                let hit = scene.snap(&pick_query(ray, self.aperture));
-                let picked = hit.and_then(|h| match (h.snap.source, h.snap.sketch_region_source) {
-                    (Some(source), _) => Some(Target::Solid {
-                        tile: h.tile,
-                        source,
-                    }),
-                    (None, Some((sketch, region))) => Some(Target::Region {
-                        tile: h.tile,
-                        sketch,
-                        region,
-                    }),
-                    _ => None,
-                });
-                let lines = picked.map_or_else(Vec::new, |t| scene.outline(t));
-                if let State::Select { selected, outline } = &mut self.state {
-                    *selected = picked;
-                    *outline = lines;
-                }
+        let aperture = self.aperture;
+        let (ray, adding) = match input {
+            Input::Hover(ray) => {
+                self.preview.snap = scene.snap(&pick_query(ray, aperture));
+                return Ok(());
             }
-            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::Click(ray) => (ray, false),
+            Input::ClickAdd(ray) => (ray, true),
+            _ => return Ok(()),
+        };
+        let hit = scene.snap(&pick_query(ray, aperture));
+        let picked = hit.and_then(|h| match (h.snap.source, h.snap.sketch_region_source) {
+            (Some(source), _) => Some(Target::Solid {
+                tile: h.tile,
+                source,
+            }),
+            (None, Some((sketch, region))) => Some(Target::Region {
+                tile: h.tile,
+                sketch,
+                region,
+            }),
+            _ => None,
+        });
+        let node = hit
+            .and_then(|h| scene.movable_at(&h))
+            .and_then(|m| match m {
+                Movable::Node { tile, node } => Some((tile, node)),
+                Movable::Island { .. } => None,
+            });
+        let State::Select {
+            selected,
+            outline,
+            nodes,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        if !adding {
+            nodes.clear();
         }
+        if let Some(n) = node {
+            // Shift on what is picked takes it back. A pick in another tile starts
+            // over: Hew groups within one document.
+            if nodes.first().is_some_and(|f| f.0 != n.0) {
+                nodes.clear();
+            }
+            if let Some(at) = nodes.iter().position(|x| *x == n) {
+                nodes.remove(at);
+            } else {
+                nodes.push(n);
+            }
+        }
+        // A plain click shows the face or edge under it. With Shift, or with several
+        // picked, the outline is what is held: what Shift took back must not stay lit.
+        *selected = if adding && nodes.is_empty() {
+            None
+        } else {
+            picked
+        };
+        *outline = if adding || nodes.len() > 1 {
+            nodes
+                .iter()
+                .flat_map(|(tile, node)| {
+                    scene.movable_lines(&Movable::Node {
+                        tile: *tile,
+                        node: *node,
+                    })
+                })
+                .collect()
+        } else {
+            picked.map_or_else(Vec::new, |t| scene.outline(t))
+        };
         Ok(())
     }
 
@@ -875,7 +992,7 @@ impl Tool {
                 // It was computed without this lock: a typed length must not use it.
                 c.cursor = None;
             }
-            Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -943,7 +1060,7 @@ impl Tool {
                     *cursor = None;
                 }
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1068,7 +1185,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::Cancel => {}
+            Input::ClickAdd(_) | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1141,7 +1258,7 @@ impl Tool {
                 scene.transform(&s.what, &scaling_about(s.center, factor))?;
                 *scaling = None;
             }
-            Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1195,7 +1312,7 @@ impl Tool {
                     ));
                 }
             },
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(r), Some((c, plane, tile))) = (radius, *center)
             && r >= MIN_LEN
@@ -1257,7 +1374,7 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 sagitta = Some(s * side);
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(s), Some((a, plane, tile)), Some(b)) = (sagitta, *start, *end)
             && let Some((points, center)) = arc_points(a, b, s, &plane)
@@ -1327,7 +1444,7 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 distance = Some(d * side);
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(d), Some(a)) = (distance, armed.as_ref())
             && d.abs() >= MIN_LEN
@@ -1340,6 +1457,122 @@ impl Tool {
             scene.offset(tile, plane, a.anchor, d)?;
             *armed = None;
             *cursor = None;
+        }
+        Ok(())
+    }
+
+    fn handle_tape(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Tape { from, cursor } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        let point = |scene: &mut Scene, ray: PickRay, a: Point3| {
+            let q = SnapQuery {
+                anchor: Some(a),
+                ..query(ray, aperture)
+            };
+            let hit = scene.snap(&q);
+            let p = hit.map(|h| h.snap.position).or_else(|| {
+                let plane = Plane::from_point_normal(a, Vec3::new(0.0, 0.0, 1.0)).ok()?;
+                ray_on_plane(&ray, &plane)
+            });
+            (p, hit)
+        };
+        let mut to = None;
+        match input {
+            Input::Hover(ray) => match from {
+                Some((a, _)) => {
+                    let (p, hit) = point(scene, ray, *a);
+                    *cursor = p;
+                    self.preview.snap = hit;
+                }
+                None => self.preview.snap = scene.snap(&query(ray, aperture)),
+            },
+            Input::Click(ray) => match from {
+                Some((a, _)) => to = point(scene, ray, *a).0,
+                None => {
+                    let hit = scene.snap(&query(ray, aperture));
+                    let start = hit
+                        .map(|h| h.snap.position)
+                        .or_else(|| ray_on_plane(&ray, &ground()));
+                    *from = start.map(|p| (p, hit.and_then(|h| scene.edge_direction(&h))));
+                }
+            },
+            Input::Typed(text) => {
+                let (Some((a, _)), Some(c)) = (&*from, *cursor) else {
+                    return Err(needs("klik titik awal lalu arahkan kursor dulu"));
+                };
+                let Some(Vcb::One(len)) = vcb::parse(&text) else {
+                    return Err(needs("pita ukur butuh satu jarak"));
+                };
+                if len.abs() < MIN_LEN {
+                    return Err(needs("jarak pita ukur tidak boleh nol"));
+                }
+                let dir = (c - *a)
+                    .normalized()
+                    .map_err(|_| needs("arahkan kursor dulu"))?;
+                to = Some(*a + dir * len);
+            }
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        if let (Some(b), Some((a, along))) = (to, *from)
+            && (b - a).length() >= MIN_LEN
+        {
+            match along {
+                // From an edge: a parallel line. Measured along that edge it
+                // would be the edge's own line, so a point instead.
+                Some(u) if (b - a).cross(u).length() > MIN_LEN => scene.add_guide_line(b, u)?,
+                _ => scene.add_guide_point(b)?,
+            }
+            *from = None;
+            *cursor = None;
+        }
+        Ok(())
+    }
+
+    fn handle_follow(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Follow { profile, outline } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => {
+                self.preview.snap = scene.snap(&pick_query(ray, aperture));
+            }
+            Input::Click(ray) => {
+                let hit = scene.snap(&pick_query(ray, aperture));
+                match (*profile, hit) {
+                    (None, Some(h)) => {
+                        if let Some((sketch, region)) = h.snap.sketch_region_source {
+                            *profile = Some((h.tile, sketch, region));
+                            *outline = scene.outline(Target::Region {
+                                tile: h.tile,
+                                sketch,
+                                region,
+                            });
+                        } else {
+                            return Err(needs("klik region tertutup sebagai penampang"));
+                        }
+                    }
+                    (Some((tile, sketch, region)), Some(h)) => {
+                        let Some(path) = h.snap.sketch_source else {
+                            return Err(needs("klik garis sebagai jalur"));
+                        };
+                        if h.tile != tile {
+                            return Err(needs("penampang dan jalur harus di tile yang sama"));
+                        }
+                        scene.follow_me(tile, (sketch, region), path)?;
+                        *profile = None;
+                        outline.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Input::ClickAdd(_)
+            | Input::Typed(_)
+            | Input::LockAxis(_)
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1366,7 +1599,11 @@ impl Tool {
                     hover.clear();
                 }
             }
-            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::Typed(_)
+            | Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1459,7 +1696,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::Cancel => {}
+            Input::ClickAdd(_) | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1527,7 +1764,7 @@ impl Tool {
                 Self::commit_push_pull(scene, a.target, d)?;
                 *armed = None;
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1602,6 +1839,11 @@ impl Tool {
                 _ => Vec::new(),
             },
             State::Erase { hover } => hover.clone(),
+            State::Tape { from, cursor } => match (from, cursor) {
+                (Some((a, _)), Some(b)) => vec![(*a, *b)],
+                _ => Vec::new(),
+            },
+            State::Follow { outline, .. } => outline.clone(),
             State::Round {
                 sides,
                 center,
