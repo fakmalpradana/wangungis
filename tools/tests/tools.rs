@@ -1035,3 +1035,19 @@ fn a_guide_alone_in_a_tile_is_saved() {
     assert_eq!(Scene::new(reopened).guide_lines().len(), 3);
     assert_eq!(s.guide_lines().len(), 3);
 }
+
+/// What Shift takes back stops being lit, and an emptied selection is no selection.
+#[test]
+fn shift_taking_back_clears_its_outline() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut t = Tool::select(APERTURE);
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert!(t.busy());
+    t.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    assert_eq!(t.picked_nodes(), None);
+    assert!(t.preview().lines.is_empty());
+    assert!(!t.busy(), "nothing is held");
+    assert_eq!(t.selected(), None);
+}

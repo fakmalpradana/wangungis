@@ -894,9 +894,14 @@ impl Tool {
                 nodes.push(n);
             }
         }
-        *selected = picked;
-        // One pick shows the face or edge under the click; several show themselves.
-        *outline = if nodes.len() > 1 {
+        // A plain click shows the face or edge under it. With Shift, or with several
+        // picked, the outline is what is held: what Shift took back must not stay lit.
+        *selected = if adding && nodes.is_empty() {
+            None
+        } else {
+            picked
+        };
+        *outline = if adding || nodes.len() > 1 {
             nodes
                 .iter()
                 .flat_map(|(tile, node)| {

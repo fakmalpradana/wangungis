@@ -95,6 +95,11 @@ fn obj(project: &Project) -> Result<Vec<u8>, ExportError> {
     for (key, doc) in &project.tiles {
         let c = key.center();
         for (mesh, pose) in tile_meshes(doc).map_err(ExportError::Mesh)? {
+            if mesh.indices.is_empty() {
+                continue;
+            }
+            // A mirroring pose turns a mesh inside out unless the winding flips.
+            let mirrored = pose.as_ref().is_some_and(|t| t.determinant() < 0.0);
             solid += 1;
             let _ = writeln!(text, "o solid_{solid}");
             for p in mesh.positions.chunks(3) {
@@ -104,7 +109,8 @@ fn obj(project: &Project) -> Result<Vec<u8>, ExportError> {
             }
             for t in mesh.indices.chunks(3) {
                 let at = |k: usize| base + t[k] as usize;
-                let _ = writeln!(text, "f {} {} {}", at(0), at(1), at(2));
+                let (b, c) = if mirrored { (2, 1) } else { (1, 2) };
+                let _ = writeln!(text, "f {} {} {}", at(0), at(b), at(c));
             }
             base += mesh.positions.len() / 3;
         }

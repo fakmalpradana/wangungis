@@ -1357,14 +1357,15 @@ fn groups_move_as_one_and_dissolve() {
     assert_eq!(reopened.save(), bytes);
 
     let group = nodes(&s, key)[0];
-    s.dissolve(key, group).unwrap();
+    s.dissolve(key, &[group]).unwrap();
     assert_eq!(nodes(&s, key).len(), 2);
     s.undo().unwrap();
     assert_eq!(nodes(&s, key).len(), 1);
-    assert!(matches!(s.dissolve(key, nodes(&s, key)[0]), Ok(())));
+    let g = nodes(&s, key);
+    assert!(matches!(s.dissolve(key, &g), Ok(())));
     let plain = nodes(&s, key)[0];
     assert!(
-        s.dissolve(key, plain).is_err(),
+        s.dissolve(key, &[plain]).is_err(),
         "a plain object has nothing to dissolve"
     );
 }
@@ -1399,7 +1400,7 @@ fn component_copies_are_instances() {
     assert_ne!(far, m);
 
     let n = nodes(&s, key)[1];
-    s.dissolve(key, n).unwrap();
+    s.dissolve(key, &[n]).unwrap();
     assert_eq!(s.project().tiles[&key].visible_object_ids().len(), 1);
     s.undo().unwrap();
 
@@ -1417,4 +1418,31 @@ fn deleting_nodes_is_one_step() {
     assert_eq!(solids(s.project()).0, 0);
     s.undo().unwrap();
     assert_eq!(solids(s.project()).0, 2);
+}
+
+/// Dissolving several at once is one step, and skips what has nothing to dissolve.
+#[test]
+fn dissolving_several_is_one_step() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 10.0, 0.0, 5.0, 4.0, 3.0);
+    add_box(&mut s, 20.0, 0.0, 5.0, 4.0, 3.0);
+    let all = nodes(&s, key);
+    s.group(key, &all[..1]).unwrap();
+    let now = nodes(&s, key);
+    let second = *now
+        .iter()
+        .find(|n| matches!(n, kernel::NodeId::Object(_)))
+        .unwrap();
+    s.make_component(key, &[second]).unwrap();
+    let mixed = nodes(&s, key);
+    assert_eq!(mixed.len(), 3);
+    s.dissolve(key, &mixed).unwrap();
+    assert!(
+        nodes(&s, key)
+            .iter()
+            .all(|n| matches!(n, kernel::NodeId::Object(_)))
+    );
+    s.undo().unwrap();
+    assert_eq!(nodes(&s, key), mixed, "one undo restores them all");
 }

@@ -275,6 +275,7 @@ impl App {
 
     fn new_project(&mut self) {
         self.error = None;
+        self.notice = None;
         self.adopt(empty_scene());
         self.source = Source::default();
         // Simpan writes to this box next: it must not still name the old file.
@@ -285,6 +286,7 @@ impl App {
 
     fn open(&mut self) {
         self.error = None;
+        self.notice = None;
         let opened = std::fs::read(&self.path)
             .map_err(|e| format!("Tidak bisa membaca {}: {e}", self.path))
             .and_then(|bytes| {
@@ -308,6 +310,7 @@ impl App {
     }
 
     fn save(&mut self) {
+        self.notice = None;
         let project = self.scene.project();
         let single = project.single().is_some();
         let target = match save_target(&self.source, &self.path, single) {
@@ -343,6 +346,7 @@ impl App {
     /// Writes the project to the path box as the format its extension names.
     /// Never over an existing file.
     fn export(&mut self) {
+        self.notice = None;
         let target = PathBuf::from(self.path.trim());
         let format = target
             .extension()
@@ -443,6 +447,7 @@ impl App {
             &[kernel::NodeId],
         ) -> Result<(), wangungis_tools::EditError>,
     ) {
+        self.notice = None;
         let Some((tile, nodes)) = self.tool.picked_nodes() else {
             self.error = Some("Pilih objek dulu dengan Pilih (Spasi).".into());
             return;
@@ -985,7 +990,7 @@ impl App {
                     self.on_picked(|s, t, n| s.make_component(t, n));
                 }
                 if ui.button("Pecah").clicked() {
-                    self.on_picked(|s, t, n| n.iter().try_for_each(|node| s.dissolve(t, *node)));
+                    self.on_picked(|s, t, n| s.dissolve(t, n));
                 }
                 ui.separator();
                 if ui.button("Zoom extents").clicked() {

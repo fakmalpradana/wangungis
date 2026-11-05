@@ -1366,20 +1366,32 @@ impl Scene {
         Ok(())
     }
 
-    /// Dissolves a group or explodes a component instance back into what it
-    /// holds, as one undo step. A plain object has nothing to dissolve.
-    pub fn dissolve(&mut self, tile: TileKey, node: NodeId) -> Result<(), EditError> {
+    /// Dissolves the groups and explodes the component instances among `nodes`
+    /// back into what they hold, as one undo step. Plain objects are left alone;
+    /// with nothing else, that is refused. On refusal nothing changes.
+    pub fn dissolve(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
         let doc = self.project.tile_mut(tile)?;
-        match node {
-            NodeId::Group(g) => {
-                doc.ungroup(g).map_err(kernel_err)?;
+        let mut made = 0;
+        for node in nodes {
+            let done = match *node {
+                NodeId::Group(g) => doc.ungroup(g).map(|_| ()),
+                NodeId::Instance(i) => doc.explode_instance(i).map(|_| ()),
+                NodeId::Object(_) => continue,
+            };
+            if let Err(e) = done {
+                for _ in 0..made {
+                    doc.undo().map_err(kernel_err)?;
+                }
+                return Err(kernel_err(e));
             }
-            NodeId::Instance(i) => {
-                doc.explode_instance(i).map_err(kernel_err)?;
-            }
-            NodeId::Object(_) => return Err(EditError::Unsupported("objek ini bukan grup")),
+            made += 1;
         }
-        self.record(tile);
+        if made == 0 {
+            return Err(EditError::Unsupported(
+                "yang dipilih bukan grup atau komponen",
+            ));
+        }
+        self.record_steps(tile, made);
         Ok(())
     }
 

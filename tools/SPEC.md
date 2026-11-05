@@ -15,7 +15,7 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
 - `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
 - `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
-- `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
+- `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. `dissolve` melewati objek biasa, dan menolak bila tidak ada grup atau komponen. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
 - `add_guide_point`, `add_guide_line`, `delete_guides`, `guide_lines`, `edge_direction`: panduan konstruksi. Garis panduan digambar dan bisa di-snap ±200 m dari titiknya (ponytail; Hew menganggapnya tak terbatas).
 - `follow_me(tile, profile, path)`: menyapu region sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
