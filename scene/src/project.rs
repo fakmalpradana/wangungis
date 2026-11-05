@@ -349,10 +349,11 @@ impl Project {
     }
 
     /// Plain `.hew` bytes for a single-tile project, else the container.
-    /// Byte-stable: the same project saves to the same bytes.
+    /// Byte-stable: the same project saves to the same bytes. A group or
+    /// component open for editing saves as if closed.
     pub fn save(&self) -> Vec<u8> {
         if let Some(doc) = self.single() {
-            return doc.save();
+            return doc.save_for_persistence();
         }
         let manifest = Manifest {
             format: FORMAT.into(),
@@ -383,7 +384,7 @@ impl Project {
             &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
         );
         for (key, doc) in self.occupied() {
-            add(&key.file(), &doc.save());
+            add(&key.file(), &doc.save_for_persistence());
         }
         zip.finish().expect("in-memory zip").into_inner()
     }

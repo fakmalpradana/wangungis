@@ -567,7 +567,7 @@ fn instances_snap_and_pick_unless_hidden() {
     let f = s.pick_face(&down).unwrap();
     assert!(matches!(
         s.push_pull(f.tile, f.source, 1.0),
-        Err(EditError::Unsupported(_))
+        Err(EditError::OutOfScope)
     ));
 
     let mut s = instance_scene(true);

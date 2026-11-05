@@ -48,6 +48,9 @@ pub fn export(project: &Project, format: &str) -> Result<Vec<u8>, ExportError> {
 
 /// One tile's visible geometry: each mesh with its pose, if any.
 fn tile_meshes(doc: &Document) -> Result<Vec<(RenderMesh, Option<Transform>)>, TessellateError> {
+    // An open group or component exports as if closed, as Hew's own writers do.
+    let closed = doc.session_closed();
+    let doc: &Document = &closed;
     let palette = MaterialPalette::default();
     let mut out = Vec::new();
     for node in doc.top_level_nodes() {

@@ -42,6 +42,8 @@ pub enum EditError {
     Kernel(String),
     /// Not supported yet (e.g. editing inside a component).
     Unsupported(&'static str),
+    /// Geometry outside what is open for editing.
+    OutOfScope,
 }
 
 impl fmt::Display for EditError {
@@ -57,6 +59,10 @@ impl fmt::Display for EditError {
             ),
             EditError::Kernel(e) => write!(f, "Ditolak kernel: {e}"),
             EditError::Unsupported(what) => write!(f, "Belum didukung: {what}"),
+            EditError::OutOfScope => write!(
+                f,
+                "Di luar yang sedang diedit. Isi grup atau komponen: klik dua kali untuk masuk. Esc keluar lagi."
+            ),
         }
     }
 }
@@ -71,7 +77,41 @@ impl From<ProjectError> for EditError {
 }
 
 fn kernel_err<E: fmt::Debug>(e: E) -> EditError {
-    EditError::Kernel(format!("{e:?}"))
+    let text = format!("{e:?}");
+    if text.contains("ExplodeSessionScope") {
+        return EditError::OutOfScope;
+    }
+    EditError::Kernel(text)
+}
+
+/// Whether `node` may be edited now: a direct member of the open session, or
+/// with none open, top-level. What sits inside a group or component needs
+/// entering first.
+fn in_scope(doc: &Document, node: NodeId) -> bool {
+    match doc.session_direct_members() {
+        Some(members) => members.contains(&node),
+        None => doc.node_parent(node).is_none(),
+    }
+}
+
+/// [`in_scope`] for the solid a pick landed on.
+fn source_in_scope(doc: &Document, source: SnapSource) -> bool {
+    source.instance.is_none() && in_scope(doc, NodeId::Object(source.object))
+}
+
+/// Whether Hew's drafting takes `q` for the plane `p`. Its own test is private,
+/// and this has to say the same: same-facing and coincident.
+fn planes_coincide(p: &Plane, q: &Plane) -> bool {
+    let anchor = Point3::ORIGIN + p.normal() * (-p.signed_distance(Point3::ORIGIN));
+    (p.normal() - q.normal()).length() < kernel::tol::NORMAL_DIRECTION
+        && q.signed_distance(anchor).abs() <= kernel::tol::PLANE_DIST
+}
+
+/// The solids on `plane` that a drawing may split.
+fn drawable(doc: &Document, plane: Plane) -> Vec<ObjectId> {
+    let mut objects = doc.drawable_objects_on_plane(plane, None);
+    objects.retain(|o| in_scope(doc, NodeId::Object(*o)));
+    objects
 }
 
 /// A snap in project-local coordinates, and the tile whose geometry produced
@@ -242,6 +282,23 @@ pub struct Scene {
     undo: Vec<(TileKey, u32)>,
     redo: Vec<(TileKey, u32)>,
     dirty: BTreeSet<TileKey>,
+    /// The drawing that belongs to the open session. Hew does not say for a
+    /// group, except by closing it on a copy, so this is kept across hovers.
+    open_sketches: Vec<SketchId>,
+}
+
+/// The sketches an open session owns. Costs a copy of the tile for a group.
+// ponytail: once per edit in a session; incremental if big tiles feel it.
+fn open_sketches(doc: &Document) -> Vec<SketchId> {
+    // Innermost only: closing the frames around a group too would pack it away.
+    if let Some(group) = doc.group_session_group() {
+        let mut closed = doc.clone();
+        return match closed.close_innermost_session() {
+            Ok(_) => closed.group_member_sketches(group),
+            Err(_) => Vec::new(),
+        };
+    }
+    doc.explode_session_sketches().unwrap_or_default()
 }
 
 fn offset(p: Point3, c: [f64; 3]) -> Point3 {
@@ -442,6 +499,7 @@ impl Scene {
             undo: Vec::new(),
             redo: Vec::new(),
             dirty: BTreeSet::new(),
+            open_sketches: Vec::new(),
         }
     }
 
@@ -633,13 +691,154 @@ impl Scene {
         best
     }
 
-    /// The nearest solid face under a project-local ray.
+    /// The nearest solid face under a project-local ray, whatever it belongs to.
     pub fn pick_face(&mut self, ray: &PickRay) -> Option<FaceHit> {
         let unit = PickRay {
             origin: ray.origin,
             direction: ray.direction.normalized().ok()?,
         };
         self.nearest_face(&unit)
+    }
+
+    /// [`Scene::pick_face`], when that face may be edited now. A face that may
+    /// not still hides what is behind it.
+    pub fn editable_face(&mut self, ray: &PickRay) -> Option<FaceHit> {
+        let hit = self.pick_face(ray)?;
+        self.check_tile(hit.tile).ok()?;
+        let doc = self.project.tiles.get(&hit.tile)?;
+        source_in_scope(doc, hit.source).then_some(hit)
+    }
+
+    /// The open editing session: its tile, and what was entered, outermost first.
+    pub fn session(&self) -> Option<(TileKey, Vec<NodeId>)> {
+        self.project.tiles.iter().find_map(|(key, doc)| {
+            let stack = doc.session_stack();
+            (!stack.is_empty()).then_some((*key, stack))
+        })
+    }
+
+    /// A name for `node`, for telling the user what is open.
+    pub fn node_name(&self, tile: TileKey, node: NodeId) -> String {
+        let doc = self.project.tiles.get(&tile);
+        let named = doc.and_then(|doc| match node {
+            NodeId::Object(o) => doc.object_name(o),
+            NodeId::Group(g) => doc.group_name(g),
+            NodeId::Instance(i) => doc
+                .instance_name(i)
+                .or_else(|| doc.component_name(doc.instance_def(i)?)),
+        });
+        let kind = match node {
+            NodeId::Object(_) => "Objek",
+            NodeId::Group(_) => "Grup",
+            NodeId::Instance(_) => "Komponen",
+        };
+        named.map_or_else(|| kind.into(), Into::into)
+    }
+
+    /// Opens a group or component for editing in place, as one undo step. Its
+    /// members become editable and everything else does not, until
+    /// [`Scene::leave`]. Hew hides the other instances of a component meanwhile.
+    pub fn enter(&mut self, tile: TileKey, node: NodeId) -> Result<(), EditError> {
+        self.check_tile(tile)?;
+        let doc = self.project.tile_mut(tile)?;
+        if !in_scope(doc, node) {
+            return Err(EditError::OutOfScope);
+        }
+        match node {
+            NodeId::Group(g) => doc.open_group_session(g),
+            NodeId::Instance(i) => doc.open_explode_session(i),
+            NodeId::Object(_) => {
+                return Err(EditError::Unsupported("objek biasa tidak punya isi"));
+            }
+        }
+        .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Closes the innermost open group or component, as one undo step. `false`
+    /// when none is open.
+    pub fn leave(&mut self) -> Result<bool, EditError> {
+        let Some((tile, _)) = self.session() else {
+            return Ok(false);
+        };
+        let doc = self.project.tile_mut(tile)?;
+        doc.close_innermost_session().map_err(kernel_err)?;
+        self.record(tile);
+        Ok(true)
+    }
+
+    /// Whether a drawing may be edited now: the open session's own, or with
+    /// none open, one that sits in no group.
+    pub fn sketch_editable(&self, key: TileKey, sketch: SketchId) -> bool {
+        if self.check_tile(key).is_err() {
+            return false;
+        }
+        self.project.tiles.get(&key).is_some_and(|doc| {
+            if let Some(owner) = doc.sketch_owner_object(sketch) {
+                in_scope(doc, NodeId::Object(owner))
+            } else if doc.session_stack().is_empty() {
+                doc.sketch_owner_group(sketch).is_none()
+            } else {
+                self.open_sketches.contains(&sketch)
+            }
+        })
+    }
+
+    /// Hew's drafting merges every sketch on a plane into one, a group's own among
+    /// them, and closing a session folds in only sketches it created. So a drawing
+    /// on a plane that holds one out of scope would land on the wrong side of the
+    /// group, and could change it. Refused.
+    // ponytail: a separate sketch on that plane, if this gets in the way.
+    fn check_open_plane(&self, key: TileKey, plane: Plane) -> Result<(), EditError> {
+        let Some(doc) = self.project.tiles.get(&key) else {
+            return Ok(());
+        };
+        let taken = doc.visible_sketch_ids().into_iter().any(|id| {
+            !self.sketch_editable(key, id)
+                && doc
+                    .sketch(id)
+                    .is_some_and(|sk| planes_coincide(&plane, &sk.plane()))
+        });
+        if taken {
+            return Err(EditError::Unsupported(
+                "menggambar pada bidang yang berisi gambar di sisi lain batas grup",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_sketch(&self, key: TileKey, sketch: SketchId) -> Result<(), EditError> {
+        if self.sketch_editable(key, sketch) {
+            Ok(())
+        } else {
+            Err(EditError::OutOfScope)
+        }
+    }
+
+    /// Refuses edits in any tile but the one with the open session.
+    fn check_tile(&self, key: TileKey) -> Result<(), EditError> {
+        match self.session() {
+            Some((open, _)) if open != key => Err(EditError::OutOfScope),
+            _ => Ok(()),
+        }
+    }
+
+    /// Refuses nodes outside the open scope.
+    fn check_nodes(&self, key: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_tile(key)?;
+        match self.project.tiles.get(&key) {
+            Some(doc) if !nodes.iter().all(|n| in_scope(doc, *n)) => Err(EditError::OutOfScope),
+            _ => Ok(()),
+        }
+    }
+
+    /// Refuses a solid outside the open scope.
+    fn check_source(&self, key: TileKey, source: SnapSource) -> Result<(), EditError> {
+        match self.project.tiles.get(&key) {
+            Some(doc) if !source_in_scope(doc, source) => Err(EditError::OutOfScope),
+            _ => Ok(()),
+        }
     }
 
     /// A solid face's plane and outer boundary, project-local. `None` for a
@@ -734,6 +933,11 @@ impl Scene {
     fn touch(&mut self, key: TileKey) {
         self.cells.remove(&key);
         self.dirty.insert(key);
+        self.open_sketches = self
+            .session()
+            .and_then(|(open, _)| self.project.tiles.get(&open))
+            .map(open_sketches)
+            .unwrap_or_default();
     }
 
     /// Draws `segments` (project-local, on `plane`) as ONE undo step through
@@ -784,8 +988,10 @@ impl Scene {
         edit: impl FnOnce(&mut kernel::Sketch) -> Result<bool, kernel::SketchError>,
     ) -> Result<Drawn, EditError> {
         let existed = self.project.tiles.contains_key(&key);
+        self.check_tile(key)?;
+        self.check_open_plane(key, plane)?;
         let doc = self.project.tile_mut(key)?;
-        let objects = doc.drawable_objects_on_plane(plane, None);
+        let objects = drawable(doc, plane);
         let mut closed = false;
         let drafted = doc.draft(plane, None, &objects, label, |sk| {
             closed = edit(sk)?;
@@ -893,6 +1099,7 @@ impl Scene {
     /// What Move would pick up at `hit`: the top-level node of a solid, or the
     /// connected drawing of a sketch. `None` over nothing movable.
     pub fn movable_at(&self, hit: &Hit) -> Option<Movable> {
+        self.check_tile(hit.tile).ok()?;
         let doc = self.project.tiles.get(&hit.tile)?;
         let tile = hit.tile;
         if let Some(source) = hit.snap.source {
@@ -902,7 +1109,8 @@ impl Scene {
                 .find(|n| match source.instance {
                     Some(inst) => doc.leaf_instances_under(*n).contains(&inst),
                     None => doc.leaf_objects_under(*n).contains(&source.object),
-                })?;
+                })
+                .filter(|n| in_scope(doc, *n))?;
             return Some(Movable::Node { tile, node });
         }
         let at = offset(hit.snap.position, tile.center());
@@ -930,6 +1138,7 @@ impl Scene {
         let (sketch, edge) = doc
             .visible_sketch_ids()
             .into_iter()
+            .filter(|s| self.sketch_editable(tile, *s))
             .find_map(|s| on_sketch(s).map(|e| (s, e)))?;
         let sk = doc.sketch(sketch)?;
         let island = sk.island_of_edge(edge)?;
@@ -1009,9 +1218,13 @@ impl Scene {
     /// What the Eraser would remove at `hit`: only edges count, as faces belong
     /// to their edges. `None` over a face, a corner, or nothing.
     pub fn erasable_at(&self, hit: &Hit) -> Option<Erasable> {
+        self.check_tile(hit.tile).ok()?;
         let tile = hit.tile;
         let doc = self.project.tiles.get(&tile)?;
         if let Some((sketch, edge)) = hit.snap.sketch_source {
+            if !self.sketch_editable(tile, sketch) {
+                return None;
+            }
             let sk = doc.sketch(sketch)?;
             let e = sk.edges().get(edge)?;
             return Some(Erasable::Line {
@@ -1033,7 +1246,7 @@ impl Scene {
                     None => doc.leaf_objects_under(*n).contains(&source.object),
                 })
         };
-        if source.instance.is_none() {
+        if source_in_scope(doc, source) {
             let object = doc.object(source.object)?;
             let (a, b) = object.edge_endpoints(edge)?;
             if let Some(plane) = dividing_plane(object, edge) {
@@ -1042,7 +1255,7 @@ impl Scene {
         }
         Some(Erasable::Node {
             tile,
-            node: node(doc)?,
+            node: node(doc).filter(|n| in_scope(doc, *n))?,
         })
     }
 
@@ -1065,13 +1278,16 @@ impl Scene {
     pub fn erase(&mut self, e: &Erasable) -> Result<(), EditError> {
         match e {
             Erasable::Node { tile, node } => {
+                self.check_nodes(*tile, &[*node])?;
                 let doc = self.project.tile_mut(*tile)?;
                 doc.delete_node(*node).map_err(kernel_err)?;
                 self.record(*tile);
             }
             Erasable::Line { tile, plane, a, b } => {
+                self.check_tile(*tile)?;
+                self.check_open_plane(*tile, *plane)?;
                 let doc = self.project.tile_mut(*tile)?;
-                let objects = doc.drawable_objects_on_plane(*plane, None);
+                let objects = drawable(doc, *plane);
                 let (report, _) = doc
                     .draft(*plane, None, &objects, "erase", |sk| {
                         // Drafting may have split it where other drawing meets it.
@@ -1108,6 +1324,10 @@ impl Scene {
     /// project bound, or any power on the way. `step` is project-local.
     fn check_moved(&self, m: &Movable, step: &Transform, count: u32) -> Result<(), EditError> {
         let key = m.tile();
+        match m {
+            Movable::Node { node, .. } => self.check_nodes(key, &[*node])?,
+            Movable::Island { sketch, .. } => self.check_sketch(key, *sketch)?,
+        }
         let doc = self
             .project
             .tiles
@@ -1139,6 +1359,7 @@ impl Scene {
     /// tile, up to the kernel frame bound.
     pub fn transform(&mut self, m: &Movable, t: &Transform) -> Result<(), EditError> {
         self.check_moved(m, t, 1)?;
+        self.check_tile(m.tile())?;
         let local = tile_transform(t, m.tile().center());
         let doc = self.project.tile_mut(m.tile())?;
         match m {
@@ -1164,6 +1385,7 @@ impl Scene {
         self.check_moved(m, step, count.get())?;
         let key = m.tile();
         let local = tile_transform(step, key.center());
+        self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         match m {
             Movable::Node { node, .. } => {
@@ -1247,6 +1469,7 @@ impl Scene {
     /// Adds a construction point, as one undo step.
     pub fn add_guide_point(&mut self, at: Point3) -> Result<(), EditError> {
         let (tile, local) = self.guide_home(at)?;
+        self.check_tile(tile)?;
         self.project
             .tile_mut(tile)?
             .add_guide_point(local)
@@ -1258,6 +1481,7 @@ impl Scene {
     /// Adds a construction line through `at`, as one undo step.
     pub fn add_guide_line(&mut self, at: Point3, direction: Vec3) -> Result<(), EditError> {
         let (tile, local) = self.guide_home(at)?;
+        self.check_tile(tile)?;
         self.project
             .tile_mut(tile)?
             .add_guide_line(local, direction)
@@ -1274,6 +1498,10 @@ impl Scene {
 
     /// Removes every construction line and point, one undo step per tile.
     pub fn delete_guides(&mut self) -> Result<(), EditError> {
+        // Guides of every tile go, and only the session's tile may change.
+        if self.session().is_some() {
+            return Err(EditError::OutOfScope);
+        }
         let tiles: Vec<TileKey> = self
             .project
             .tiles
@@ -1364,6 +1592,9 @@ impl Scene {
         profile: (SketchId, SketchRegionId),
         path: (SketchId, kernel::SketchEdgeId),
     ) -> Result<(), EditError> {
+        self.check_tile(tile)?;
+        self.check_sketch(tile, profile.0)?;
+        self.check_sketch(tile, path.0)?;
         let doc = self.project.tile_mut(tile)?;
         let route = follow_route(doc, path)?;
         doc.follow_me(profile.0, profile.1, &route)
@@ -1381,12 +1612,12 @@ impl Scene {
         source: SnapSource,
         path: (SketchId, kernel::SketchEdgeId),
     ) -> Result<(), EditError> {
-        if source.instance.is_some() {
-            return Err(EditError::Unsupported("mengedit isi komponen"));
-        }
+        self.check_source(tile, source)?;
+        self.check_sketch(tile, path.0)?;
         let inference::ElementRef::Face(face) = source.element else {
             return Err(EditError::Unsupported("follow me selain pada face"));
         };
+        self.check_tile(tile)?;
         let doc = self.project.tile_mut(tile)?;
         let route = follow_route(doc, path)?;
         doc.follow_me_face(source.object, face, &route, None)
@@ -1398,6 +1629,7 @@ impl Scene {
 
     /// Groups `nodes`, top-level nodes of one tile, as one undo step.
     pub fn group(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .group_nodes(nodes)
@@ -1409,6 +1641,7 @@ impl Scene {
     /// Turns `nodes`, top-level nodes of one tile, into one instance of a new
     /// component, as one undo step.
     pub fn make_component(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .make_component(nodes)
@@ -1421,6 +1654,7 @@ impl Scene {
     /// back into what they hold, as one undo step. Plain objects are left alone;
     /// with nothing else, that is refused. On refusal nothing changes.
     pub fn dissolve(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         let doc = self.project.tile_mut(tile)?;
         let mut made = 0;
         for node in nodes {
@@ -1448,6 +1682,7 @@ impl Scene {
 
     /// Deletes top-level `nodes` of one tile, as one undo step.
     pub fn delete_nodes(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .delete_selection(nodes)
@@ -1488,6 +1723,8 @@ impl Scene {
         distance: f64,
     ) -> Result<ObjectId, EditError> {
         Self::check_distance(distance)?;
+        self.check_sketch(key, sketch)?;
+        self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         let (object, _) = doc
             .extrude_region(sketch, region, distance)
@@ -1505,12 +1742,11 @@ impl Scene {
         distance: f64,
     ) -> Result<(), EditError> {
         Self::check_distance(distance)?;
-        if source.instance.is_some() {
-            return Err(EditError::Unsupported("mengedit isi komponen"));
-        }
+        self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
             return Err(EditError::Unsupported("push/pull selain pada face"));
         };
+        self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         let object = doc
             .object(source.object)
@@ -1536,12 +1772,11 @@ impl Scene {
         distance: f64,
     ) -> Result<ObjectId, EditError> {
         Self::check_distance(distance)?;
-        if source.instance.is_some() {
-            return Err(EditError::Unsupported("mengedit isi komponen"));
-        }
+        self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
             return Err(EditError::Unsupported("push/pull selain pada face"));
         };
+        self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         let (object, _) = doc
             .extrude_face_as_new_object(source.object, face, distance)
@@ -1561,12 +1796,11 @@ impl Scene {
         source: SnapSource,
         paint: Option<&Paint>,
     ) -> Result<(), EditError> {
-        if source.instance.is_some() {
-            return Err(EditError::Unsupported("mengecat isi komponen"));
-        }
+        self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
             return Err(EditError::Unsupported("mengecat selain face"));
         };
+        self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         let material = paint.map(|p| {
             let same = doc

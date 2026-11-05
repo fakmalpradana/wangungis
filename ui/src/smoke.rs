@@ -772,6 +772,61 @@ fn paint_a_face_through_the_app() {
     assert!(blue(&d) <= before, "undo took it off: {}", blue(&d));
 }
 
+/// Two clicks open a group, a member takes an edit, Esc closes it.
+#[test]
+fn edit_a_group_in_place_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+
+    d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    d.app.on_picked(|s, t, n| s.group(t, n));
+    assert_eq!(d.app.error, None);
+
+    // A member of a closed group is out of reach.
+    d.letter(K::P, "p");
+    d.click([4.5, 4.0, 3.0]);
+    assert!(!d.app.tool.busy());
+
+    // A quick click after the one above is a double click to egui, but it only picks.
+    d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    assert_eq!(d.app.session_label(), None);
+    d.key(K::Escape);
+
+    // Far from the click before: a third quick click is no double click.
+    d.time += 1.0;
+    let at = d.pixel([4.5, 4.0, 3.0]);
+    d.click_at(at);
+    d.click_at(at);
+    assert_eq!(d.app.error, None);
+    let label = d.app.session_label();
+    assert_eq!(
+        label.as_deref(),
+        Some("Mengedit: Grup"),
+        "two clicks opened it"
+    );
+    d.frame(vec![]);
+    d.dump("inside-group");
+
+    d.letter(K::P, "p");
+    d.click([4.5, 4.0, 3.0]);
+    assert!(d.app.tool.busy());
+    d.value("1");
+    close(d.extents(), [5.0, 4.0, 4.0]);
+
+    // The first Esc ends nothing here: Push/Pull is idle, so it closes.
+    d.key(K::Escape);
+    assert_eq!(d.app.session_label(), None);
+    close(d.extents(), [5.0, 4.0, 4.0]);
+    assert_eq!(d.app.error, None);
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

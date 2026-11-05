@@ -584,6 +584,36 @@ impl App {
         self.sync_edits();
     }
 
+    /// Opens the one group or component that is picked.
+    fn enter_picked(&mut self) {
+        self.on_picked(|s, t, n| match n {
+            [node] => s.enter(t, *node),
+            _ => Err(wangungis_tools::EditError::Unsupported(
+                "mengedit isi lebih dari satu benda sekaligus",
+            )),
+        });
+    }
+
+    fn leave_session(&mut self) {
+        self.notice = None;
+        match self.scene.leave() {
+            Ok(_) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    /// What is open for editing, for the status bar.
+    fn session_label(&self) -> Option<String> {
+        let (tile, stack) = self.scene.session()?;
+        let names: Vec<_> = stack
+            .into_iter()
+            .map(|n| self.scene.node_name(tile, n))
+            .collect();
+        Some(format!("Mengedit: {}", names.join(" > ")))
+    }
+
     fn delete_picked(&mut self) {
         if self.tool.picked_nodes().is_some() {
             self.on_picked(|s, t, n| s.delete_nodes(t, n));
@@ -722,9 +752,16 @@ impl App {
             }
             K::Delete | K::Backspace => self.delete_picked(),
             K::Escape => {
+                // Nothing left for Esc to cancel: it leaves the open group.
+                let idle = self.typed.is_empty()
+                    && !self.tool.busy()
+                    && self.tool.picked_nodes().is_none();
                 self.typed.clear();
                 self.error = None;
                 self.feed(Input::Cancel);
+                if idle && self.scene.session().is_some() {
+                    self.leave_session();
+                }
             }
             K::ArrowRight => self.feed(Input::LockAxis(Axis::X)),
             K::ArrowLeft => self.feed(Input::LockAxis(Axis::Y)),
@@ -1170,6 +1207,12 @@ impl App {
                 if ui.button("Pecah").clicked() {
                     self.on_picked(|s, t, n| s.dissolve(t, n));
                 }
+                if ui.button("Edit isi").clicked() {
+                    self.enter_picked();
+                }
+                if self.scene.session().is_some() && ui.button("Keluar").clicked() {
+                    self.leave_session();
+                }
                 ui.separator();
                 if ui.button("Zoom extents").clicked() {
                     self.fit_pending = true;
@@ -1217,6 +1260,10 @@ impl App {
                 }
                 if self.tool.copying() {
                     ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
+                    ui.separator();
+                }
+                if let Some(open) = self.session_label() {
+                    ui.colored_label(egui::Color32::from_rgb(0, 110, 170), open);
                     ui.separator();
                 }
                 if self.tool.keeping() {
@@ -1414,6 +1461,7 @@ impl App {
             fed = true;
         }
         let navigating = resp.ctx.input(|i| i.modifiers.alt);
+        let picked_before = self.tool.picked_nodes();
         if resp.clicked_by(egui::PointerButton::Primary)
             && !navigating
             && let Some(p) = resp.interact_pointer_pos()
@@ -1429,6 +1477,22 @@ impl App {
             } else {
                 Input::Click(ray)
             });
+            fed = true;
+        }
+        // Both clicks picked the same thing, so it opens. A quick click on it after
+        // some other click is only a pick.
+        let picked = self.tool.picked_nodes();
+        if resp.double_clicked_by(egui::PointerButton::Primary)
+            && !navigating
+            && !resp.ctx.input(|i| i.modifiers.shift)
+            && self.tool.same_kind(&Tool::select(0.0))
+            && picked == picked_before
+            && picked.is_some_and(|(_, n)| {
+                use kernel::NodeId as N;
+                matches!(n[..], [N::Group(_) | N::Instance(_)])
+            })
+        {
+            self.enter_picked();
             fed = true;
         }
         fed
