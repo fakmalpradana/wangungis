@@ -17,14 +17,16 @@ Untuk membuka file: tambahkan `-- path/ke/file.hew`.
 | Orbit | Seret tombol tengah, atau Alt + seret kiri (trackpad) |
 | Pan | Shift + seret tombol tengah, atau Shift + Alt + seret kiri |
 | Zoom | Scroll |
-| Pilih / Garis / Persegi / Push/Pull | Spasi / L / R / P, atau tombol di toolbar |
+| Pilih / Garis / Persegi / Lingkaran / Poligon / Busur | Spasi / L / R / C / G / A |
+| Push/Pull / Offset / Pindah / Putar / Skala / Hapus | P / F / M / Q / S / E, atau tombol di toolbar |
+| Salin saat Pindah atau Putar | C atau Ctrl (di tool lain, C berarti Lingkaran). Status bar menulis "Menyalin" |
 | Isi angka | Langsung ketik, lalu Enter. Muncul di status bar sebagai "Nilai" |
 | Batal | Esc |
 | Undo / Redo | Cmd+Z / Shift+Cmd+Z (Ctrl di Windows dan Linux) |
 | Simpan | Cmd+S atau tombol Simpan |
-| Kunci sumbu saat Garis | Panah kanan = X, kiri = Y, atas = Z |
+| Kunci sumbu saat Garis atau Pindah; sumbu putar | Panah kanan = X, kiri = Y, atas = Z |
 
-Format angka: `5`, `2,5`, `5;4`, `5x4`, `250cm`, `1500mm`. Angka negatif untuk arah berlawanan.
+Format angka: `5`, `2,5`, `5;4`, `5x4`, `250cm`, `1500mm`. Angka negatif untuk arah berlawanan. Tepat setelah menyalin: `x5` untuk lima salinan, `/5` untuk lima salinan yang mengisi jarak salinan pertama.
 
 Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 
@@ -39,9 +41,15 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face.
 8. Tekan **L**. Klik empat titik membentuk segi empat, lalu klik titik pertama lagi. Rantai berakhir sendiri. Dekatkan kursor ke sudut: penanda hijau muncul dan titik menempel.
 9. Isi path di kotak atas, misalnya `/tmp/uji.hew` (file yang belum ada). Tekan **Simpan**. Tekan **Baru**: layar kosong dan kotak path kosong. Isi path yang sama, tekan **Buka**: kotak yang sama muncul lagi. Simpan menolak menimpa file lain yang sudah ada.
 10. Gambar persegi di dinding atau atap kotak: face-nya terbelah. Tekan **P**, klik face baru, tarik keluar atau dorong ke dalam. Dorong sampai tembus untuk membuat pintu.
-11. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
+11. **Tugas referensi v0.1.** Dari layar kosong: buat kotak 5×4×3 m, gambar persegi 1×2 m di dinding menyentuh lantai, dorong tembus jadi pintu. Tekan **M**, tekan **C**, klik kotak, tekan panah kanan, gerakkan kursor ke kanan, ketik `7` lalu Enter, ketik `x10` lalu Enter. Ada sebelas kotak berpintu. Satu **Cmd+Z** menghapus semua salinan. Simpan, buka ulang: sama.
+12. Tekan **E**, arahkan ke garis pintu yang belum didorong, klik: garis hilang dan face menyatu. Klik tepi kotak: seluruh kotak hilang. Cmd+Z mengembalikannya.
+13. Tekan **Q**, klik sudut kotak, klik arah nol, ketik `90` lalu Enter. Lalu **S**, klik kotak, ketik `2` lalu Enter: dua kali lebih besar.
+14. Tekan **C**, klik pusat, ketik `2` lalu Enter: lingkaran terisi, bisa di-Push/Pull jadi silinder. **G**, ketik `8s`, klik pusat, klik radius: segi delapan. **A**, klik dua ujung, gerakkan kursor, klik: busur. **F**, klik region, ketik `0,5` lalu Enter: tepi sejajar.
+15. Buka model kota besar kalau ada. Status bar menyebut "Dipecah menjadi N tile". Gambar sesuatu di dekat batas 500 m dari pusat.
+
+## Pengaman data
+Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
 
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
 - Belum ada dialog file.
-- Baru dan Buka tidak memperingatkan perubahan yang belum disimpan.

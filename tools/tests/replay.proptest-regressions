@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 476cba9dd10dd64ce543a19660efc3b915167f342aa716746d2eb029bc332be9 # shrinks to ops = [Rect { x: 0, y: -2, w: 1, d: 1 }, Rect { x: 0, y: 0, w: 1, d: 1 }, Rect { x: -2, y: -6, w: 2, d: 4 }, Move { x: 0, y: -6, dx: 0, dy: 0, dz: -1 }, Undo]
+cc cb0d4e3c8538cb9efd34160e67715170b780100172f8f81cbbe6cebfe837f366 # shrinks to ops = [Rect { x: 1, y: 2, w: 8, d: 11 }, Copy { x: 1, y: 4, dx: 15, n: 3 }, Copy { x: 1, y: 4, dx: 15, n: 1 }]

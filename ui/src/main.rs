@@ -32,6 +32,8 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
+/// Seconds between autosaves of a project with unsaved changes.
+const AUTOSAVE_S: f64 = 60.0;
 
 fn main() -> eframe::Result {
     let path = std::env::args().nth(1);
@@ -54,6 +56,21 @@ struct TileStats {
     objects: usize,
     triangles: usize,
     bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+/// What is waiting for the answer to "discard unsaved changes?".
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Leaving {
+    New,
+    Open,
+    Close,
+}
+
+/// The autosave file. One per user: a second window overwrites the first's.
+// ponytail: per-window files when two open projects at once is a real use.
+fn default_autosave() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".wangungis").join("autosave.bin"))
 }
 
 /// Where the open project lives on disk.
@@ -93,7 +110,20 @@ struct App {
     last_pointer: Option<egui::Pos2>,
     /// The path box had focus last frame.
     path_focused: bool,
+    ctrl_held: bool,
+    /// Another key or button went down while Ctrl was held.
+    ctrl_chord: bool,
     error: Option<String>,
+    /// `None`: autosave is off, as when the home folder is unknown.
+    autosave: Option<PathBuf>,
+    /// When the last autosave ran, and whether anything changed since.
+    autosaved_at: f64,
+    autosave_stale: bool,
+    /// An autosave left by a session that did not end cleanly.
+    recovery: bool,
+    leaving: Option<Leaving>,
+    /// The user answered: the window may close.
+    closing: bool,
     #[cfg(test)]
     view_rect: egui::Rect,
     #[cfg(test)]
@@ -106,7 +136,10 @@ impl App {
             .wgpu_render_state
             .clone()
             .expect("eframe started with the wgpu renderer");
-        Self::with_render_state(rs, path)
+        let mut app = Self::with_render_state(rs, path);
+        app.autosave = default_autosave();
+        app.recovery = app.autosave.as_ref().is_some_and(|p| p.exists());
+        app
     }
 
     fn with_render_state(rs: egui_wgpu::RenderState, path: Option<String>) -> Self {
@@ -128,7 +161,15 @@ impl App {
             overlay_shown: None,
             last_pointer: None,
             path_focused: false,
+            ctrl_held: false,
+            ctrl_chord: false,
             error: None,
+            autosave: None,
+            autosaved_at: 0.0,
+            autosave_stale: false,
+            recovery: false,
+            leaving: None,
+            closing: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
             #[cfg(test)]
@@ -154,6 +195,85 @@ impl App {
         }
         self.scene.take_dirty();
         self.orbit = Orbit::default();
+    }
+
+    /// Runs `what`, after asking when that would lose changes.
+    fn leave(&mut self, what: Leaving) {
+        if self.unsaved {
+            self.leaving = Some(what);
+        } else {
+            self.do_leave(what);
+        }
+    }
+
+    fn do_leave(&mut self, what: Leaving) {
+        self.leaving = None;
+        match what {
+            Leaving::New => self.new_project(),
+            Leaving::Open => self.open(),
+            Leaving::Close => {
+                // The user chose to lose the changes, or there were none.
+                self.drop_autosave();
+                self.closing = true;
+            }
+        }
+    }
+
+    fn drop_autosave(&mut self) {
+        self.autosave_stale = false;
+        if let Some(p) = &self.autosave {
+            // Absent is fine: nothing was autosaved yet.
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Writes the autosave when it is due. Not during a gesture: the kernel may
+    /// be mid-edit, and the write is a visible pause on a big model.
+    fn run_autosave(&mut self, now: f64) {
+        let due = self.autosave_stale
+            && !self.tool.busy()
+            && now - self.autosaved_at >= AUTOSAVE_S
+            && !self.recovery;
+        let Some(path) = self.autosave.clone().filter(|_| due) else {
+            return;
+        };
+        self.autosaved_at = now;
+        let bytes = self.scene.project().save();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| write_atomic(&path, &bytes));
+        match written {
+            Ok(()) => self.autosave_stale = false,
+            Err(e) => self.error = Some(format!("Autosave gagal: {e}")),
+        }
+    }
+
+    /// Takes the autosave of the last session as an unsaved new project.
+    fn recover(&mut self) {
+        self.recovery = false;
+        let Some(path) = self.autosave.clone() else {
+            return;
+        };
+        let opened = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| Project::open(&b).map_err(|e| format!("{e:?}")));
+        match opened {
+            Ok(project) => {
+                self.adopt(Scene::new(project));
+                self.source = Source::default();
+                self.path.clear();
+                self.unsaved = true;
+                self.split_on_open = false;
+                self.fit_pending = true;
+            }
+            Err(e) => self.error = Some(format!("Autosave tidak bisa dibuka: {e}")),
+        }
+    }
+
+    fn discard_recovery(&mut self) {
+        self.recovery = false;
+        self.drop_autosave();
     }
 
     fn new_project(&mut self) {
@@ -217,6 +337,7 @@ impl App {
                 self.unsaved = false;
                 self.split_on_open = false;
                 self.error = None;
+                self.drop_autosave();
             }
             Err(e) => self.error = Some(format!("Tidak bisa menyimpan {}: {e}", target.display())),
         }
@@ -248,6 +369,7 @@ impl App {
         let dirty = self.scene.take_dirty();
         if !dirty.is_empty() {
             self.unsaved = true;
+            self.autosave_stale = true;
         }
         for key in dirty {
             self.upload(key);
@@ -312,6 +434,25 @@ impl App {
 
     /// Keys and typed text, unless a text box has them.
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // A bare tap of Ctrl flips copying, like the C key; Ctrl+Z or Ctrl+S do not.
+        // Tools without copying ignore it. Tracked even while a text box has the
+        // keyboard, so a chord there does not look like a tap afterwards.
+        let (ctrl, chord) = ctx.input(|i| {
+            let pressed = i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                )
+            });
+            (i.modifiers.ctrl, pressed)
+        });
+        self.ctrl_chord |= ctrl && chord;
+        let tapped = self.ctrl_held && !ctrl && !self.ctrl_chord;
+        if !ctrl {
+            self.ctrl_chord = false;
+        }
+        self.ctrl_held = ctrl;
         // Only a text box keeps the keyboard, and it has no use for this one.
         if ctx.text_edit_focused() {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
@@ -321,13 +462,16 @@ impl App {
         }
         // Tab must not park focus. On a button, keys stop reaching the tools and
         // Enter presses it. In the path box, tool keys edit the path and Enter
-        // reopens the file, dropping unsaved edits.
+        // starts opening whatever that became.
         ctx.memory_mut(|m| {
             if let Some(id) = m.focused() {
                 m.surrender_focus(id);
             }
             m.move_focus(egui::FocusDirection::None);
         });
+        if tapped {
+            self.feed(Input::ToggleCopy);
+        }
         for ev in ctx.input(|i| i.events.clone()) {
             match ev {
                 // egui cleared the box's focus before this frame: Esc is spent.
@@ -391,6 +535,21 @@ impl App {
             K::L if self.typed.is_empty() => self.switch_tool(Tool::line),
             K::R if self.typed.is_empty() => self.switch_tool(Tool::rectangle),
             K::P if self.typed.is_empty() => self.switch_tool(Tool::push_pull),
+            K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
+            K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
+            K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
+            K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
+            // C copies in the tools that can; everywhere else it is Circle.
+            K::C if self.typed.is_empty() => {
+                if self.tool.can_copy() {
+                    self.feed(Input::ToggleCopy);
+                } else {
+                    self.switch_tool(Tool::circle);
+                }
+            }
+            K::G if self.typed.is_empty() => self.switch_tool(Tool::polygon),
+            K::A if self.typed.is_empty() => self.switch_tool(Tool::arc),
+            K::F if self.typed.is_empty() => self.switch_tool(Tool::offset),
             _ => {}
         }
     }
@@ -567,12 +726,13 @@ fn snap_label(kind: SnapKind) -> &'static str {
     }
 }
 
-/// Whether `ch` extends the value being typed. Digits and punctuation always
-/// start a value; unit letters only continue one, since alone they mean tools.
+/// Whether `ch` extends the value being typed. Digits, punctuation and array
+/// marks always start a value; unit letters only continue one, since alone they
+/// mean tools.
 fn typed_accepts(typed: &str, ch: char) -> bool {
     match ch {
-        '0'..='9' | '.' | ',' | ';' | '-' | '+' => true,
-        'x' | 'X' | 'm' | 'M' | 'c' | 'C' | ' ' => !typed.is_empty(),
+        '0'..='9' | '.' | ',' | ';' | '-' | '+' | 'x' | 'X' | '*' | '/' => true,
+        'm' | 'M' | 'c' | 'C' | 's' | 'S' | ' ' => !typed.is_empty(),
         _ => false,
     }
 }
@@ -672,9 +832,28 @@ impl eframe::App for App {
 impl App {
     /// One frame of the whole window. The smoke test drives this directly.
     fn shell(&mut self, ui: &mut egui::Ui) {
+        let (now, close_asked) = ui.ctx().input(|i| (i.time, i.viewport().close_requested()));
+        if close_asked && !self.closing {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.leave(Leaving::Close);
+        }
+        if self.closing {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        self.run_autosave(now);
+        if self.autosave_stale {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_S));
+        }
+        self.dialogs(ui.ctx());
+        if self.modal() {
+            // Keys and clicks answer the dialog, not the tool.
+            ui.ctx().input_mut(|i| i.events.clear());
+        }
         self.handle_keys(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("File:");
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
                 self.path_focused = field.has_focus();
@@ -684,10 +863,10 @@ impl App {
                 }
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Buka").clicked() || enter {
-                    self.open();
+                    self.leave(Leaving::Open);
                 }
                 if ui.button("Baru").clicked() {
-                    self.new_project();
+                    self.leave(Leaving::New);
                 }
                 if ui.button("Simpan").clicked() {
                     self.save();
@@ -697,7 +876,15 @@ impl App {
                     ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
                     ("Garis (L)", Tool::line),
                     ("Persegi (R)", Tool::rectangle),
+                    ("Lingkaran (C)", Tool::circle),
+                    ("Poligon (G)", Tool::polygon),
+                    ("Busur (A)", Tool::arc),
                     ("Push/Pull (P)", Tool::push_pull),
+                    ("Offset (F)", Tool::offset),
+                    ("Pindah (M)", Tool::move_tool),
+                    ("Putar (Q)", Tool::rotate),
+                    ("Skala (S)", Tool::scale),
+                    ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui
                         .selectable_label(self.tool.same_kind(&make(0.0)), label)
@@ -733,6 +920,10 @@ impl App {
                     &self.typed
                 });
                 ui.separator();
+                if self.tool.copying() {
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
+                    ui.separator();
+                }
                 if let Some(hit) = self.tool.preview().snap {
                     ui.label(snap_label(hit.snap.kind));
                     ui.separator();
@@ -799,10 +990,12 @@ impl App {
                 {
                     self.view_rect = rect;
                 }
-                self.navigate(ui, &resp, size);
-                // The panels above were drawn before this input: show it now.
-                if self.pointer_input(&resp, rect, size) {
-                    ui.ctx().request_repaint();
+                if !self.modal() {
+                    self.navigate(ui, &resp, size);
+                    // The panels above were drawn before this input: show it now.
+                    if self.pointer_input(&resp, rect, size) {
+                        ui.ctx().request_repaint();
+                    }
                 }
                 self.refresh_overlay(size.y);
                 self.render();
@@ -810,6 +1003,56 @@ impl App {
                     egui::Image::new((v.id, size)).paint_at(ui, rect);
                 }
             });
+    }
+
+    fn modal(&self) -> bool {
+        self.recovery || self.leaving.is_some()
+    }
+
+    /// The questions that must be answered before going on.
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let window = |title: &str| {
+            egui::Window::new(title.to_owned())
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        };
+        if self.recovery {
+            window("Pulihkan pekerjaan?").show(ctx, |ui| {
+                ui.label("Ada autosave dari sesi yang tidak berakhir normal.");
+                ui.horizontal(|ui| {
+                    if ui.button("Pulihkan").clicked() {
+                        self.recover();
+                    }
+                    if ui.button("Buang").clicked() {
+                        self.discard_recovery();
+                    }
+                });
+            });
+        }
+        if let Some(what) = self.leaving {
+            window("Perubahan belum disimpan").show(ctx, |ui| {
+                ui.label("Perubahan terakhir belum disimpan.");
+                ui.horizontal(|ui| {
+                    if ui.button("Simpan").clicked() {
+                        self.save();
+                        if !self.unsaved {
+                            self.do_leave(what);
+                        } else {
+                            // The reason is in the status bar.
+                            self.leaving = None;
+                        }
+                    }
+                    if ui.button("Buang").clicked() {
+                        self.unsaved = false;
+                        self.do_leave(what);
+                    }
+                    if ui.button("Batal").clicked() {
+                        self.leaving = None;
+                    }
+                });
+            });
+        }
     }
 
     /// Middle-drag, or Alt + left-drag on a trackpad: orbit; with Shift: pan.
@@ -969,7 +1212,8 @@ mod tests {
     #[test]
     fn unit_letters_only_continue_a_value() {
         assert!(typed_accepts("", '5') && typed_accepts("", '-') && typed_accepts("", ','));
-        assert!(!typed_accepts("", 'm') && !typed_accepts("", 'x') && !typed_accepts("", ' '));
+        assert!(!typed_accepts("", 'm') && !typed_accepts("", 'c') && !typed_accepts("", ' '));
+        assert!(typed_accepts("", 'x') && typed_accepts("", '*') && typed_accepts("", '/'));
         assert!(typed_accepts("5", 'x') && typed_accepts("250", 'c') && typed_accepts("5", ' '));
         assert!(!typed_accepts("5", 'l') && !typed_accepts("", 'p'));
     }

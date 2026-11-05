@@ -12,13 +12,15 @@ pub mod vcb;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZeroU32;
 
 use inference::{
     InferenceScene, PickRay, RANK_TIE_FRACTION, Snap, SnapKind, SnapQuery, SnapSource,
     rank_distance_bucket,
 };
 use kernel::{
-    Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchRegionId, Transform, Vec3,
+    Document, KernelOp, NodeId, ObjectId, Plane, Point3, SketchId, SketchIslandId, SketchRegionId,
+    Transform, Vec3,
 };
 use wangungis_scene::project::{
     Project, ProjectError, TileKey, horizontal_reach, node_points, node_visible,
@@ -98,6 +100,49 @@ pub struct Drawn {
     /// A new region closed, on a sketch or as a split of a face.
     pub closed: bool,
 }
+
+/// What Move can pick up. Coordinates are tile-local.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Movable {
+    /// A whole top-level object, group or component instance.
+    Node { tile: TileKey, node: NodeId },
+    /// A connected drawing on a free sketch. `segments` outlives the id:
+    /// drafting a copy rewrites the sketch.
+    Island {
+        tile: TileKey,
+        sketch: SketchId,
+        island: SketchIslandId,
+        segments: Vec<(Point3, Point3)>,
+    },
+}
+
+impl Movable {
+    pub fn tile(&self) -> TileKey {
+        match self {
+            Movable::Node { tile, .. } | Movable::Island { tile, .. } => *tile,
+        }
+    }
+}
+
+/// What the Eraser would remove at a snap.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Erasable {
+    /// A whole top-level solid: its edge is no drawing, so nothing less is valid.
+    Node { tile: TileKey, node: NodeId },
+    /// A drawn line, free or dividing a solid's face. Tile-local.
+    Line {
+        tile: TileKey,
+        plane: Plane,
+        a: Point3,
+        b: Point3,
+    },
+}
+
+/// Lines drawn for a picked object at most. Past this the preview is partial,
+/// never the edit.
+const MAX_PREVIEW_LINES: usize = 5_000;
+/// A displacement this short (m) along a sketch's normal keeps it on its plane.
+const IN_PLANE: f64 = 1e-6;
 
 /// One shard of a tile: what it holds, tile-local bounds to reject rays cheaply,
 /// and its index once a ray has needed it.
@@ -180,8 +225,9 @@ pub struct Scene {
     cells: BTreeMap<TileKey, Cells>,
     /// No geometry: answers pure-direction snaps (project axes, axis locks).
     base: InferenceScene,
-    undo: Vec<TileKey>,
-    redo: Vec<TileKey>,
+    /// Edits in order: their tile, and how many Hew steps each took.
+    undo: Vec<(TileKey, u32)>,
+    redo: Vec<(TileKey, u32)>,
     dirty: BTreeSet<TileKey>,
 }
 
@@ -191,6 +237,30 @@ fn offset(p: Point3, c: [f64; 3]) -> Point3 {
 
 fn onset(p: Point3, c: [f64; 3]) -> Point3 {
     Point3::new(p.x + c[0], p.y + c[1], p.z + c[2])
+}
+
+/// The plane of the two faces `edge` divides, when they lie on one plane facing
+/// the same way: such an edge is drawing, any other holds the solid together.
+fn dividing_plane(object: &kernel::Object, edge: kernel::EdgeId) -> Option<Plane> {
+    let he = object.half_edges().values().find(|h| h.edge == edge)?;
+    let twin = &object.half_edges()[he.twin?];
+    let (f, g) = (
+        object.loops()[he.loop_id].face,
+        object.loops()[twin.loop_id].face,
+    );
+    let (p, q) = (object.faces()[f].plane, object.faces()[g].plane);
+    let same = f != g
+        && p.normal().dot(q.normal()) > 1.0 - IN_PLANE
+        && p.signed_distance(q.point()).abs() <= IN_PLANE;
+    same.then_some(p)
+}
+
+/// `t`, given in project-local coordinates, as seen from a tile centered at `c`.
+fn tile_transform(t: &Transform, c: [f64; 3]) -> Transform {
+    let to = Vec3::new(c[0], c[1], c[2]);
+    Transform::translation(to)
+        .then(t)
+        .then(&Transform::translation(-to))
 }
 
 fn shifted_plane(plane: Plane, c: [f64; 3]) -> Result<Plane, kernel::MathError> {
@@ -593,7 +663,12 @@ impl Scene {
 
     /// Records a finished edit on `key` as one project undo step.
     fn record(&mut self, key: TileKey) {
-        self.undo.push(key);
+        self.record_steps(key, 1);
+    }
+
+    /// Records `steps` Hew steps on `key` as one project undo step.
+    fn record_steps(&mut self, key: TileKey, steps: u32) {
+        self.undo.push((key, steps));
         self.redo.clear();
         self.touch(key);
     }
@@ -632,14 +707,30 @@ impl Scene {
             local.push((offset(*a, c), offset(*b, c)));
         }
         let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        self.run_draft(key, plane, "draw", |sk| {
+            let mut closed = false;
+            for (a, b) in &local {
+                closed |= !sk.add_segment(*a, *b)?.regions_created.is_empty();
+            }
+            Ok(closed)
+        })
+    }
+
+    /// One draft on tile `key` as one undo step. `plane` is tile-local; `edit`
+    /// answers whether a region closed.
+    fn run_draft(
+        &mut self,
+        key: TileKey,
+        plane: Plane,
+        label: &str,
+        edit: impl FnOnce(&mut kernel::Sketch) -> Result<bool, kernel::SketchError>,
+    ) -> Result<Drawn, EditError> {
         let existed = self.project.tiles.contains_key(&key);
         let doc = self.project.tile_mut(key)?;
         let objects = doc.drawable_objects_on_plane(plane, None);
         let mut closed = false;
-        let drafted = doc.draft(plane, None, &objects, "draw", |sk| {
-            for (a, b) in &local {
-                closed |= !sk.add_segment(*a, *b)?.regions_created.is_empty();
-            }
+        let drafted = doc.draft(plane, None, &objects, label, |sk| {
+            closed = edit(sk)?;
             Ok(())
         });
         let report = match drafted {
@@ -661,6 +752,438 @@ impl Scene {
             sketch: report.sketches.last().copied(),
             closed,
         })
+    }
+
+    /// Draws a circle, polygon or arc (`points`, project-local, in order; closed
+    /// back to the first when `closed`) on the circle at `center`, as one curve
+    /// and one undo step.
+    pub fn draw_curve(
+        &mut self,
+        tile: TileKey,
+        plane: Plane,
+        points: &[Point3],
+        closed: bool,
+        center: Point3,
+        kind: kernel::SketchCurveKind,
+    ) -> Result<Drawn, EditError> {
+        let c = tile.center();
+        let radius = (points.first().copied().unwrap_or(center) - center).length();
+        let mut local = Vec::with_capacity(points.len());
+        for p in points {
+            check_local([p.x, p.y, p.z]).map_err(|_| EditError::OutOfProject)?;
+            let reach_m = (p.x - c[0]).hypot(p.y - c[1]);
+            if reach_m > KERNEL_FRAME_BOUND_M {
+                return Err(EditError::OutOfTile { tile, reach_m });
+            }
+            local.push(offset(*p, c));
+        }
+        let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        let geom = kernel::CurveGeom {
+            center: offset(center, c),
+            radius,
+        };
+        self.run_draft(tile, plane, "curve", |sk| {
+            sk.begin_curve_with_kind(geom, kind)?;
+            let mut made = false;
+            let n = local.len();
+            let spans = if closed { n } else { n.saturating_sub(1) };
+            let mut result = Ok(());
+            for k in 0..spans {
+                match sk.add_segment(local[k], local[(k + 1) % n]) {
+                    Ok(added) => made |= !added.regions_created.is_empty(),
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+            sk.end_curve();
+            result.map(|()| made)
+        })
+    }
+
+    /// Offsets the region or face holding `at` by `distance`, as one undo step.
+    /// Positive is outward. Project-local.
+    pub fn offset(
+        &mut self,
+        tile: TileKey,
+        plane: Plane,
+        at: Point3,
+        distance: f64,
+    ) -> Result<Drawn, EditError> {
+        Self::check_distance(distance)?;
+        let c = tile.center();
+        let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        let at = offset(at, c);
+        let at = at - plane.normal() * plane.signed_distance(at);
+        self.run_draft(tile, plane, "offset", |sk| {
+            let mut best = None;
+            for (id, r) in sk.regions().iter() {
+                if !r.faceless && sk.region_contains_point(id, at)? {
+                    let area = sk.region_area(id)?;
+                    if best.is_none_or(|(_, b)| area < b) {
+                        best = Some((id, area));
+                    }
+                }
+            }
+            let (region, _) = best.ok_or(kernel::SketchError::UnknownRegion)?;
+            sk.offset_region(region, distance)?;
+            Ok(true)
+        })
+    }
+
+    /// What Move would pick up at `hit`: the top-level node of a solid, or the
+    /// connected drawing of a sketch. `None` over nothing movable.
+    pub fn movable_at(&self, hit: &Hit) -> Option<Movable> {
+        let doc = self.project.tiles.get(&hit.tile)?;
+        let tile = hit.tile;
+        if let Some(source) = hit.snap.source {
+            let node = doc
+                .top_level_nodes()
+                .into_iter()
+                .find(|n| match source.instance {
+                    Some(inst) => doc.leaf_instances_under(*n).contains(&inst),
+                    None => doc.leaf_objects_under(*n).contains(&source.object),
+                })?;
+            return Some(Movable::Node { tile, node });
+        }
+        let at = offset(hit.snap.position, tile.center());
+        let on_sketch = |sketch: SketchId| -> Option<kernel::SketchEdgeId> {
+            let sk = doc.sketch(sketch)?;
+            if let Some((_, edge)) = hit.snap.sketch_source.filter(|s| s.0 == sketch) {
+                return Some(edge);
+            }
+            let corner = match hit.snap.sketch_region_source.filter(|s| s.0 == sketch) {
+                Some((_, region)) => *sk.regions().get(region)?.outer.first()?,
+                // A corner comes with no provenance: find it by position.
+                None if hit.snap.kind == SnapKind::Endpoint => {
+                    sk.vertices()
+                        .iter()
+                        .find(|(_, v)| (v.position - at).length() <= IN_PLANE)?
+                        .0
+                }
+                None => return None,
+            };
+            sk.edges()
+                .iter()
+                .find(|(_, e)| e.from == corner || e.to == corner)
+                .map(|(id, _)| id)
+        };
+        let (sketch, edge) = doc
+            .visible_sketch_ids()
+            .into_iter()
+            .find_map(|s| on_sketch(s).map(|e| (s, e)))?;
+        let sk = doc.sketch(sketch)?;
+        let island = sk.island_of_edge(edge)?;
+        let segments = sk.islands().get(island)?.edges.iter().map(|e| {
+            let e = &sk.edges()[*e];
+            (sk.vertices()[e.from].position, sk.vertices()[e.to].position)
+        });
+        Some(Movable::Island {
+            tile,
+            sketch,
+            island,
+            segments: segments.collect(),
+        })
+    }
+
+    /// The center of `m`'s bounds, project-local: the pivot for scaling.
+    pub fn movable_center(&self, m: &Movable) -> Option<Point3> {
+        let doc = self.project.tiles.get(&m.tile())?;
+        let points: Vec<Point3> = match m {
+            Movable::Node { node, .. } => node_points(doc, *node),
+            Movable::Island { segments, .. } => {
+                segments.iter().flat_map(|(a, b)| [*a, *b]).collect()
+            }
+        };
+        let (first, rest) = points.split_first()?;
+        let (mut lo, mut hi) = (*first, *first);
+        for p in rest {
+            lo = Point3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = Point3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+        }
+        let mid = Point3::new(
+            (lo.x + hi.x) / 2.0,
+            (lo.y + hi.y) / 2.0,
+            (lo.z + hi.z) / 2.0,
+        );
+        Some(onset(mid, m.tile().center()))
+    }
+
+    /// The edges of `m`, project-local, for the preview.
+    pub fn movable_lines(&self, m: &Movable) -> Vec<(Point3, Point3)> {
+        let c = m.tile().center();
+        let Some(doc) = self.project.tiles.get(&m.tile()) else {
+            return Vec::new();
+        };
+        let mut lines = Vec::new();
+        match m {
+            Movable::Island { segments, .. } => lines.extend(segments.iter().copied()),
+            Movable::Node { node, .. } => {
+                let mut push = |o: ObjectId, t: Transform| {
+                    let Some(obj) = doc.object(o) else { return };
+                    lines.extend(obj.edges().keys().filter_map(|e| {
+                        let (a, b) = obj.edge_endpoints(e)?;
+                        Some((t.apply_point(a), t.apply_point(b)))
+                    }));
+                };
+                for o in doc.leaf_objects_under(*node) {
+                    push(o, Transform::IDENTITY);
+                }
+                for inst in doc.leaf_instances_under(*node) {
+                    let (Some(def), Some(pose)) = (doc.instance_def(inst), doc.instance_pose(inst))
+                    else {
+                        continue;
+                    };
+                    for (member, local) in doc.expanded_def_placements(def) {
+                        push(member, local.then(&pose));
+                    }
+                }
+            }
+        }
+        lines.truncate(MAX_PREVIEW_LINES);
+        lines
+            .into_iter()
+            .map(|(a, b)| (onset(a, c), onset(b, c)))
+            .collect()
+    }
+
+    /// What the Eraser would remove at `hit`: only edges count, as faces belong
+    /// to their edges. `None` over a face, a corner, or nothing.
+    pub fn erasable_at(&self, hit: &Hit) -> Option<Erasable> {
+        let tile = hit.tile;
+        let doc = self.project.tiles.get(&tile)?;
+        if let Some((sketch, edge)) = hit.snap.sketch_source {
+            let sk = doc.sketch(sketch)?;
+            let e = sk.edges().get(edge)?;
+            return Some(Erasable::Line {
+                tile,
+                plane: sk.plane(),
+                a: sk.vertices()[e.from].position,
+                b: sk.vertices()[e.to].position,
+            });
+        }
+        let source = hit.snap.source?;
+        let inference::ElementRef::Edge(edge) = source.element else {
+            return None;
+        };
+        let node = |doc: &Document| {
+            doc.top_level_nodes()
+                .into_iter()
+                .find(|n| match source.instance {
+                    Some(inst) => doc.leaf_instances_under(*n).contains(&inst),
+                    None => doc.leaf_objects_under(*n).contains(&source.object),
+                })
+        };
+        if source.instance.is_none() {
+            let object = doc.object(source.object)?;
+            let (a, b) = object.edge_endpoints(edge)?;
+            if let Some(plane) = dividing_plane(object, edge) {
+                return Some(Erasable::Line { tile, plane, a, b });
+            }
+        }
+        Some(Erasable::Node {
+            tile,
+            node: node(doc)?,
+        })
+    }
+
+    /// Lines to highlight what would be erased, project-local.
+    pub fn erasable_lines(&self, e: &Erasable) -> Vec<(Point3, Point3)> {
+        match e {
+            Erasable::Node { tile, node } => self.movable_lines(&Movable::Node {
+                tile: *tile,
+                node: *node,
+            }),
+            Erasable::Line { tile, a, b, .. } => {
+                let c = tile.center();
+                vec![(onset(*a, c), onset(*b, c))]
+            }
+        }
+    }
+
+    /// Removes `e` as one undo step. A line's faces fall with it: a loop it
+    /// closed opens, and on a solid the two faces it divided merge.
+    pub fn erase(&mut self, e: &Erasable) -> Result<(), EditError> {
+        match e {
+            Erasable::Node { tile, node } => {
+                let doc = self.project.tile_mut(*tile)?;
+                doc.delete_node(*node).map_err(kernel_err)?;
+                self.record(*tile);
+            }
+            Erasable::Line { tile, plane, a, b } => {
+                let doc = self.project.tile_mut(*tile)?;
+                let objects = doc.drawable_objects_on_plane(*plane, None);
+                let (report, _) = doc
+                    .draft(*plane, None, &objects, "erase", |sk| {
+                        // Drafting may have split it where other drawing meets it.
+                        let on = |p: Point3| {
+                            let (u, v) = (*b - *a, p - *a);
+                            let t = (v.dot(u) / u.dot(u)).clamp(0.0, 1.0);
+                            (v - u * t).length() <= IN_PLANE
+                        };
+                        let pieces: Vec<_> = sk
+                            .edges()
+                            .iter()
+                            .filter(|(_, e)| {
+                                let (p, q) =
+                                    (sk.vertices()[e.from].position, sk.vertices()[e.to].position);
+                                on(p) && on(q)
+                            })
+                            .map(|(id, _)| id)
+                            .collect();
+                        for piece in pieces {
+                            sk.remove_edge(piece)?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(kernel_err)?;
+                if !report.objects.is_empty() || !report.sketches.is_empty() {
+                    self.record(*tile);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses a transform whose `count`th power carries `m` past the tile or
+    /// project bound, or any power on the way. `step` is project-local.
+    fn check_moved(&self, m: &Movable, step: &Transform, count: u32) -> Result<(), EditError> {
+        let key = m.tile();
+        let doc = self
+            .project
+            .tiles
+            .get(&key)
+            .ok_or(EditError::Kernel("tile hilang".into()))?;
+        let mut points: Vec<Point3> = match m {
+            Movable::Node { node, .. } => node_points(doc, *node),
+            Movable::Island { segments, .. } => {
+                segments.iter().flat_map(|(a, b)| [*a, *b]).collect()
+            }
+        };
+        let c = key.center();
+        let local = tile_transform(step, c);
+        for _ in 0..count {
+            for p in &mut points {
+                *p = local.apply_point(*p);
+                let reach_m = p.x.hypot(p.y);
+                if reach_m > KERNEL_FRAME_BOUND_M {
+                    return Err(EditError::OutOfTile { tile: key, reach_m });
+                }
+                let q = onset(*p, c);
+                check_local([q.x, q.y, q.z]).map_err(|_| EditError::OutOfProject)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies `t` (project-local) to `m` as one undo step. It stays in its
+    /// tile, up to the kernel frame bound.
+    pub fn transform(&mut self, m: &Movable, t: &Transform) -> Result<(), EditError> {
+        self.check_moved(m, t, 1)?;
+        let local = tile_transform(t, m.tile().center());
+        let doc = self.project.tile_mut(m.tile())?;
+        match m {
+            Movable::Node { node, .. } => doc
+                .transform_selection(&[*node], &[], &local)
+                .map_err(kernel_err)?,
+            Movable::Island { sketch, island, .. } => doc
+                .transform_sketch_island(*sketch, *island, &local)
+                .map_err(kernel_err)?,
+        };
+        self.record(m.tile());
+        Ok(())
+    }
+
+    /// Makes `count` copies of `m`, each `step` (project-local) past the last.
+    /// One undo step.
+    pub fn copy(
+        &mut self,
+        m: &Movable,
+        step: &Transform,
+        count: NonZeroU32,
+    ) -> Result<(), EditError> {
+        self.check_moved(m, step, count.get())?;
+        let key = m.tile();
+        let local = tile_transform(step, key.center());
+        let doc = self.project.tile_mut(key)?;
+        match m {
+            Movable::Node { node, .. } => {
+                doc.duplicate_nodes_array(&[*node], &local, count)
+                    .map_err(kernel_err)?;
+                self.record(key);
+            }
+            Movable::Island {
+                sketch,
+                island,
+                segments,
+                ..
+            } => {
+                let plane = doc
+                    .sketch(*sketch)
+                    .ok_or(EditError::Kernel("sketch hilang".into()))?
+                    .plane();
+                // Every copy of every point on the plane: the kernel can draft them.
+                let stays = {
+                    let mut placed: Vec<Point3> =
+                        segments.iter().flat_map(|(a, b)| [*a, *b]).collect();
+                    (0..count.get()).all(|_| {
+                        placed.iter_mut().all(|p| {
+                            *p = local.apply_point(*p);
+                            plane.signed_distance(*p).abs() <= IN_PLANE
+                        })
+                    })
+                };
+                if stays {
+                    // One draft: the copies join the drawing and undo together.
+                    self.run_draft(key, plane, "copy", |sk| {
+                        let mut placed = segments.clone();
+                        for _ in 0..count.get() {
+                            for (a, b) in &mut placed {
+                                *a = local.apply_point(*a);
+                                *b = local.apply_point(*b);
+                                sk.add_segment(*a, *b)?;
+                            }
+                        }
+                        Ok(false)
+                    })?;
+                } else {
+                    // Hew takes one step per copy: the project counts them as one.
+                    let mut t = Transform::IDENTITY;
+                    let mut made = 0;
+                    for _ in 0..count.get() {
+                        t = t.then(&local);
+                        if let Err(e) = doc.copy_sketch_islands(*sketch, &[*island], &t) {
+                            for _ in 0..made {
+                                doc.undo().map_err(kernel_err)?;
+                            }
+                            return Err(kernel_err(e));
+                        }
+                        made += 1;
+                    }
+                    self.record_steps(key, made);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Replaces the copy just made (the last undo step) by `count` copies at
+    /// `step`, so copy-then-array is a single step. On refusal the first copy
+    /// stays as it was.
+    pub fn respace_copy(
+        &mut self,
+        m: &Movable,
+        step: &Transform,
+        count: NonZeroU32,
+    ) -> Result<(), EditError> {
+        self.check_moved(m, step, count.get())?;
+        self.undo()?;
+        let made = self.copy(m, step, count);
+        if made.is_err() {
+            self.redo()?;
+        }
+        made
     }
 
     /// Undoes the op just applied when it pushed the tile past the kernel
@@ -736,24 +1259,30 @@ impl Scene {
 
     /// Undoes the latest edit, in whichever tile it happened.
     pub fn undo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some(key) = self.undo.last().copied() else {
+        let Some((key, steps)) = self.undo.last().copied() else {
             return Ok(None);
         };
-        self.project.tile_mut(key)?.undo().map_err(kernel_err)?;
+        let doc = self.project.tile_mut(key)?;
+        for _ in 0..steps {
+            doc.undo().map_err(kernel_err)?;
+        }
         self.undo.pop();
-        self.redo.push(key);
+        self.redo.push((key, steps));
         self.touch(key);
         Ok(Some(key))
     }
 
     /// Redoes the latest undone edit.
     pub fn redo(&mut self) -> Result<Option<TileKey>, EditError> {
-        let Some(key) = self.redo.last().copied() else {
+        let Some((key, steps)) = self.redo.last().copied() else {
             return Ok(None);
         };
-        self.project.tile_mut(key)?.redo().map_err(kernel_err)?;
+        let doc = self.project.tile_mut(key)?;
+        for _ in 0..steps {
+            doc.redo().map_err(kernel_err)?;
+        }
         self.redo.pop();
-        self.undo.push(key);
+        self.undo.push((key, steps));
         self.touch(key);
         Ok(Some(key))
     }

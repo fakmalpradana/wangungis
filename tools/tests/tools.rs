@@ -482,3 +482,414 @@ proptest! {
         prop_assert!(s.take_dirty().is_empty());
     }
 }
+
+/// Solids in the project and the top of the highest one.
+fn solid_count(s: &Scene) -> usize {
+    s.project()
+        .tiles
+        .values()
+        .map(|d| d.visible_object_ids().len())
+        .sum()
+}
+
+fn box_at_10(s: &mut Scene) {
+    typed_rectangle(s);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, s, [12.5, 12.0, 0.0]);
+    typed(&mut p, s, "3").unwrap();
+}
+
+/// East edge, in the tile, of everything.
+fn max_x(s: &Scene) -> f64 {
+    let mut x = f64::MIN;
+    for (key, d) in &s.project().tiles {
+        for id in d.visible_object_ids() {
+            for v in d.object(id).unwrap().vertices().values() {
+                x = x.max(v.position.x + key.center()[0]);
+            }
+        }
+    }
+    x
+}
+
+#[test]
+fn move_by_clicks_and_by_typing() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    // Pick up the box by its top, put the base point down 4 m on.
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(m.busy());
+    assert!(m.preview().lines.len() >= 12, "the box follows");
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut m, &mut s, [16.5, 12.0, 3.0]);
+    assert!(m.preview().lines.len() >= 13);
+    typed(&mut m, &mut s, "4").unwrap();
+    assert!(!m.busy());
+    assert!((max_x(&s) - 19.0).abs() <= MM, "{}", max_x(&s));
+    assert_eq!(solid_count(&s), 1);
+
+    // By clicks, along the same lock, back again.
+    click(&mut m, &mut s, [16.5, 12.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(!m.busy());
+    assert!((max_x(&s) - 15.0).abs() <= 0.01, "{}", max_x(&s));
+}
+
+#[test]
+fn copy_then_count_makes_an_array() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    m.handle(&mut s, Input::ToggleCopy).unwrap();
+    assert!(m.copying());
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut m, &mut s, [20.0, 12.0, 3.0]);
+    typed(&mut m, &mut s, "7").unwrap();
+    assert!(!m.copying(), "the next move is a plain move again");
+    assert_eq!(solid_count(&s), 2);
+
+    typed(&mut m, &mut s, "x10").unwrap();
+    assert_eq!(solid_count(&s), 11);
+    assert!((max_x(&s) - 85.0).abs() <= MM, "{}", max_x(&s));
+    // Another count replaces the array.
+    typed(&mut m, &mut s, "x3").unwrap();
+    assert_eq!(solid_count(&s), 4);
+    assert!((max_x(&s) - 36.0).abs() <= MM, "{}", max_x(&s));
+    // Dividing fills the first distance.
+    typed(&mut m, &mut s, "/7").unwrap();
+    assert_eq!(solid_count(&s), 8);
+    assert!((max_x(&s) - 22.0).abs() <= MM, "{}", max_x(&s));
+    s.undo().unwrap();
+    assert_eq!(solid_count(&s), 1, "the whole array is one step");
+}
+
+#[test]
+fn move_ignores_nothing_and_esc_leaves_no_step() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let saved = s.project().save();
+    let mut m = Tool::move_tool(APERTURE);
+    // Empty space picks up nothing.
+    click(&mut m, &mut s, [200.0, 200.0, 0.0]);
+    assert!(!m.busy());
+    assert!(typed(&mut m, &mut s, "x5").is_err(), "nothing was copied");
+    // A click on the base point itself moves nothing, the gesture stays.
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    assert!(m.busy());
+    m.handle(&mut s, Input::Cancel).unwrap();
+    assert!(!m.busy());
+    assert_eq!(s.project().save(), saved);
+}
+
+/// The cursor over the moved box itself must not lift it towards the eye.
+#[test]
+fn a_box_does_not_climb_its_own_faces() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 10.0, 0.0]);
+    assert!(m.busy());
+    // Over the top of the box, seen from above: a point on its own face.
+    hover(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    let (a, b) = *m.preview().lines.last().unwrap();
+    assert!((b.z - a.z).abs() <= MM, "base {a:?}, cursor {b:?}");
+}
+
+/// A ground click in line with the Z axis starts on the ground, not up the axis.
+#[test]
+fn drawing_does_not_start_up_the_z_axis() {
+    let mut s = scene();
+    // Straight towards the axis from afar: at (1, 1) on the ground, the ray
+    // passes the axis well within the pick cone.
+    let origin = Point3::new(-30.0, -30.0, 30.0);
+    let at = Point3::new(1.0, 1.0, 0.0);
+    let ray = PickRay {
+        origin,
+        direction: at - origin,
+    };
+    let mut r = Tool::rectangle(0.01);
+    r.handle(&mut s, Input::Click(ray)).unwrap();
+    assert!(r.busy());
+    r.handle(&mut s, Input::Typed("2;2".into())).unwrap();
+    assert_box_or_sketch_at_ground(&s);
+}
+
+fn assert_box_or_sketch_at_ground(s: &Scene) {
+    let doc = s.project().tiles.values().next().unwrap();
+    let k = doc.sketch(doc.sketch_ids()[0]).unwrap();
+    for v in k.vertices().values() {
+        assert!(v.position.z.abs() <= MM, "{v:?}");
+    }
+}
+
+#[test]
+fn rotate_by_typing_and_by_clicks_with_a_radial_array() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rotate(APERTURE);
+    // Pivot on the south-west corner, zero direction east.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    assert!(r.busy());
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [10.0, 14.0, 0.0]);
+    assert!(r.preview().lines.len() >= 12);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert!(!r.busy());
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+    s.undo().unwrap();
+
+    // Near 90 degrees by mouse lands on it.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    let a = 91f64.to_radians();
+    click(
+        &mut r,
+        &mut s,
+        [10.0 + 6.0 * a.cos(), 10.0 + 6.0 * a.sin(), 0.0],
+    );
+    assert!(!r.busy());
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+    s.undo().unwrap();
+
+    // Copy at 90, then three copies: four boxes around the corner.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    r.handle(&mut s, Input::ToggleCopy).unwrap();
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert_eq!(solid_count(&s), 2);
+    typed(&mut r, &mut s, "x3").unwrap();
+    assert_eq!(solid_count(&s), 4);
+    assert_box(&s, [10.0, 5.0, 0.0], [14.0, 10.0, 3.0]);
+    s.undo().unwrap();
+    assert_eq!(solid_count(&s), 1);
+}
+
+#[test]
+fn rotation_axis_follows_the_arrow_keys() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rotate(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    r.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    click(&mut r, &mut s, [10.0, 14.0, 0.0]);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert_box(&s, [10.0, 7.0, 0.0], [15.0, 10.0, 4.0]);
+}
+
+#[test]
+fn scale_by_typing_and_by_dragging() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut t = Tool::scale(APERTURE);
+    assert!(typed(&mut t, &mut s, "2").is_err(), "nothing picked yet");
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    assert!(t.busy());
+    assert!(typed(&mut t, &mut s, "-1").is_err(), "no mirroring");
+    assert!(t.busy(), "a refused value leaves the gesture open");
+    typed(&mut t, &mut s, "2").unwrap();
+    assert!(!t.busy());
+    // Doubled about the center of the box.
+    assert_box(&s, [7.5, 8.0, -1.5], [17.5, 16.0, 4.5]);
+    s.undo().unwrap();
+
+    // Away from the center grows it; a click ends it.
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    hover(&mut t, &mut s, [25.0, 14.0, 1.5]);
+    assert!(t.preview().lines.len() >= 12);
+    click(&mut t, &mut s, [25.0, 14.0, 1.5]);
+    assert!(!t.busy());
+    let (lo, hi) = bounds(&s)[0];
+    assert!(hi[0] - lo[0] > 5.5, "{lo:?} {hi:?}");
+    let ratio = (hi[0] - lo[0]) / 5.0;
+    assert!(((hi[2] - lo[2]) / 3.0 - ratio).abs() < 1e-6, "uniform");
+}
+
+fn sketch_points(s: &Scene) -> Vec<Point3> {
+    let doc = s.project().tiles.values().next().unwrap();
+    doc.sketch_ids()
+        .iter()
+        .filter_map(|i| doc.sketch(*i))
+        .flat_map(|k| {
+            k.vertices()
+                .values()
+                .map(|v| v.position)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn circle_and_polygon_with_typed_sizes() {
+    let mut s = scene();
+    let mut c = Tool::circle(APERTURE);
+    click(&mut c, &mut s, [20.0, 20.0, 0.0]);
+    assert!(c.busy());
+    hover(&mut c, &mut s, [23.0, 20.0, 0.0]);
+    assert_eq!(c.preview().lines.len(), 48, "the preview shows the circle");
+    typed(&mut c, &mut s, "2").unwrap();
+    assert!(!c.busy());
+    let pts = sketch_points(&s);
+    assert_eq!(pts.len(), 48);
+    for p in &pts {
+        let r = (p.x - 20.0).hypot(p.y - 20.0);
+        assert!((r - 2.0).abs() <= MM, "{p:?}");
+    }
+    assert_eq!(edges(&s), 48);
+    // One undo step, and it extrudes.
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [20.0, 20.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    assert_eq!(bounds(&s).len(), 1);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(edges(&s), 0);
+
+    let mut g = Tool::polygon(APERTURE);
+    assert!(typed(&mut g, &mut s, "2s").is_err(), "fewer than 3 sides");
+    typed(&mut g, &mut s, "8s").unwrap();
+    click(&mut g, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut g, &mut s, [23.0, 20.0, 0.0]);
+    assert!(!g.busy());
+    assert_eq!(edges(&s), 8);
+
+    let mut c = Tool::circle(APERTURE);
+    assert!(
+        typed(&mut c, &mut s, "12s").is_err(),
+        "a circle has at least 24"
+    );
+    typed(&mut c, &mut s, "24s").unwrap();
+}
+
+#[test]
+fn arc_by_clicks_and_typed_height() {
+    let mut s = scene();
+    let mut a = Tool::arc(APERTURE);
+    click(&mut a, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [26.0, 20.0, 0.0]);
+    assert!(a.busy());
+    hover(&mut a, &mut s, [23.0, 22.0, 0.0]);
+    assert!(a.preview().lines.len() >= 4, "the preview shows the arc");
+    typed(&mut a, &mut s, "3").unwrap();
+    assert!(!a.busy());
+    // A half circle: radius 3 about (23, 20), on the side of the cursor.
+    let pts = sketch_points(&s);
+    assert!(pts.len() >= 5);
+    for p in &pts {
+        let r = (p.x - 23.0).hypot(p.y - 20.0);
+        assert!((r - 3.0).abs() <= MM, "{p:?}");
+        assert!(p.y >= 20.0 - MM, "{p:?}");
+        assert!(p.z.abs() <= MM);
+    }
+    assert!(
+        pts.iter().any(|p| (p.y - 23.0).abs() <= MM),
+        "reaches the apex: {pts:?}"
+    );
+    s.undo().unwrap();
+    assert_eq!(edges(&s), 0, "one undo step");
+
+    // The other side, by mouse.
+    click(&mut a, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [26.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [23.0, 18.0, 0.0]);
+    assert!(!a.busy());
+    assert!(sketch_points(&s).iter().all(|p| p.y <= 20.0 + MM));
+}
+
+#[test]
+fn offset_towards_the_cursor_on_regions_and_faces() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let mut f = Tool::offset(APERTURE);
+    click(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    assert!(f.busy());
+    // Inside, by typing: the rectangle at (10, 10) of 5 x 4 gains a ring inside.
+    hover(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut f, &mut s, "1").unwrap();
+    assert!(!f.busy());
+    assert_eq!(edges(&s), 8);
+    let pts = sketch_points(&s);
+    assert!(
+        pts.iter()
+            .any(|p| (p.x - 11.0).abs() <= MM && (p.y - 11.0).abs() <= MM),
+        "{pts:?}"
+    );
+    s.undo().unwrap();
+
+    // Outside, by mouse.
+    click(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    click(&mut f, &mut s, [12.5, 16.0, 0.0]);
+    assert!(!f.busy());
+    assert_eq!(edges(&s), 8);
+    let top = sketch_points(&s)
+        .iter()
+        .map(|p| p.y)
+        .fold(f64::MIN, f64::max);
+    assert!((top - 16.0).abs() <= MM, "{top}");
+    s.undo().unwrap();
+
+    // On a solid's face: the inner loop splits it.
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    click(&mut f, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut f, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut f, &mut s, "1").unwrap();
+    assert_eq!(faces_where(&s, |p| (p.z - 3.0).abs() <= MM), 2);
+}
+
+/// A line starting on the edge between two faces lies on the one the cursor goes
+/// to, whichever the first click's ray happened to hit.
+#[test]
+fn a_line_from_an_edge_follows_the_cursor_to_its_face() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut l = Tool::line(APERTURE);
+    // The top's south edge, then across the top.
+    click(&mut l, &mut s, [12.5, 10.0, 3.0]);
+    assert!(l.busy());
+    hover(&mut l, &mut s, [12.5, 14.0, 3.0]);
+    click(&mut l, &mut s, [12.5, 14.0, 3.0]);
+    assert!(!l.busy(), "it divides the top, which ends the chain");
+    assert_eq!(faces_where(&s, |p| (p.z - 3.0).abs() <= MM), 2);
+    s.undo().unwrap();
+
+    // The same start, then down the wall to its bottom edge.
+    click(&mut l, &mut s, [12.5, 10.0, 3.0]);
+    click(&mut l, &mut s, [12.5, 10.0, 0.0]);
+    assert!(!l.busy());
+    assert_eq!(faces_where(&s, |p| (p.y - 10.0).abs() <= MM), 2);
+}
+
+/// Typing a value that changes nothing leaves no step; the gesture stays open.
+#[test]
+fn identity_values_are_refused() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let saved = s.project().save();
+    let mut r = Tool::rotate(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    assert!(typed(&mut r, &mut s, "0").is_err());
+    assert!(r.busy());
+    let mut t = Tool::scale(APERTURE);
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    assert!(typed(&mut t, &mut s, "1").is_err());
+    assert!(t.busy());
+    assert_eq!(s.project().save(), saved);
+}
+
+/// A lock set after the cursor last moved still rules the typed direction.
+#[test]
+fn typed_move_keeps_to_a_late_lock() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut m, &mut s, [16.0, 15.0, 3.0]);
+    m.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    typed(&mut m, &mut s, "2").unwrap();
+    assert_box(&s, [12.0, 10.0, 0.0], [17.0, 14.0, 3.0]);
+}
