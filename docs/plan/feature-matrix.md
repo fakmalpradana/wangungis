@@ -21,7 +21,7 @@ Legenda:
 | 5 | Arc (2-point, 3-point, pie) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 6 | Push/Pull (+ live preview) | ✓ | ✓ | M | XL | F0/0.1 | — | U P E | T | parsial |
 | 7 | Push/Pull dengan Ctrl (buat face baru) | ✓ | ? | S | L | 0.1 | — | U P | T | belum |
-| 8 | Follow Me | ✓ | ✓ | C | L | 0.1 | — | U P | T | belum |
+| 8 | Follow Me | ✓ | ✓ | C | L | 0.1 | — | U P | T | parsial |
 | 9 | Offset | ✓ | ✓ | S | M | 0.1 | i_overlay/Clipper2 | U P | T+R | parsial |
 | 10 | Move (+ copy, array) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 11 | Rotate (+ copy, radial array) | ✓ | P | M | M | 0.1 | — | U E | T | parsial |
@@ -46,7 +46,7 @@ Legenda:
 | 25 | Prioritas snapping + tooltip | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
 | 26 | VCB: panjang, jarak, sudut, jumlah array | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 27 | Unit dan presisi tampilan (m, mm, ft) | ✓ | ✓ | M | S | 0.1 | — | U | T | belum |
-| 28 | Tape Measure + guide line/point | ✓ | ✓ | S | M | 0.1 | — | U | T | belum |
+| 28 | Tape Measure + guide line/point | ✓ | ✓ | S | M | 0.1 | — | U | T | parsial |
 | 29 | Protractor | ✓ | ? | C | S | 0.5 | — | U | T | belum |
 | 30 | Inference ke titik di koordinat UTM tanpa galat | – | – | M | M | 0.2 | — | U P | T | belum |
 
@@ -70,9 +70,9 @@ Legenda:
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 42 | Groups (edit di dalam konteks) | ✓ | ✓ | M | M | 0.1 | — | U E | T | belum |
-| 43 | Components (definisi + instance) | ✓ | ✓ | M | L | 0.1 | — | U P | T | belum |
-| 44 | Make unique / explode | ✓ | ? | S | S | 0.1 | — | U | T | belum |
+| 42 | Groups (edit di dalam konteks) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
+| 43 | Components (definisi + instance) | ✓ | ✓ | M | L | 0.1 | — | U P | T | parsial |
+| 44 | Make unique / explode | ✓ | ? | S | S | 0.1 | — | U | T | parsial |
 | 45 | Tags (visibilitas, warna) | ✓ | ✓ | M | S | 0.1 | — | U | T | belum |
 | 46 | Outliner | ✓ | ✓ | M | M | 0.1 | — | E | T | belum |
 | 47 | Scenes (kamera, tag, style tersimpan) | ✓ | ✓ | S | M | 0.5 | — | U | T | belum |

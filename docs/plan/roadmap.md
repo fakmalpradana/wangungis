@@ -70,7 +70,7 @@ Ketiganya belum cukup untuk kriteria keluar v0.1 (kotak dengan pintu, lalu disal
 - Save, load, save byte-identik: **lulus** di test yang sama.
 - Rilis `v0.1.0`: **belum**. Butuh keputusan pemilik karena publik, dan uji beta 3D engineer.
 
-Fitur v0.1 yang sudah ada dicatat di `feature-matrix.md`. Yang belum: Follow Me (#8), Push/Pull Ctrl (#7), inference paralel (#24), Tape Measure (#28), Group/Component (#42–#44), Tags dan Outliner (#45–#46), Paint Bucket (#49), shortcut yang bisa diubah (#97).
+Fitur v0.1 yang sudah ada dicatat di `feature-matrix.md`. Yang belum: Push/Pull Ctrl (#7), inference paralel (#24), unit tampilan (#27), edit isi grup di tempat (#42), Tags dan Outliner (#45–#46), Paint Bucket (#49), proyeksi paralel (#33), shortcut yang bisa diubah (#97). Urutannya sebaiknya mengikuti umpan balik 3D engineer.
 
 ## Fase 0 — Fondasi dan spike
 
