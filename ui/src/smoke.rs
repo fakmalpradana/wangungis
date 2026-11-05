@@ -737,6 +737,41 @@ fn a_parked_pointer_follows_the_tool() {
     close([from.x, from.y, from.z], [5.0, 4.0, 0.0]);
 }
 
+/// A click that snapped sits a few pixels from what it picked. With the mouse
+/// still, those pixels are no direction: a typed distance has nothing to follow.
+#[test]
+fn a_snapped_click_is_not_a_direction() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+
+    draw_a_box(&mut d);
+    let size = d.extents();
+    d.letter(K::M, "m");
+    let beside_corner = d.pixel([2.0, 2.0, 3.0]) + egui::vec2(-3.0, 0.0);
+    d.click_at(beside_corner);
+    assert!(d.app.tool.busy(), "the corner picks the box");
+    d.frame(vec![]);
+
+    let refused = |d: &mut Driver| {
+        d.frame(vec![egui::Event::Text("5".into())]);
+        d.key(K::Enter);
+        assert!(d.app.error.is_some(), "a distance with no direction");
+        assert!(d.app.tool.busy());
+        close(d.extents(), size);
+        on_the_ground(d, [2.0, 2.0]);
+    };
+    refused(&mut d);
+    d.key(K::ArrowRight);
+    refused(&mut d);
+
+    // Moving the mouse gives it one.
+    d.hover([12.0, 2.0, 3.0]);
+    d.value("5");
+    assert!(!d.app.tool.busy());
+    on_the_ground(&d, [7.0, 2.0]);
+}
+
 #[test]
 fn a_click_drops_the_value_being_typed() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -803,8 +838,15 @@ fn the_keyboard_and_the_path_box() {
     assert_eq!(d.app.path, "abc", "the box has the keyboard");
     d.key(K::Escape);
     assert!(d.app.tool.busy(), "the rectangle survives");
+    d.key(K::Enter);
+    assert_eq!(d.app.error, None, "Enter after leaving opens nothing");
     d.key(K::Escape);
     assert!(!d.app.tool.busy(), "the next Esc is for the tool");
+
+    // Enter in the box still opens its path.
+    d.click_at(box_at);
+    d.key(K::Enter);
+    assert!(d.app.error.is_some(), "abc does not exist");
 
     // Cmd+S works from the box.
     let dir = std::env::temp_dir().join(format!("wangungis-box-{}", std::process::id()));

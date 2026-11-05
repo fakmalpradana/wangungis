@@ -8,5 +8,7 @@
 - Ditolak: "tile (0,0) menggelembungkan hitungan" (disengaja, terdokumentasi di `occupied`); saran L/R/P tanpa penjaga `typed` (test mengunci perilaku ini).
 - Kutipan Gemini untuk `text_edit_focused` tidak ada di egui 0.37, klaim perilakunya tetap benar. Selalu cek kutipan.
 - Keputusan: Tab tidak lagi mencapai kotak path; kotak hanya lewat klik. Trade-off aksesibilitas, tercatat di SPEC.
-- Test regresi: 5 di `ui/src/smoke.rs`, 1 di `tools/tests/tools.rs`. Semua gagal dulu sebelum perbaikan.
+- Review Gemini atas perbaikan ini: regresi nyata dari hover ulang setelah klik (Move bergeser ke arah selisih snap) diperbaiki; `lost_focus` dua frame membuat Enter membuka path, diperbaiki. Ditolak: Tab + tombol pada frame yang sama (tidak realistis, akibat kecil).
+- Tidak diperbaiki di sini (dari PR #15): Ctrl + tombol saat dialog terbuka terbaca sebagai ketukan Ctrl, membalik mode salin di balik dialog.
+- Test regresi: 6 di `ui/src/smoke.rs`, 1 di `tools/tests/tools.rs`. Semua gagal dulu sebelum perbaikan.
 - Belum teruji: klik nyata di jendela asli, `docs/user/uji-asap.md` masih untuk 3D engineer.

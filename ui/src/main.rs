@@ -108,6 +108,7 @@ struct App {
     split_on_open: bool,
     overlay_shown: Option<Preview>,
     last_pointer: Option<egui::Pos2>,
+    moved_since_click: bool,
     /// The path box had focus last frame.
     path_focused: bool,
     ctrl_held: bool,
@@ -160,6 +161,7 @@ impl App {
             split_on_open: false,
             overlay_shown: None,
             last_pointer: None,
+            moved_since_click: false,
             path_focused: false,
             ctrl_held: false,
             ctrl_chord: false,
@@ -377,9 +379,14 @@ impl App {
     }
 
     fn feed(&mut self, input: Input) {
-        // Anything but a hover changes what the parked pointer means to the tool.
-        if !matches!(input, Input::Hover(_)) {
-            self.last_pointer = None;
+        match input {
+            Input::Hover(_) => self.moved_since_click = true,
+            // What a click picked sits pixels from the pointer, because of
+            // snapping. That is no direction until the mouse moves.
+            Input::Click(_) => self.moved_since_click = false,
+            // Anything else changes what the parked pointer means to the tool.
+            _ if self.moved_since_click => self.last_pointer = None,
+            _ => {}
         }
         match self.tool.handle(&mut self.scene, input) {
             Ok(()) => {}
@@ -856,12 +863,15 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label("File:");
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
-                self.path_focused = field.has_focus();
+                let had_focus = std::mem::replace(&mut self.path_focused, field.has_focus());
                 #[cfg(test)]
                 {
                     self.path_rect = field.rect;
                 }
-                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // lost_focus stays true a frame longer: an Enter then is not the box's.
+                let enter = had_focus
+                    && field.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Buka").clicked() || enter {
                     self.leave(Leaving::Open);
                 }
