@@ -2233,6 +2233,58 @@ fn every_scene_method_refuses_what_is_out_of_scope() {
     assert_eq!(s.project().save(), saved);
 }
 
+/// A group inside a component: what is drawn in it is its own, while it is open.
+#[test]
+fn a_group_inside_a_component_keeps_its_drawing() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    s.make_component(key, &[group]).unwrap();
+    let instance = s.project().tiles[&key]
+        .top_level_nodes()
+        .into_iter()
+        .find(|n| matches!(n, NodeId::Instance(_)))
+        .unwrap();
+    s.enter(key, instance).unwrap();
+    let inner = s.project().tiles[&key]
+        .session_direct_members()
+        .unwrap()
+        .into_iter()
+        .find(|n| matches!(n, NodeId::Group(_)))
+        .expect("the group surfaces");
+    s.enter(key, inner).unwrap();
+
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [90.0, 10.0, 0.0]);
+    click(&mut l, &mut s, [95.0, 13.0, 0.0]);
+    l.handle(&mut s, Input::Cancel).unwrap();
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [92.5, 11.5, 0.0]);
+    assert!(m.busy(), "its own drawing moves");
+    m.handle(&mut s, Input::Cancel).unwrap();
+
+    while s.leave().unwrap() {}
+    assert!(s.project().tiles[&key].health_report(None).rows.is_empty());
+}
+
+/// With a session open in one tile, another tile does not even start a gesture.
+#[test]
+fn another_tile_does_not_answer_during_a_session() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    typed_rectangle_at(&mut s, [3_000.0, 10.0, 0.0]);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [3_002.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    s.enter(key, group).unwrap();
+
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [3_002.5, 12.0, 3.0]);
+    assert!(!p.busy());
+    let mut m = Tool::move_tool(APERTURE);
+    click(&mut m, &mut s, [3_005.0, 12.0, 3.0]);
+    assert!(!m.busy());
+}
+
 /// A drawing owned by a solid goes with that solid: out of reach while its group
 /// is closed, editable inside.
 #[test]

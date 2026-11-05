@@ -1461,6 +1461,7 @@ impl App {
             fed = true;
         }
         let navigating = resp.ctx.input(|i| i.modifiers.alt);
+        let picked_before = self.tool.picked_nodes();
         if resp.clicked_by(egui::PointerButton::Primary)
             && !navigating
             && let Some(p) = resp.interact_pointer_pos()
@@ -1478,11 +1479,15 @@ impl App {
             });
             fed = true;
         }
-        // The two clicks picked it; now it opens.
+        // Both clicks picked the same thing, so it opens. A quick click on it after
+        // some other click is only a pick.
+        let picked = self.tool.picked_nodes();
         if resp.double_clicked_by(egui::PointerButton::Primary)
             && !navigating
+            && !resp.ctx.input(|i| i.modifiers.shift)
             && self.tool.same_kind(&Tool::select(0.0))
-            && self.tool.picked_nodes().is_some_and(|(_, n)| {
+            && picked == picked_before
+            && picked.is_some_and(|(_, n)| {
                 use kernel::NodeId as N;
                 matches!(n[..], [N::Group(_) | N::Instance(_)])
             })

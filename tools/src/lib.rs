@@ -290,10 +290,15 @@ pub struct Scene {
 /// The sketches an open session owns. Costs a copy of the tile for a group.
 // ponytail: once per edit in a session; incremental if big tiles feel it.
 fn open_sketches(doc: &Document) -> Vec<SketchId> {
-    match doc.group_session_group() {
-        Some(group) => doc.session_closed().group_member_sketches(group),
-        None => doc.explode_session_sketches().unwrap_or_default(),
+    // Innermost only: closing the frames around a group too would pack it away.
+    if let Some(group) = doc.group_session_group() {
+        let mut closed = doc.clone();
+        return match closed.close_innermost_session() {
+            Ok(_) => closed.group_member_sketches(group),
+            Err(_) => Vec::new(),
+        };
     }
+    doc.explode_session_sketches().unwrap_or_default()
 }
 
 fn offset(p: Point3, c: [f64; 3]) -> Point3 {
@@ -699,6 +704,7 @@ impl Scene {
     /// not still hides what is behind it.
     pub fn editable_face(&mut self, ray: &PickRay) -> Option<FaceHit> {
         let hit = self.pick_face(ray)?;
+        self.check_tile(hit.tile).ok()?;
         let doc = self.project.tiles.get(&hit.tile)?;
         source_in_scope(doc, hit.source).then_some(hit)
     }
@@ -765,6 +771,9 @@ impl Scene {
     /// Whether a drawing may be edited now: the open session's own, or with
     /// none open, one that sits in no group.
     pub fn sketch_editable(&self, key: TileKey, sketch: SketchId) -> bool {
+        if self.check_tile(key).is_err() {
+            return false;
+        }
         self.project.tiles.get(&key).is_some_and(|doc| {
             if let Some(owner) = doc.sketch_owner_object(sketch) {
                 in_scope(doc, NodeId::Object(owner))
@@ -925,9 +934,8 @@ impl Scene {
         self.cells.remove(&key);
         self.dirty.insert(key);
         self.open_sketches = self
-            .project
-            .tiles
-            .get(&key)
+            .session()
+            .and_then(|(open, _)| self.project.tiles.get(&open))
             .map(open_sketches)
             .unwrap_or_default();
     }
@@ -1091,6 +1099,7 @@ impl Scene {
     /// What Move would pick up at `hit`: the top-level node of a solid, or the
     /// connected drawing of a sketch. `None` over nothing movable.
     pub fn movable_at(&self, hit: &Hit) -> Option<Movable> {
+        self.check_tile(hit.tile).ok()?;
         let doc = self.project.tiles.get(&hit.tile)?;
         let tile = hit.tile;
         if let Some(source) = hit.snap.source {
@@ -1209,6 +1218,7 @@ impl Scene {
     /// What the Eraser would remove at `hit`: only edges count, as faces belong
     /// to their edges. `None` over a face, a corner, or nothing.
     pub fn erasable_at(&self, hit: &Hit) -> Option<Erasable> {
+        self.check_tile(hit.tile).ok()?;
         let tile = hit.tile;
         let doc = self.project.tiles.get(&tile)?;
         if let Some((sketch, edge)) = hit.snap.sketch_source {

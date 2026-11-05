@@ -793,7 +793,12 @@ fn edit_a_group_in_place_through_the_app() {
     d.click([4.5, 4.0, 3.0]);
     assert!(!d.app.tool.busy());
 
+    // A quick click after the one above is a double click to egui, but it only picks.
     d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    assert_eq!(d.app.session_label(), None);
+    d.key(K::Escape);
+
     // Far from the click before: a third quick click is no double click.
     d.time += 1.0;
     let at = d.pixel([4.5, 4.0, 3.0]);
