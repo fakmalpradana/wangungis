@@ -1,7 +1,7 @@
 //! Tools driven by scripted input, the way the UI will drive them: rays and
 //! typed text in, geometry out. This is the uji asap without a GPU.
 
-use inference::{Axis, PickRay};
+use inference::{Axis, PickRay, SnapKind};
 use kernel::{Point3, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
@@ -1488,5 +1488,130 @@ proptest! {
             Some(Vcb::Two(a, b)) => prop_assert!(a.is_finite() && b.is_finite()),
             _ => {}
         }
+    }
+}
+
+/// A free line from `a` to `b`, then Esc.
+fn free_line(s: &mut Scene, a: [f64; 3], b: [f64; 3]) {
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, s, a);
+    click(&mut l, s, b);
+    l.handle(s, Input::Cancel).unwrap();
+}
+
+fn snap_kind(t: &Tool) -> Option<SnapKind> {
+    t.preview().snap.map(|h| h.snap.kind)
+}
+
+/// What a pointer resting on the model snaps to, strongest first.
+#[test]
+fn snaps_keep_their_priority() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut l = Tool::line(APERTURE);
+    for (at, want) in [
+        ([15.0, 14.0, 3.0], SnapKind::Endpoint),
+        // Close enough to the edge and its midpoint: the midpoint wins.
+        ([15.0, 11.7, 3.0], SnapKind::Midpoint),
+        // Points pull harder than the aperture alone: far from both on the long edge.
+        ([13.75, 14.0, 3.0], SnapKind::OnEdge),
+        ([12.5, 12.0, 3.0], SnapKind::OnFace),
+    ] {
+        hover(&mut l, &mut s, at);
+        assert_eq!(snap_kind(&l), Some(want), "at {at:?}");
+    }
+}
+
+/// Past an edge, a line runs parallel or square to it, and a click takes what
+/// the hover showed.
+#[test]
+fn a_line_runs_parallel_or_square_to_an_edge_it_passed() {
+    let mut s = scene();
+    free_line(&mut s, [20.0, 20.0, 0.0], [24.0, 23.0, 0.0]);
+
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [40.0, 30.0, 0.0]);
+    hover(&mut l, &mut s, [22.0, 21.5, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Midpoint), "over the edge");
+
+    // Off by a degree or so.
+    hover(&mut l, &mut s, [44.0, 33.1, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Parallel));
+    hover(&mut l, &mut s, [43.0, 26.1, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Perpendicular));
+    // Well off both.
+    hover(&mut l, &mut s, [44.0, 36.0, 0.0]);
+    assert_eq!(snap_kind(&l), None);
+    // Under a lock there is no inference.
+    hover(&mut l, &mut s, [44.0, 33.1, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    hover(&mut l, &mut s, [44.0, 33.1, 0.0]);
+    assert_ne!(snap_kind(&l), Some(SnapKind::Parallel));
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+
+    hover(&mut l, &mut s, [44.0, 33.1, 0.0]);
+    click(&mut l, &mut s, [44.0, 33.1, 0.0]);
+    let end = [40.0 + 0.8 * 5.06, 30.0 + 0.6 * 5.06, 0.0];
+    has_segment(&s, [40.0, 30.0, 0.0], end);
+
+    // The segment just drawn is the next reference, and a typed length follows.
+    hover(&mut l, &mut s, [end[0] - 3.0, end[1] + 4.1, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Perpendicular));
+    typed(&mut l, &mut s, "5").unwrap();
+    has_segment(&s, end, [end[0] - 3.0, end[1] + 4.0, 0.0]);
+}
+
+/// A real point beats the inference even when it lies exactly on that line.
+#[test]
+fn a_corner_beats_running_parallel() {
+    let mut s = scene();
+    free_line(&mut s, [20.0, 20.0, 0.0], [24.0, 23.0, 0.0]);
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [28.0, 26.0, 0.0]);
+    hover(&mut l, &mut s, [22.0, 21.5, 0.0]);
+    hover(&mut l, &mut s, [24.0, 23.0, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Endpoint));
+}
+
+proptest! {
+    /// Within the angle the line comes out exactly parallel or square, and only
+    /// as long as the pointer's reach along it.
+    #[test]
+    fn inferred_lines_are_exact(
+        degrees in 20.0f64..70.0,
+        off in -4.0f64..4.0,
+        square in any::<bool>(),
+        reach in 3.0f64..30.0,
+    ) {
+        let mut s = scene();
+        let t = degrees.to_radians();
+        let u = [t.cos(), t.sin()];
+        free_line(&mut s, [20.0, 20.0, 0.0], [20.0 + 4.0 * u[0], 20.0 + 4.0 * u[1], 0.0]);
+
+        let mut l = Tool::line(APERTURE);
+        let a = [60.0, 60.0, 0.0];
+        click(&mut l, &mut s, a);
+        hover(&mut l, &mut s, [20.0 + 2.0 * u[0], 20.0 + 2.0 * u[1], 0.0]);
+
+        let aim = t + if square { -90f64.to_radians() } else { 0.0 } + off.to_radians();
+        let at = [a[0] + reach * aim.cos(), a[1] + reach * aim.sin(), 0.0];
+        hover(&mut l, &mut s, at);
+        // The pointer may fall on the axes, which then rightly win.
+        prop_assume!(matches!(
+            snap_kind(&l),
+            Some(SnapKind::Parallel | SnapKind::Perpendicular)
+        ));
+        click(&mut l, &mut s, at);
+
+        let start = Point3::new(a[0], a[1], a[2]);
+        let (p, q) = segments(&s)
+            .into_iter()
+            .find(|(p, q)| (*p - start).length() <= MM || (*q - start).length() <= MM)
+            .expect("the line was drawn");
+        let span = q - p;
+        let along = Vec3::new(u[0], u[1], 0.0);
+        let want = if square { Vec3::new(u[1], -u[0], 0.0) } else { along };
+        prop_assert!(span.cross(want).length() <= MM, "{span:?} against {want:?}");
+        prop_assert!((span.length() - reach * off.to_radians().cos()).abs() <= MM);
     }
 }
