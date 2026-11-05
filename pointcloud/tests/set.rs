@@ -64,7 +64,7 @@ fn view(eye: [f64; 3], target: [f64; 3]) -> View {
         eye,
         view_proj: cam.view_proj_at_eye(),
         focal_px: 800.0 / (2.0 * 0.4f64.tan()),
-        point_px: 2.0,
+        scale: 1.0,
     }
 }
 
@@ -193,7 +193,8 @@ fn pick_finds_the_point_under_the_ray() {
     settle(&mut set, &v);
     let hit = set
         .pick([100.0, 100.0, 40.0], [0.0, 0.0, -1.0], 0.05)
-        .expect("a point under the ray");
+        .expect("a point under the ray")
+        .1;
     assert!((hit[2] - 10.0).abs() < 0.01, "{hit:?}");
     assert!(
         (hit[0] - 100.0).hypot(hit[1] - 100.0) < 30.0 * 0.05 + 0.01,
@@ -237,7 +238,10 @@ fn frame_moves_picks_and_bounds() {
     let (lo, hi) = set.bounds().unwrap();
     assert_eq!((lo[0], hi[0]), (-50.0, 49.0));
     settle(&mut set, &view([0.0, 0.0, 30.0], [0.0, 0.0, 10.0]));
-    let hit = set.pick([0.0, 0.0, 30.0], [0.0, 0.0, -1.0], 0.05).unwrap();
+    let hit = set
+        .pick([0.0, 0.0, 30.0], [0.0, 0.0, -1.0], 0.05)
+        .unwrap()
+        .1;
     assert!(hit[0].hypot(hit[1]) < 2.0, "{hit:?}");
 }
 
@@ -278,4 +282,123 @@ fn saved_settings_are_checked() {
     assert_eq!(set.slice, None);
     assert!(!set.slice_on);
     assert!(!set.snap);
+}
+
+/// Each cloud draws at its own size, and a smaller point asks for more of them.
+#[test]
+fn each_cloud_has_its_own_point_size() {
+    let (a_source, a) = cloud("size-a", 300);
+    let (b_source, b) = cloud("size-b", 300);
+    let mut set = CloudSet::default();
+    let a_id = set.add(a, a_source);
+    let b_id = set.add(b, b_source);
+    set.set_point_size(a_id, 6.0);
+    set.set_point_size(b_id, 1.0);
+    set.set_point_size(b_id, f32::NAN);
+    settle(&mut set, &view([150.0, 150.0, 400.0], [150.0, 150.0, 10.0]));
+    let sized = |id, size| {
+        let of: Vec<_> = set.draws().iter().filter(|d| d.id == id).collect();
+        assert!(!of.is_empty());
+        assert!(of.iter().all(|d| d.point_size == size), "{of:?}");
+        of.iter().map(|d| u64::from(d.count)).sum::<u64>()
+    };
+    let big = sized(a_id, 6.0);
+    let small = sized(b_id, 1.0);
+    assert!(small > big, "{small} {big}");
+
+    set.set_point_size(a_id, 500.0);
+    assert_eq!(
+        set.clouds()[0].point_size,
+        wangungis_pointcloud::MAX_POINT_SIZE
+    );
+    set.set_point_size(a_id, 0.0);
+    assert_eq!(
+        set.clouds()[0].point_size,
+        wangungis_pointcloud::MIN_POINT_SIZE
+    );
+}
+
+/// An offset moves what bounds and picks see, and reaches the draw list. No read
+/// and no upload: the points are as they were.
+#[test]
+fn an_offset_moves_the_cloud_without_touching_its_points() {
+    let (source, file) = cloud("offset", 100);
+    let mut set = CloudSet::default();
+    let id = set.add(file, source);
+    let v = view([1050.0, 50.0, 30.0], [1050.0, 50.0, 10.0]);
+    let home = view([50.0, 50.0, 30.0], [50.0, 50.0, 10.0]);
+    settle(&mut set, &home);
+    assert!(!set.draws().is_empty());
+    let held = set.clouds()[0].held_points();
+
+    set.set_offset(id, [1000.0, 0.0, 5.0]);
+    let (lo, hi) = set.bounds().unwrap();
+    assert_eq!((lo[0], hi[0], lo[2]), (1000.0, 1099.0, 15.0));
+    let mut changed = 0;
+    set.plan(&v);
+    set.take_changed(|_| changed += 1);
+    assert_eq!(changed, 0, "nothing to upload");
+    assert_eq!(set.clouds()[0].held_points(), held);
+    assert!(set.draws().iter().all(|d| d.offset == [1000.0, 0.0, 5.0]));
+
+    let hit = set
+        .pick([1050.0, 50.0, 30.0], [0.0, 0.0, -1.0], 0.05)
+        .unwrap();
+    assert_eq!(hit.0, id);
+    assert!((hit.1[2] - 15.0).abs() < 0.01, "{hit:?}");
+    assert!(
+        set.pick([50.0, 50.0, 30.0], [0.0, 0.0, -1.0], 0.05)
+            .is_none(),
+        "gone from home"
+    );
+
+    // Not a number: stays where it is.
+    set.set_offset(id, [f64::NAN, 0.0, 0.0]);
+    assert_eq!(set.offset_of(id), Some([1000.0, 0.0, 5.0]));
+}
+
+/// The cloud on the move cannot be picked, others can, and removing it clears that.
+#[test]
+fn a_moving_cloud_is_no_target() {
+    let (a_source, a) = cloud("moving-a", 100);
+    let (b_source, b) = cloud("moving-b", 100);
+    let mut set = CloudSet::default();
+    let a_id = set.add(a, a_source);
+    let b_id = set.add(b, b_source);
+    let v = view([50.0, 50.0, 30.0], [50.0, 50.0, 10.0]);
+    settle(&mut set, &v);
+    set.set_offset(b_id, [0.0, 0.0, 5.0]);
+    set.plan(&v);
+    let ray = ([50.0, 50.0, 30.0], [0.0, 0.0, -1.0]);
+    assert_eq!(
+        set.pick(ray.0, ray.1, 0.05).map(|h| h.0),
+        Some(b_id),
+        "the nearer one"
+    );
+    set.moving = Some(b_id);
+    assert_eq!(set.pick(ray.0, ray.1, 0.05).map(|h| h.0), Some(a_id));
+    set.remove(b_id);
+    assert_eq!(set.moving, None);
+}
+
+/// A companion file from before this: each cloud takes the file's size, at its place.
+#[test]
+fn an_older_companion_file_still_reads() {
+    let old = r#"{"frame":[1.0,2.0,0.0],"clouds":[{"path":"a.las","visible":true}],
+        "point_size":3.0,"draw_budget":2000000,"snap":true,"slice":null,"slice_on":false}"#;
+    let saved: SavedClouds = serde_json::from_str(old).unwrap();
+    assert_eq!(saved.clouds[0].point_size, None);
+    assert_eq!(saved.clouds[0].offset, [0.0; 3]);
+    assert_eq!(saved.point_size, 3.0);
+
+    let (source, file) = cloud("saved", 50);
+    let mut set = CloudSet::default();
+    let id = set.add(file, source);
+    set.set_point_size(id, 4.5);
+    set.set_offset(id, [1.0, 2.0, 3.0]);
+    let round: SavedClouds =
+        serde_json::from_str(&serde_json::to_string(&set.saved(std::path::Path::new(""))).unwrap())
+            .unwrap();
+    assert_eq!(round.clouds[0].point_size, Some(4.5));
+    assert_eq!(round.clouds[0].offset, [1.0, 2.0, 3.0]);
 }

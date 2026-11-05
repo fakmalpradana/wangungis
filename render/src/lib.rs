@@ -741,25 +741,17 @@ impl Renderer {
     }
 
     /// Sets what the next [`Renderer::draw`] shows of the clouds. `viewport`: the
-    /// target's size in pixels, `point_px`: a point's edge in those pixels.
+    /// target's size in pixels, `scale`: pixels per screen point.
     pub fn prepare_clouds(
         &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
         draws: &[DrawChunk],
         viewport: [u32; 2],
-        point_px: f32,
+        scale: f32,
         slice: Option<Slice>,
     ) {
         let view_proj = camera.view_proj_at_eye();
-        // A quad's half size in clip units: a pixel is 2 / width of them, so half of
-        // `point_px` pixels is `point_px / width`.
-        let half_px = [
-            point_px / viewport[0].max(1) as f32,
-            point_px / viewport[1].max(1) as f32,
-            0.0,
-            0.0,
-        ];
         let at = |p: [f64; 3], on: f32| {
             let r = sub(p, camera.eye).map(|x| x as f32);
             [r[0], r[1], r[2], on]
@@ -771,8 +763,18 @@ impl Renderer {
             let Some(c) = self.cloud_chunks.get(&(d.id, d.chunk)) else {
                 continue;
             };
+            // A quad's half size in clip units: a pixel is 2 / width of them, so half of
+            // `px` pixels is `px / width`.
+            let px = d.point_size * scale;
+            let half_px = [
+                px / viewport[0].max(1) as f32,
+                px / viewport[1].max(1) as f32,
+                0.0,
+                0.0,
+            ];
             // The f64 subtraction is the RTC step, as for tiles.
-            let o = sub(c.min, camera.eye).map(|x| x as f32);
+            let moved = std::array::from_fn(|k| c.min[k] + d.offset[k]);
+            let o = sub(moved, camera.eye).map(|x| x as f32);
             let s = c.size.map(|x| x as f32);
             let u = CloudUniform {
                 view_proj,

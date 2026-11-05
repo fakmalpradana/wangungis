@@ -1301,6 +1301,13 @@ fn settle_clouds(d: &mut Driver) {
     }
 }
 
+/// The pointer out of the view and no marker left, as a marker covers pixels.
+fn pointer_away(d: &mut Driver) {
+    d.frame(vec![egui::Event::PointerGone]);
+    d.key(egui::Key::Escape);
+    d.frame(vec![]);
+}
+
 fn green_pixels(d: &Driver) -> usize {
     let (_, _, px) = d.pixels();
     // The roof's own color: the view's Y axis is green too.
@@ -1348,7 +1355,7 @@ fn a_las_from_import_to_reopen() {
     d.click([-2.5, -3.0, 0.0]);
     d.hover([5.0, 5.0, 12.0]);
     let snap = d.app.tool.preview().snap;
-    assert!(snap.is_some_and(|h| h.cloud), "{snap:?}");
+    assert!(snap.is_some_and(|h| h.cloud.is_some()), "{snap:?}");
     assert_eq!(snap.map(|h| hit_label(&h)), Some("Titik awan"));
     d.click([5.0, 5.0, 12.0]);
     assert_eq!(d.app.error, None);
@@ -1371,15 +1378,17 @@ fn a_las_from_import_to_reopen() {
 
     // The point size shows at once.
     let small = green_pixels(&d);
-    d.app.scene.clouds.point_size = 6.0;
+    let cloud = d.app.scene.clouds.clouds()[0].id;
+    d.app.scene.clouds.set_point_size(cloud, 6.0);
     d.frame(vec![]);
     assert!(green_pixels(&d) > small, "bigger points");
-    d.app.scene.clouds.point_size = 2.0;
+    d.app.scene.clouds.set_point_size(cloud, 2.0);
     d.frame(vec![]);
 
     // Two clicks make a box. What is outside hides, and comes back.
     d.letter(K::Space, " ");
     settle_clouds(&mut d);
+    pointer_away(&mut d);
     let full = green_pixels(&d);
     d.letter(K::K, "k");
     d.app.scene.clouds.snap = false;
@@ -1391,7 +1400,7 @@ fn a_las_from_import_to_reopen() {
     d.app.scene.clouds.snap = true;
     // Away from the tool, whose lines cover pixels.
     d.letter(K::Space, " ");
-    d.frame(vec![]);
+    pointer_away(&mut d);
     let cut = green_pixels(&d);
     d.dump("awan-2-potong");
     assert!(cut < full * 2 / 3, "{cut} of {full}");
@@ -1544,7 +1553,8 @@ fn recovery_brings_the_clouds_back() {
     d.app.import_cloud(source);
     settle_clouds(&mut d);
     let frame = d.app.scene.clouds.frame;
-    d.app.scene.clouds.point_size = 5.0;
+    let id = d.app.scene.clouds.clouds()[0].id;
+    d.app.scene.clouds.set_point_size(id, 5.0);
     d.app.autosave_stale = true;
     d.app.autosaved_at = -1e9;
     d.frame(vec![]);
@@ -1560,7 +1570,7 @@ fn recovery_brings_the_clouds_back() {
     assert_eq!(next.app.error, None);
     assert_eq!(next.app.scene.clouds.clouds().len(), 1);
     assert_eq!(next.app.scene.clouds.frame, frame);
-    assert_eq!(next.app.scene.clouds.point_size, 5.0);
+    assert_eq!(next.app.scene.clouds.clouds()[0].point_size, 5.0);
     assert!(next.app.unsaved);
 
     next.app.drop_autosave();
@@ -1604,6 +1614,173 @@ fn the_box_tool_alone_changes_nothing() {
     d.letter(K::K, "k");
     d.key(K::Escape);
     assert!(!d.app.unsaved);
+}
+
+/// Moving a cloud through the app: J, a point of it, a corner of the model. It is
+/// saved and undone like any edit, keeps its size and place on reopening, and
+/// **Kembalikan posisi** brings it home.
+#[test]
+fn a_cloud_moved_and_sized_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-geser-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+    d.app.import_cloud(source);
+    settle_clouds(&mut d);
+    // A box beside the roof, out of its way.
+    d.app.scene.clouds.snap = false;
+    d.letter(K::R, "r");
+    d.click([30.0, 30.0, 0.0]);
+    d.hover([31.0, 31.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([32.5, 32.0, 0.0]);
+    d.value("3");
+    d.app.scene.clouds.snap = true;
+    d.frame(vec![]);
+    let project = dir.join("kota.hew");
+    d.app.save_to(&project);
+    assert!(!d.app.unsaved);
+    let id = d.app.scene.clouds.clouds()[0].id;
+
+    d.letter(K::J, "j");
+    assert!(d.app.tool.same_kind(&Tool::cloud_move(0.0)));
+    d.click([0.0, 0.0, 12.0]);
+    assert!(d.app.tool.busy(), "{:?}", d.app.error);
+    assert_eq!(d.app.scene.clouds.moving, Some(id));
+    d.hover([35.0, 30.0, 3.0]);
+    assert!(!d.app.unsaved, "only on its way");
+    d.click([35.0, 30.0, 3.0]);
+    assert!(!d.app.tool.busy());
+    assert_eq!(d.app.error, None);
+    assert!(d.app.unsaved);
+    let moved = d.app.scene.clouds.offset_of(id).unwrap();
+    assert_ne!(moved, [0.0; 3]);
+    assert!((moved[2] - (3.0 - 12.0)).abs() < 0.01, "{moved:?}");
+    d.frame(vec![]);
+    assert!(green_pixels(&d) > 0, "still in view");
+
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some([0.0; 3]));
+    d.key_with(K::Z, COMMAND | egui::Modifiers::SHIFT);
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some(moved));
+
+    // Switching tools in the middle of a move, or undoing, puts it back first.
+    d.letter(K::J, "j");
+    d.click([5.0, 5.0, 12.0]);
+    d.hover([20.0, 20.0, 3.0]);
+    assert!(d.app.tool.busy());
+    d.letter(K::Space, " ");
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some(moved));
+    assert_eq!(d.app.scene.clouds.moving, None);
+
+    d.app.scene.clouds.set_point_size(id, 4.0);
+    d.app.save_to(&project);
+    d.app.new_project();
+    d.frame(vec![]);
+    d.app.open_path(&project);
+    settle_clouds(&mut d);
+    assert_eq!(d.app.error, None);
+    assert!(!d.app.unsaved);
+    let c = &d.app.scene.clouds.clouds()[0];
+    assert_eq!((c.point_size, c.offset), (4.0, moved));
+
+    let id = c.id;
+    d.app.reset_cloud_offset(id);
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some([0.0; 3]));
+    assert!(d.app.unsaved);
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some(moved), "one undo");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Saving in the middle of a move saves where the cloud was, not where the pointer
+/// had it, and the gesture ends there.
+#[test]
+fn saving_mid_move_keeps_the_cloud_where_it_was() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-simpangeser-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+    d.app.import_cloud(source);
+    settle_clouds(&mut d);
+    let id = d.app.scene.clouds.clouds()[0].id;
+    let project = dir.join("kota.hew");
+
+    d.letter(K::J, "j");
+    d.click([0.0, 0.0, 12.0]);
+    d.hover([30.0, 30.0, 0.0]);
+    assert_ne!(
+        d.app.scene.clouds.offset_of(id),
+        Some([0.0; 3]),
+        "on its way"
+    );
+    d.app.save_to(&project);
+    assert!(!d.app.tool.busy());
+    assert_eq!(d.app.scene.clouds.offset_of(id), Some([0.0; 3]));
+    assert_eq!(d.app.scene.clouds.moving, None);
+    let file = wangungis_pointcloud::saved_clouds_path(&project);
+    let saved: SavedClouds = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved.clouds[0].offset, [0.0; 3]);
+
+    // A companion file edited to somewhere no move could reach: ignored, with a word.
+    let mut far = saved;
+    far.clouds[0].offset = [1e308, 0.0, 0.0];
+    std::fs::write(&file, serde_json::to_vec(&far).unwrap()).unwrap();
+    d.app.open_path(&project);
+    settle_clouds(&mut d);
+    assert_eq!(d.app.scene.clouds.clouds()[0].offset, [0.0; 3]);
+    assert!(
+        d.app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("batas proyek"))
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Two clouds, two sizes, through the frame: one growing leaves the other alone.
+#[test]
+fn each_cloud_sized_on_its_own_in_the_app() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-ukuran-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    for name in ["a.las", "b.las"] {
+        let source = dir.join(name);
+        write_roof_las(&source, Some(32748));
+        d.app.import_cloud(source);
+    }
+    settle_clouds(&mut d);
+    let (a, b) = {
+        let c = d.app.scene.clouds.clouds();
+        (c[0].id, c[1].id)
+    };
+    d.app.scene.clouds.set_point_size(a, 6.0);
+    d.frame(vec![]);
+    let sizes: std::collections::BTreeMap<u32, f32> = d
+        .app
+        .scene
+        .clouds
+        .draws()
+        .iter()
+        .map(|x| (x.id, x.point_size))
+        .collect();
+    assert_eq!(sizes[&a], 6.0);
+    assert_eq!(sizes[&b], 2.0);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A project whose companion file names a LAS that went away still opens, and
