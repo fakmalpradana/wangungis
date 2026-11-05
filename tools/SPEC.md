@@ -39,6 +39,7 @@ Perilaku:
 - **Circle, Polygon:** klik pusat, lalu klik atau ketik jari-jari. `8s` mengubah jumlah sisi kapan saja; lingkaran minimal 24, bawaan 48; poligon minimal 3, bawaan 6.
 - **Arc:** klik dua ujung, lalu klik atau ketik tinggi lengkung, ke sisi kursor.
 - **Offset:** klik region atau face, lalu klik atau ketik jarak, ke arah kursor; angka negatif membalik arah.
+- **Push/Pull dengan Ctrl** (#7): tap Ctrl atau C membalik `keep`, dan tetap aktif sampai tool diulang. Face solid menjadi solid baru lewat `extrude_face_as_new_object`, sedangkan solid asal tidak berubah. Keduanya berbagi face yang berimpit, karena model Hew mengizinkan solid saling menimpa; ini berbeda dari SketchUp yang menambah face pada satu mesh. Region ditolak dengan pesan, dan komponen ditolak seperti Push/Pull biasa.
 - **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat (`30` atau `30d`). Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
 - **Scale:** klik benda, lalu gerakkan kursor menjauh atau mendekati pusatnya dan klik, atau ketik faktor. Selalu seragam, terhadap pusat benda. Faktor harus positif.
 - **Tape:** klik titik awal, lalu klik atau ketik jarak; `measure()` memberi jaraknya. Dari tepi menghasilkan garis panduan sejajar: jarak diukur tegak lurus tepi, ke sisi kursor, dan pratinjau menampilkan garis yang akan dibuat. Dari titik, atau searah tepi, menghasilkan titik panduan.

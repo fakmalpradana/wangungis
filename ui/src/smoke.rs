@@ -704,6 +704,34 @@ fn a_line_drawn_parallel_through_the_app() {
     d.key(K::Escape);
 }
 
+/// A tap of Ctrl in Push/Pull: the top goes up as a second solid.
+#[test]
+fn push_pull_with_ctrl_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+
+    d.letter(K::P, "p");
+    assert!(!d.app.tool.keeping());
+    d.hold(egui::Modifiers::CTRL);
+    d.hold(egui::Modifiers::NONE);
+    assert!(d.app.tool.keeping(), "tapping Ctrl turned it on");
+
+    d.click([4.5, 4.0, 3.0]);
+    d.value("2");
+    assert_eq!(d.counts().0, 2, "a second solid");
+    close(d.extents(), [5.0, 4.0, 5.0]);
+    assert!(d.app.tool.keeping(), "it stays on for the next face");
+
+    d.key_with(K::Z, egui::Modifiers::COMMAND);
+    assert_eq!(d.counts().0, 1, "one undo takes it back");
+    close(d.extents(), [5.0, 4.0, 3.0]);
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

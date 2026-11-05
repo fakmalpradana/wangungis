@@ -20,7 +20,7 @@ Legenda:
 | 4 | Circle / Polygon | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
 | 5 | Arc (2-point, 3-point, pie) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 6 | Push/Pull (+ live preview) | ✓ | ✓ | M | XL | F0/0.1 | — | U P E | T | parsial |
-| 7 | Push/Pull dengan Ctrl (buat face baru) | ✓ | ? | S | L | 0.1 | — | U P | T | belum |
+| 7 | Push/Pull dengan Ctrl (buat face baru) | ✓ | ✓ | S | S | 0.1 | — | U P | T | parsial |
 | 8 | Follow Me | ✓ | ✓ | C | L | 0.1 | — | U P | T | parsial |
 | 9 | Offset | ✓ | ✓ | S | M | 0.1 | i_overlay/Clipper2 | U P | T+R | parsial |
 | 10 | Move (+ copy, array) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
