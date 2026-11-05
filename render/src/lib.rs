@@ -262,6 +262,39 @@ impl Camera {
     }
 }
 
+/// The part of the segment `a`..`b`, given from the eye, that `view_proj` shows:
+/// where along it that part starts and ends, from 0 to 1.
+fn visible_span(view_proj: &[[f32; 4]; 4], a: [f64; 3], b: [f64; 3]) -> Option<(f64, f64)> {
+    // How far inside each of the six planes of the view a point is.
+    let inside = |p: [f64; 3]| {
+        let c: [f64; 4] = std::array::from_fn(|r| {
+            (0..3)
+                .map(|col| f64::from(view_proj[col][r]) * p[col])
+                .sum::<f64>()
+                + f64::from(view_proj[3][r])
+        });
+        [
+            c[3] + c[0],
+            c[3] - c[0],
+            c[3] + c[1],
+            c[3] - c[1],
+            c[2],
+            c[3] - c[2],
+        ]
+    };
+    let (ia, ib) = (inside(a), inside(b));
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (da, db) in ia.into_iter().zip(ib) {
+        match (da < 0.0, db < 0.0) {
+            (true, true) => return None,
+            (true, false) => t0 = t0.max(da / (da - db)),
+            (false, true) => t1 = t1.min(da / (da - db)),
+            (false, false) => {}
+        }
+    }
+    (t0 < t1).then_some((t0, t1))
+}
+
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
@@ -303,6 +336,7 @@ pub struct OverlayLines {
 struct Overlay {
     origin: [f64; 3],
     color: [f32; 3],
+    lines: Vec<([f64; 3], [f64; 3])>,
     vb: wgpu::Buffer,
     n: u32,
     ub: wgpu::Buffer,
@@ -473,23 +507,20 @@ impl Renderer {
             .iter()
             .filter(|g| !g.lines.is_empty())
             .map(|g| {
-                let origin = g.lines[0].0;
-                let verts: Vec<[f32; 3]> = g
-                    .lines
-                    .iter()
-                    .flat_map(|(a, b)| [sub(*a, origin), sub(*b, origin)])
-                    .map(|p| p.map(|x| x as f32))
-                    .collect();
+                let n = 2 * g.lines.len() as u32;
                 let (ub, bg) = self.uniform(device);
                 Overlay {
-                    origin,
+                    origin: g.lines[0].0,
                     color: g.color,
-                    vb: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    lines: g.lines.clone(),
+                    // Filled by `prepare`, as what shows depends on the camera.
+                    vb: device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("overlay"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
+                        size: u64::from(n) * 12,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
                     }),
-                    n: verts.len() as u32,
+                    n,
                     ub,
                     bg,
                 }
@@ -559,6 +590,27 @@ impl Renderer {
                 light: [c[0], c[1], c[2], 0.0],
             };
             queue.write_buffer(&o.ub, 0, bytemuck::bytes_of(&u));
+            // Cut to the view here rather than leave it to the driver: lavapipe
+            // loses a line of 200 m or more whole in a wide view, seemingly as its
+            // clipped end lands too far off screen.
+            // ponytail: every line, every frame; overlays hold few. Skip this
+            // when the camera has not moved if a huge preview shows up in a profile.
+            let verts: Vec<[f32; 3]> = o
+                .lines
+                .iter()
+                .flat_map(|(a, b)| {
+                    let (ea, eb) = (sub(*a, camera.eye), sub(*b, camera.eye));
+                    // Out of view: no length, on a point out of view.
+                    let (t0, t1) = visible_span(&view_proj, ea, eb).unwrap_or((0.0, 0.0));
+                    let at = |t: f64| {
+                        let start = sub(*a, o.origin);
+                        let along = sub(*b, *a);
+                        std::array::from_fn(|k| (start[k] + along[k] * t) as f32)
+                    };
+                    [at(t0), at(t1)]
+                })
+                .collect();
+            queue.write_buffer(&o.vb, 0, bytemuck::cast_slice(&verts));
         }
     }
 
@@ -599,6 +651,37 @@ mod tests {
 
     fn clip(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
         std::array::from_fn(|r| (0..3).map(|c| m[c][r] * p[c]).sum::<f32>() + m[3][r])
+    }
+
+    #[test]
+    fn visible_span_cuts_a_line_to_the_view() {
+        let cam = Camera {
+            eye: [0.0, 0.0, 0.0],
+            target: [0.0, 10.0, 0.0],
+            fovy: 0.8,
+            aspect: 2.0,
+            near: 0.5,
+            far: 100.0,
+        };
+        let m = cam.view_proj_at_eye();
+        let span = |a, b| visible_span(&m, a, b);
+        // Wholly inside: untouched.
+        assert_eq!(span([-1.0, 10.0, 0.0], [1.0, 10.0, 0.0]), Some((0.0, 1.0)));
+        // Wholly off to one side, past the far plane, or behind the eye: nothing.
+        assert_eq!(span([500.0, 10.0, 0.0], [600.0, 10.0, 0.0]), None);
+        assert_eq!(span([0.0, 200.0, 0.0], [0.0, 300.0, 0.0]), None);
+        assert_eq!(span([-1.0, -10.0, 0.0], [1.0, -10.0, 0.0]), None);
+        // From behind the eye to the far side: starts at the near plane, ends at the far.
+        let (t0, t1) = span([0.0, -100.0, 0.0], [0.0, 300.0, 0.0]).unwrap();
+        assert!((-100.0 + 400.0 * t0 - 0.5).abs() < 1e-3, "{t0}");
+        assert!((-100.0 + 400.0 * t1 - 100.0).abs() < 1e-3, "{t1}");
+        // Across the view, wider than it: symmetric, and inside what the fov allows.
+        let half = 10.0 * (0.4f64).tan() * 2.0;
+        let (t0, t1) = span([-1000.0, 10.0, 0.0], [1000.0, 10.0, 0.0]).unwrap();
+        assert!((-1000.0 + 2000.0 * t0 + half).abs() < 1e-3, "{t0}");
+        assert!((-1000.0 + 2000.0 * t1 - half).abs() < 1e-3, "{t1}");
+        // Both ends out, passing the view by on the outside of a corner: nothing.
+        assert_eq!(span([100.0, 10.0, 0.0], [10.0, 0.0, 0.0]), None);
     }
 
     #[test]
