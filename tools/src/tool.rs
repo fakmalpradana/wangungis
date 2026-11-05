@@ -5,7 +5,7 @@
 use inference::{
     ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
-use kernel::{Plane, Point3, SketchId, SketchRegionId, Vec3};
+use kernel::{Plane, Point3, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
@@ -19,6 +19,8 @@ const ON_PLANE: f64 = 1e-6;
 /// Pick cone (rad) when choosing what to push: narrow, so a corner does not
 /// take the click away from the region or face under it.
 const NARROW: f64 = 1e-6;
+/// The smallest scale factor: smaller collapses geometry below kernel tolerance.
+const MIN_SCALE: f64 = 1e-3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -90,10 +92,42 @@ enum State {
         /// The copy just made, which a typed count turns into an array.
         last: Option<(Movable, Vec3)>,
     },
+    Rotate {
+        turning: Option<Turning>,
+        hover: Vec<(Point3, Point3)>,
+        copy: bool,
+        /// The copy just made and its angle (rad), for a typed count.
+        last: Option<(Movable, Point3, Vec3, f64)>,
+    },
+    Scale {
+        scaling: Option<Scaling>,
+        hover: Vec<(Point3, Point3)>,
+    },
     Erase {
         /// What a click would remove.
         hover: Vec<(Point3, Point3)>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Turning {
+    what: Movable,
+    center: Point3,
+    axis: Vec3,
+    /// Direction from the center that means angle zero, once clicked.
+    reference: Option<Vec3>,
+    angle: f64,
+    lines: Vec<(Point3, Point3)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Scaling {
+    what: Movable,
+    center: Point3,
+    /// Distance from the center of the grabbed point.
+    grip: f64,
+    factor: f64,
+    lines: Vec<(Point3, Point3)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -311,6 +345,60 @@ fn move_point(
     ray_on_plane(&ray, &plane).map(|p| (p, None))
 }
 
+/// Where the cursor is in the horizontal plane through `center`, or in the
+/// vertical plane facing the eye when looking along the horizontal.
+fn direction_in_plane_point(ray: &PickRay, center: Point3) -> Option<Point3> {
+    let dir = ray.direction.normalized().ok()?;
+    let normal = if dir.z.abs() > 0.1 {
+        Vec3::new(0.0, 0.0, 1.0)
+    } else {
+        Vec3::new(dir.x, dir.y, 0.0).normalized().ok()?
+    };
+    ray_on_plane(ray, &Plane::from_point_normal(center, normal).ok()?)
+}
+
+/// A rotation of `angle` (rad) about the line through `center` along `axis`.
+fn rotation_about(center: Point3, axis: Vec3, angle: f64) -> Result<Transform, EditError> {
+    let to = center - Point3::ORIGIN;
+    let spin = Transform::rotation(axis, angle).map_err(|_| needs("sumbu putar tidak sah"))?;
+    Ok(Transform::translation(-to)
+        .then(&spin)
+        .then(&Transform::translation(to)))
+}
+
+fn scaling_about(center: Point3, factor: f64) -> Transform {
+    let to = center - Point3::ORIGIN;
+    Transform::translation(-to)
+        .then(&Transform::uniform_scale(factor))
+        .then(&Transform::translation(to))
+}
+
+/// The cursor's direction from `center`, in the plane normal to `axis`.
+fn direction_in_plane(ray: &PickRay, center: Point3, axis: Vec3) -> Option<Vec3> {
+    let plane = Plane::from_point_normal(center, axis).ok()?;
+    (ray_on_plane(ray, &plane)? - center).normalized().ok()
+}
+
+/// Rounds to a multiple of 15 degrees within 1.5 degrees of one.
+fn detent(angle: f64) -> f64 {
+    let step = 15f64.to_radians();
+    let near = (angle / step).round() * step;
+    if (angle - near).abs() <= 1.5f64.to_radians() {
+        near
+    } else {
+        angle
+    }
+}
+
+/// `count` from a typed array mark: `Copies` keeps the step, `Divide` splits it.
+fn typed_array(v: Vcb) -> Option<(NonZeroU32, f64)> {
+    match v {
+        Vcb::Copies(n) => Some((n, 1.0)),
+        Vcb::Divide(n) => Some((n, 1.0 / f64::from(n.get()))),
+        _ => None,
+    }
+}
+
 fn ring(points: &[Point3]) -> Vec<(Point3, Point3)> {
     (0..points.len())
         .map(|k| (points[k], points[(k + 1) % points.len()]))
@@ -388,13 +476,38 @@ impl Tool {
         )
     }
 
+    pub fn rotate(aperture: f64) -> Self {
+        Self::with(
+            State::Rotate {
+                turning: None,
+                hover: Vec::new(),
+                copy: false,
+                last: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn scale(aperture: f64) -> Self {
+        Self::with(
+            State::Scale {
+                scaling: None,
+                hover: Vec::new(),
+            },
+            aperture,
+        )
+    }
+
     pub fn eraser(aperture: f64) -> Self {
         Self::with(State::Erase { hover: Vec::new() }, aperture)
     }
 
     /// Whether the next move copies.
     pub fn copying(&self) -> bool {
-        matches!(self.state, State::Move { copy: true, .. })
+        matches!(
+            self.state,
+            State::Move { copy: true, .. } | State::Rotate { copy: true, .. }
+        )
     }
 
     /// Whether `other` is the same tool, whatever state each is in.
@@ -426,6 +539,8 @@ impl Tool {
             State::Rectangle { first, .. } => first.is_some(),
             State::PushPull { armed, .. } => armed.is_some(),
             State::Move { moving, .. } => moving.is_some(),
+            State::Rotate { turning, .. } => turning.is_some(),
+            State::Scale { scaling, .. } => scaling.is_some(),
             State::Erase { .. } => false,
         }
     }
@@ -439,6 +554,8 @@ impl Tool {
             State::Rectangle { .. } => Self::rectangle(aperture),
             State::PushPull { .. } => Self::push_pull(aperture),
             State::Move { .. } => Self::move_tool(aperture),
+            State::Rotate { .. } => Self::rotate(aperture),
+            State::Scale { .. } => Self::scale(aperture),
             State::Erase { .. } => Self::eraser(aperture),
         };
     }
@@ -455,6 +572,8 @@ impl Tool {
             State::Rectangle { .. } => self.handle_rectangle(scene, input),
             State::PushPull { .. } => self.handle_push_pull(scene, input),
             State::Move { .. } => self.handle_move(scene, input),
+            State::Rotate { .. } => self.handle_rotate(scene, input),
+            State::Scale { .. } => self.handle_scale(scene, input),
             State::Erase { .. } => self.handle_erase(scene, input),
         }?;
         if !hovering {
@@ -638,6 +757,179 @@ impl Tool {
         Ok(true)
     }
 
+    fn handle_rotate(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Rotate {
+            turning,
+            hover,
+            copy,
+            last,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        let mut finish = |scene: &mut Scene, t: &Turning, angle: f64, copy: bool| {
+            let spin = rotation_about(t.center, t.axis, angle)?;
+            if copy {
+                scene.copy(&t.what, &spin, NonZeroU32::MIN)?;
+                *last = Some((t.what.clone(), t.center, t.axis, angle));
+            } else {
+                scene.transform(&t.what, &spin)?;
+            }
+            Ok::<(), EditError>(())
+        };
+        match input {
+            Input::Hover(ray) => match turning {
+                Some(t) => {
+                    if let Some(r) = t.reference
+                        && let Some(v) = direction_in_plane(&ray, t.center, t.axis)
+                    {
+                        t.angle = detent(t.axis.dot(r.cross(v)).atan2(r.dot(v)));
+                    }
+                }
+                None => {
+                    let hit = scene.snap(&query(ray, aperture));
+                    self.preview.snap = hit;
+                    *hover = hit
+                        .and_then(|h| scene.movable_at(&h))
+                        .map_or_else(Vec::new, |m| scene.movable_lines(&m));
+                }
+            },
+            Input::Click(ray) => match turning {
+                None => {
+                    if let Some(hit) = scene.snap(&query(ray, aperture))
+                        && let Some(what) = scene.movable_at(&hit)
+                    {
+                        *turning = Some(Turning {
+                            lines: scene.movable_lines(&what),
+                            what,
+                            center: hit.snap.position,
+                            axis: Vec3::new(0.0, 0.0, 1.0),
+                            reference: None,
+                            angle: 0.0,
+                        });
+                        *last = None;
+                        hover.clear();
+                    }
+                }
+                Some(t) if t.reference.is_none() => {
+                    t.reference = direction_in_plane(&ray, t.center, t.axis);
+                }
+                Some(t) => {
+                    if let (Some(r), Some(v)) =
+                        (t.reference, direction_in_plane(&ray, t.center, t.axis))
+                    {
+                        t.angle = detent(t.axis.dot(r.cross(v)).atan2(r.dot(v)));
+                    }
+                    if t.angle.abs() > 1e-9 {
+                        let snapshot = t.clone();
+                        finish(scene, &snapshot, snapshot.angle, *copy)?;
+                        *turning = None;
+                        *copy = false;
+                    }
+                }
+            },
+            Input::Typed(text) => match (&*turning, vcb::parse(&text)) {
+                (Some(t), Some(Vcb::One(degrees))) => {
+                    let snapshot = t.clone();
+                    finish(scene, &snapshot, degrees.to_radians(), *copy)?;
+                    *turning = None;
+                    *copy = false;
+                }
+                (None, Some(v @ (Vcb::Copies(_) | Vcb::Divide(_)))) => {
+                    let (what, center, axis, angle) =
+                        last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
+                    let (n, part) = typed_array(v).expect("matched above");
+                    let step = rotation_about(*center, *axis, angle * part)?;
+                    scene.respace_copy(what, &step, n)?;
+                }
+                _ => {
+                    return Err(needs(
+                        "putar butuh sudut dalam derajat; setelah menyalin, x5",
+                    ));
+                }
+            },
+            Input::LockAxis(axis) => {
+                if let Some(t) = turning {
+                    t.axis = axis.unit();
+                    t.reference = None;
+                    t.angle = 0.0;
+                }
+            }
+            Input::ToggleCopy => *copy = !*copy,
+            Input::Cancel => {}
+        }
+        Ok(())
+    }
+
+    fn handle_scale(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Scale { scaling, hover } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => match scaling {
+                Some(s) => {
+                    if let Some(p) = direction_in_plane_point(&ray, s.center) {
+                        s.factor = ((p - s.center).length() / s.grip).max(MIN_SCALE);
+                    }
+                }
+                None => {
+                    let hit = scene.snap(&query(ray, aperture));
+                    self.preview.snap = hit;
+                    *hover = hit
+                        .and_then(|h| scene.movable_at(&h))
+                        .map_or_else(Vec::new, |m| scene.movable_lines(&m));
+                }
+            },
+            Input::Click(ray) => match scaling {
+                None => {
+                    if let Some(hit) = scene.snap(&query(ray, aperture))
+                        && let Some(what) = scene.movable_at(&hit)
+                        && let Some(center) = scene.movable_center(&what)
+                    {
+                        let p = direction_in_plane_point(&ray, center).unwrap_or(hit.snap.position);
+                        let grip = (p - center).length();
+                        if grip > MIN_LEN {
+                            *scaling = Some(Scaling {
+                                lines: scene.movable_lines(&what),
+                                what,
+                                center,
+                                grip,
+                                factor: 1.0,
+                            });
+                            hover.clear();
+                        }
+                    }
+                }
+                Some(s) => {
+                    if let Some(p) = direction_in_plane_point(&ray, s.center) {
+                        s.factor = ((p - s.center).length() / s.grip).max(MIN_SCALE);
+                    }
+                    if (s.factor - 1.0).abs() > 1e-6 {
+                        scene.transform(&s.what, &scaling_about(s.center, s.factor))?;
+                        *scaling = None;
+                    }
+                }
+            },
+            Input::Typed(text) => {
+                let Some(s) = scaling else {
+                    return Err(needs("klik benda dulu"));
+                };
+                let Some(Vcb::One(factor)) = vcb::parse(&text) else {
+                    return Err(needs("skala butuh satu faktor, mis. 2 atau 0,5"));
+                };
+                if factor < MIN_SCALE {
+                    return Err(needs("faktor skala harus positif"));
+                }
+                scene.transform(&s.what, &scaling_about(s.center, factor))?;
+                *scaling = None;
+            }
+            Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
+        }
+        Ok(())
+    }
+
     fn handle_erase(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::Erase { hover } = &mut self.state else {
@@ -729,14 +1021,10 @@ impl Tool {
                         *copy = false;
                     }
                 }
-                (None, Some(Vcb::Copies(n))) => {
+                (None, Some(v @ (Vcb::Copies(_) | Vcb::Divide(_)))) => {
                     let (what, step) = last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
-                    scene.respace_copy(what, *step, n)?;
-                }
-                (None, Some(Vcb::Divide(n))) => {
-                    let (what, step) = last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
-                    let part = *step / f64::from(n.get());
-                    scene.respace_copy(what, part, n)?;
+                    let (n, part) = typed_array(v).expect("matched above");
+                    scene.respace_copy(what, &Transform::translation(*step * part), n)?;
                 }
                 _ => return Err(needs("Move butuh satu jarak; setelah menyalin, x5 atau /5")),
             },
@@ -768,10 +1056,10 @@ impl Tool {
             return Ok(false);
         }
         if copy {
-            scene.copy(&m.what, delta, NonZeroU32::MIN)?;
+            scene.copy(&m.what, &Transform::translation(delta), NonZeroU32::MIN)?;
             *last = Some((m.what.clone(), delta));
         } else {
-            scene.translate(&m.what, delta)?;
+            scene.transform(&m.what, &Transform::translation(delta))?;
         }
         Ok(true)
     }
@@ -893,6 +1181,28 @@ impl Tool {
                 _ => Vec::new(),
             },
             State::Erase { hover } => hover.clone(),
+            State::Rotate { turning, hover, .. } => match turning {
+                None => hover.clone(),
+                Some(t) => rotation_about(t.center, t.axis, t.angle).map_or_else(
+                    |_| t.lines.clone(),
+                    |r| {
+                        t.lines
+                            .iter()
+                            .map(|(a, b)| (r.apply_point(*a), r.apply_point(*b)))
+                            .collect()
+                    },
+                ),
+            },
+            State::Scale { scaling, hover } => match scaling {
+                None => hover.clone(),
+                Some(s) => {
+                    let t = scaling_about(s.center, s.factor);
+                    s.lines
+                        .iter()
+                        .map(|(a, b)| (t.apply_point(*a), t.apply_point(*b)))
+                        .collect()
+                }
+            },
             State::Move { moving, hover, .. } => match moving {
                 None => hover.clone(),
                 Some(m) => {

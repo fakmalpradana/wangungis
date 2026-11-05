@@ -605,3 +605,85 @@ fn assert_box_or_sketch_at_ground(s: &Scene) {
         assert!(v.position.z.abs() <= MM, "{v:?}");
     }
 }
+
+#[test]
+fn rotate_by_typing_and_by_clicks_with_a_radial_array() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rotate(APERTURE);
+    // Pivot on the south-west corner, zero direction east.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    assert!(r.busy());
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [10.0, 14.0, 0.0]);
+    assert!(r.preview().lines.len() >= 12);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert!(!r.busy());
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+    s.undo().unwrap();
+
+    // Near 90 degrees by mouse lands on it.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    let a = 91f64.to_radians();
+    click(
+        &mut r,
+        &mut s,
+        [10.0 + 6.0 * a.cos(), 10.0 + 6.0 * a.sin(), 0.0],
+    );
+    assert!(!r.busy());
+    assert_box(&s, [6.0, 10.0, 0.0], [10.0, 15.0, 3.0]);
+    s.undo().unwrap();
+
+    // Copy at 90, then three copies: four boxes around the corner.
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    r.handle(&mut s, Input::ToggleCopy).unwrap();
+    click(&mut r, &mut s, [14.0, 10.0, 0.0]);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert_eq!(solid_count(&s), 2);
+    typed(&mut r, &mut s, "x3").unwrap();
+    assert_eq!(solid_count(&s), 4);
+    assert_box(&s, [10.0, 5.0, 0.0], [14.0, 10.0, 3.0]);
+    s.undo().unwrap();
+    assert_eq!(solid_count(&s), 1);
+}
+
+#[test]
+fn rotation_axis_follows_the_arrow_keys() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rotate(APERTURE);
+    click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+    r.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    click(&mut r, &mut s, [10.0, 14.0, 0.0]);
+    typed(&mut r, &mut s, "90").unwrap();
+    assert_box(&s, [10.0, 7.0, 0.0], [15.0, 10.0, 4.0]);
+}
+
+#[test]
+fn scale_by_typing_and_by_dragging() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut t = Tool::scale(APERTURE);
+    assert!(typed(&mut t, &mut s, "2").is_err(), "nothing picked yet");
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    assert!(t.busy());
+    assert!(typed(&mut t, &mut s, "-1").is_err(), "no mirroring");
+    assert!(t.busy(), "a refused value leaves the gesture open");
+    typed(&mut t, &mut s, "2").unwrap();
+    assert!(!t.busy());
+    // Doubled about the center of the box.
+    assert_box(&s, [7.5, 8.0, -1.5], [17.5, 16.0, 4.5]);
+    s.undo().unwrap();
+
+    // Away from the center grows it; a click ends it.
+    click(&mut t, &mut s, [15.0, 14.0, 3.0]);
+    hover(&mut t, &mut s, [25.0, 14.0, 1.5]);
+    assert!(t.preview().lines.len() >= 12);
+    click(&mut t, &mut s, [25.0, 14.0, 1.5]);
+    assert!(!t.busy());
+    let (lo, hi) = bounds(&s)[0];
+    assert!(hi[0] - lo[0] > 5.5, "{lo:?} {hi:?}");
+    let ratio = (hi[0] - lo[0]) / 5.0;
+    assert!(((hi[2] - lo[2]) / 3.0 - ratio).abs() < 1e-6, "uniform");
+}

@@ -309,9 +309,10 @@ impl App {
         if ctx.text_edit_focused() {
             return;
         }
-        // Ctrl flips copying the moment it goes down, like the C key.
+        // Ctrl flips copying the moment it goes down, like the C key. Tools
+        // without copying ignore it.
         let ctrl = ctx.input(|i| i.modifiers.ctrl);
-        if ctrl && !self.ctrl_held && self.tool.same_kind(&Tool::move_tool(0.0)) {
+        if ctrl && !self.ctrl_held {
             self.feed(Input::ToggleCopy);
         }
         self.ctrl_held = ctrl;
@@ -375,6 +376,8 @@ impl App {
             K::P if self.typed.is_empty() => self.switch_tool(Tool::push_pull),
             K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
             K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
+            K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
+            K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
             K::C if self.typed.is_empty() => self.feed(Input::ToggleCopy),
             _ => {}
         }
@@ -680,6 +683,8 @@ impl App {
                     ("Persegi (R)", Tool::rectangle),
                     ("Push/Pull (P)", Tool::push_pull),
                     ("Pindah (M)", Tool::move_tool),
+                    ("Putar (Q)", Tool::rotate),
+                    ("Skala (S)", Tool::scale),
                     ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui

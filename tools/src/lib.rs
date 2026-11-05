@@ -238,6 +238,14 @@ fn onset(p: Point3, c: [f64; 3]) -> Point3 {
     Point3::new(p.x + c[0], p.y + c[1], p.z + c[2])
 }
 
+/// `t`, given in project-local coordinates, as seen from a tile centered at `c`.
+fn tile_transform(t: &Transform, c: [f64; 3]) -> Transform {
+    let to = Vec3::new(c[0], c[1], c[2]);
+    Transform::translation(to)
+        .then(t)
+        .then(&Transform::translation(-to))
+}
+
 fn shifted_plane(plane: Plane, c: [f64; 3]) -> Result<Plane, kernel::MathError> {
     Plane::from_point_normal(offset(plane.point(), c), plane.normal())
 }
@@ -763,6 +771,29 @@ impl Scene {
         })
     }
 
+    /// The center of `m`'s bounds, project-local: the pivot for scaling.
+    pub fn movable_center(&self, m: &Movable) -> Option<Point3> {
+        let doc = self.project.tiles.get(&m.tile())?;
+        let points: Vec<Point3> = match m {
+            Movable::Node { node, .. } => node_points(doc, *node),
+            Movable::Island { segments, .. } => {
+                segments.iter().flat_map(|(a, b)| [*a, *b]).collect()
+            }
+        };
+        let (first, rest) = points.split_first()?;
+        let (mut lo, mut hi) = (*first, *first);
+        for p in rest {
+            lo = Point3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = Point3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+        }
+        let mid = Point3::new(
+            (lo.x + hi.x) / 2.0,
+            (lo.y + hi.y) / 2.0,
+            (lo.z + hi.z) / 2.0,
+        );
+        Some(onset(mid, m.tile().center()))
+    }
+
     /// The edges of `m`, project-local, for the preview.
     pub fn movable_lines(&self, m: &Movable) -> Vec<(Point3, Point3)> {
         let c = m.tile().center();
@@ -922,60 +953,70 @@ impl Scene {
         Ok(())
     }
 
-    /// Refuses a displacement carrying `m` past the tile or project bound.
-    fn check_moved(&self, m: &Movable, delta: Vec3) -> Result<(), EditError> {
+    /// Refuses a transform whose `count`th power carries `m` past the tile or
+    /// project bound, or any power on the way. `step` is project-local.
+    fn check_moved(&self, m: &Movable, step: &Transform, count: u32) -> Result<(), EditError> {
         let key = m.tile();
         let doc = self
             .project
             .tiles
             .get(&key)
             .ok_or(EditError::Kernel("tile hilang".into()))?;
-        let points: Vec<Point3> = match m {
+        let mut points: Vec<Point3> = match m {
             Movable::Node { node, .. } => node_points(doc, *node),
             Movable::Island { segments, .. } => {
                 segments.iter().flat_map(|(a, b)| [*a, *b]).collect()
             }
         };
         let c = key.center();
-        for p in points {
-            let q = p + delta;
-            let reach_m = q.x.hypot(q.y);
-            if reach_m > KERNEL_FRAME_BOUND_M {
-                return Err(EditError::OutOfTile { tile: key, reach_m });
+        let local = tile_transform(step, c);
+        for _ in 0..count {
+            for p in &mut points {
+                *p = local.apply_point(*p);
+                let reach_m = p.x.hypot(p.y);
+                if reach_m > KERNEL_FRAME_BOUND_M {
+                    return Err(EditError::OutOfTile { tile: key, reach_m });
+                }
+                let q = onset(*p, c);
+                check_local([q.x, q.y, q.z]).map_err(|_| EditError::OutOfProject)?;
             }
-            let local = onset(q, c);
-            check_local([local.x, local.y, local.z]).map_err(|_| EditError::OutOfProject)?;
         }
         Ok(())
     }
 
-    /// Moves `m` by `delta` as one undo step. It stays in its tile, up to the
-    /// kernel frame bound.
-    pub fn translate(&mut self, m: &Movable, delta: Vec3) -> Result<(), EditError> {
-        self.check_moved(m, delta)?;
-        let t = Transform::translation(delta);
+    /// Applies `t` (project-local) to `m` as one undo step. It stays in its
+    /// tile, up to the kernel frame bound.
+    pub fn transform(&mut self, m: &Movable, t: &Transform) -> Result<(), EditError> {
+        self.check_moved(m, t, 1)?;
+        let local = tile_transform(t, m.tile().center());
         let doc = self.project.tile_mut(m.tile())?;
         match m {
             Movable::Node { node, .. } => doc
-                .transform_selection(&[*node], &[], &t)
+                .transform_selection(&[*node], &[], &local)
                 .map_err(kernel_err)?,
             Movable::Island { sketch, island, .. } => doc
-                .transform_sketch_island(*sketch, *island, &t)
+                .transform_sketch_island(*sketch, *island, &local)
                 .map_err(kernel_err)?,
         };
         self.record(m.tile());
         Ok(())
     }
 
-    /// Makes `count` copies of `m`, each `step` past the last. One undo step,
-    /// except drawing copied off its plane: one per copy.
-    pub fn copy(&mut self, m: &Movable, step: Vec3, count: NonZeroU32) -> Result<(), EditError> {
-        self.check_moved(m, step * f64::from(count.get()))?;
+    /// Makes `count` copies of `m`, each `step` (project-local) past the last.
+    /// One undo step, except drawing copied off its plane: one per copy.
+    pub fn copy(
+        &mut self,
+        m: &Movable,
+        step: &Transform,
+        count: NonZeroU32,
+    ) -> Result<(), EditError> {
+        self.check_moved(m, step, count.get())?;
         let key = m.tile();
+        let local = tile_transform(step, key.center());
         let doc = self.project.tile_mut(key)?;
         match m {
             Movable::Node { node, .. } => {
-                doc.duplicate_nodes_array(&[*node], &Transform::translation(step), count)
+                doc.duplicate_nodes_array(&[*node], &local, count)
                     .map_err(kernel_err)?;
                 self.record(key);
             }
@@ -989,14 +1030,23 @@ impl Scene {
                     .sketch(*sketch)
                     .ok_or(EditError::Kernel("sketch hilang".into()))?
                     .plane();
-                if plane.normal().dot(step).abs() <= IN_PLANE {
+                let stays = local.apply_plane(&plane).is_ok_and(|p| {
+                    p.normal().dot(plane.normal()) > 1.0 - IN_PLANE
+                        && plane
+                            .signed_distance(local.apply_point(plane.point()))
+                            .abs()
+                            <= IN_PLANE
+                });
+                if stays {
                     // One draft: the copies join the drawing and undo together.
                     let objects = doc.drawable_objects_on_plane(plane, None);
                     doc.draft(plane, None, &objects, "copy", |sk| {
-                        for k in 1..=count.get() {
-                            let d = step * f64::from(k);
-                            for (a, b) in segments {
-                                sk.add_segment(*a + d, *b + d)?;
+                        let mut placed = segments.clone();
+                        for _ in 0..count.get() {
+                            for (a, b) in &mut placed {
+                                *a = local.apply_point(*a);
+                                *b = local.apply_point(*b);
+                                sk.add_segment(*a, *b)?;
                             }
                         }
                         Ok(())
@@ -1004,8 +1054,9 @@ impl Scene {
                     .map_err(kernel_err)?;
                     self.record(key);
                 } else {
-                    for k in 1..=count.get() {
-                        let t = Transform::translation(step * f64::from(k));
+                    let mut t = Transform::IDENTITY;
+                    for _ in 0..count.get() {
+                        t = t.then(&local);
                         let doc = self.project.tile_mut(key)?;
                         doc.copy_sketch_islands(*sketch, &[*island], &t)
                             .map_err(kernel_err)?;
@@ -1023,10 +1074,10 @@ impl Scene {
     pub fn respace_copy(
         &mut self,
         m: &Movable,
-        step: Vec3,
+        step: &Transform,
         count: NonZeroU32,
     ) -> Result<(), EditError> {
-        self.check_moved(m, step * f64::from(count.get()))?;
+        self.check_moved(m, step, count.get())?;
         self.undo()?;
         let made = self.copy(m, step, count);
         if made.is_err() {
