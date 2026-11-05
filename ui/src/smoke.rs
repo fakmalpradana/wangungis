@@ -471,8 +471,11 @@ fn box_with_a_door_in_an_array_of_ten() {
     close(d.extents(), [5.0, 4.0, 3.0]);
     on_the_ground(&d, [2.0, 2.0]);
 
-    // The door. The cursor is on the wall just above its bottom edge, which
-    // the corner of the rectangle snaps to.
+    // The door, zoomed in so that the corner of the box is out of the snap's reach.
+    // The cursor is on the wall just above its bottom edge, which the corner of
+    // the rectangle snaps to.
+    d.app.fit_pending = true;
+    d.frame(vec![]);
     d.letter(K::R, "r");
     d.click([3.0, 2.0, 0.03]);
     assert!(d.app.tool.busy());
