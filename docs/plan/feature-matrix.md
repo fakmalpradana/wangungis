@@ -74,7 +74,7 @@ Legenda:
 | 43 | Components (definisi + instance) | ✓ | ✓ | M | L | 0.1 | — | U P | T | parsial |
 | 44 | Make unique / explode | ✓ | ? | S | S | 0.1 | — | U | T | parsial |
 | 45 | Tags (visibilitas, warna) | ✓ | ✓ | M | S | 0.1 | — | U | T | parsial |
-| 46 | Outliner | ✓ | ✓ | M | M | 0.1 | — | E | T | belum |
+| 46 | Outliner | ✓ | ✓ | M | M | 0.1 | — | U P E | T | parsial |
 | 47 | Scenes (kamera, tag, style tersimpan) | ✓ | ✓ | S | M | 0.5 | — | U | T | belum |
 | 48 | Entity Info / atribut objek | ✓ | ? | M | S | 0.2 | — | U | T | belum |
 

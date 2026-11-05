@@ -1323,3 +1323,64 @@ fn tag_visibility_through_the_app() {
     );
     assert_eq!(d.counts(), (1, 12));
 }
+
+/// The Outliner lists, picks, opens, hides and names, on the same app state.
+#[test]
+fn outliner_through_the_app() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    draw_a_box(&mut d);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    assert_eq!(d.app.outline_rows.len(), 1);
+    assert_eq!(d.app.outline_rows[0].kind, "Objek");
+
+    d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    d.app.on_picked(|s, t, n| s.group(t, n));
+    assert_eq!(d.app.outline_rows.len(), 1, "a collapsed group");
+    let group = d.app.outline_rows[0].clone();
+    assert_eq!((group.kind, group.has_children), ("Grup", true));
+
+    d.app.outline_toggle(group.tile, group.node);
+    assert_eq!(d.app.outline_rows.len(), 2);
+    let member = d.app.outline_rows[1].clone();
+    assert_eq!((member.depth, member.top), (1, group.node));
+
+    // A line inside picks what it sits in, and a double click opens that.
+    d.app.outline_pick(member.tile, member.top);
+    assert_eq!(
+        d.app.tool.picked_nodes(),
+        Some((group.tile, vec![group.node]))
+    );
+    d.app.rename_picked("Rumah");
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.app.outline_rows[0].name, "Rumah");
+
+    d.app.outline_open(group.tile, group.node);
+    assert_eq!(d.app.error, None);
+    // Hew reads no name from a group while it is open, so the label is generic.
+    assert_eq!(d.app.session_label().as_deref(), Some("Mengedit: Grup"));
+    d.app.leave_session();
+    assert_eq!(d.app.session_label(), None);
+
+    // Hide and show, in the view too.
+    d.frame(vec![]);
+    let shown = d.model_pixels();
+    assert!(shown > 1000);
+    d.app.set_node_visible(group.tile, group.node, false);
+    d.frame(vec![]);
+    assert!(d.model_pixels() < shown / 10);
+    assert!(d.app.outline_rows[0].hidden);
+    d.app.set_node_visible(group.tile, group.node, true);
+    d.frame(vec![]);
+    assert!(d.model_pixels() > 1000);
+
+    // Undo the close, the open, then the name.
+    for _ in 0..3 {
+        d.app.undo();
+    }
+    assert_eq!(d.app.outline_rows[0].name, "Grup");
+}

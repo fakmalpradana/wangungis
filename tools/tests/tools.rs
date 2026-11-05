@@ -2643,3 +2643,211 @@ proptest! {
         }
     }
 }
+
+/// The tile the three-box scene of [`group_and_a_box`] is in, opened no further.
+fn rows(
+    s: &Scene,
+    open: &[(wangungis_scene::project::TileKey, NodeId)],
+) -> Vec<wangungis_tools::OutlineRow> {
+    s.outline_rows(&open.iter().copied().collect())
+}
+
+#[test]
+fn the_outline_follows_groups_and_instances() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+
+    // Collapsed: the group and the free box.
+    let top = rows(&s, &[]);
+    assert_eq!(top.len(), 2);
+    let g = top.iter().find(|r| r.node == group).unwrap();
+    assert_eq!((g.kind, g.has_children, g.expanded), ("Grup", true, false));
+    assert_eq!((g.depth, g.top), (0, group));
+
+    // Open: its two members, one level down.
+    let open = rows(&s, &[(key, group)]);
+    assert_eq!(open.len(), 4);
+    let members: Vec<_> = open.iter().filter(|r| r.depth == 1).collect();
+    assert_eq!(members.len(), 2);
+    assert!(members.iter().all(|r| r.top == group && r.kind == "Objek"));
+    assert!(open.iter().find(|r| r.node == group).unwrap().expanded);
+
+    // Inside a session the members stand at the top.
+    s.enter(key, group).unwrap();
+    let inside = rows(&s, &[]);
+    assert!(inside.iter().all(|r| r.depth == 0));
+    assert_eq!(inside.len(), 3, "the two members and the free box");
+    s.leave().unwrap();
+
+    // An instance is one line, named for its component.
+    let free = rows(&s, &[])
+        .iter()
+        .find(|r| r.kind == "Objek")
+        .unwrap()
+        .node;
+    s.make_component(key, &[free]).unwrap();
+    let c = rows(&s, &[])
+        .into_iter()
+        .find(|r| r.kind == "Komponen")
+        .unwrap();
+    assert!(!c.has_children);
+    assert!(!c.name.is_empty());
+}
+
+#[test]
+fn a_node_hidden_in_the_outline_is_out_of_reach_until_shown() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let row = rows(&s, &[]).remove(0);
+    let saved = s.project().save();
+    s.set_node_hidden(row.tile, row.node, true);
+    assert!(rows(&s, &[])[0].hidden);
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    assert!(!p.busy(), "hidden: no pick");
+    assert!(!s.can_redo(), "no undo step either way");
+
+    s.set_node_hidden(row.tile, row.node, false);
+    assert!(!rows(&s, &[])[0].hidden);
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    assert!(p.busy(), "shown again");
+    assert_eq!(s.project().save(), saved);
+}
+
+#[test]
+fn renaming_is_one_undo_step_and_the_same_name_none() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let row = rows(&s, &[]).remove(0);
+    assert_eq!(row.name, "Objek");
+    s.rename_node(row.tile, row.node, "  Rumah ").unwrap();
+    assert_eq!(rows(&s, &[])[0].name, "Rumah");
+
+    // Saves and reads back.
+    let saved = s.project().save();
+    let again = Project::open(&saved).unwrap();
+    assert_eq!(again.save(), saved);
+    assert_eq!(rows(&Scene::new(again), &[])[0].name, "Rumah");
+
+    // The same name adds no step: one undo takes off the rename, the next the box.
+    s.rename_node(row.tile, row.node, "Rumah").unwrap();
+    s.undo().unwrap();
+    assert_eq!(rows(&s, &[])[0].name, "Objek");
+    s.redo().unwrap();
+    assert_eq!(rows(&s, &[])[0].name, "Rumah");
+
+    // A blank name clears it.
+    s.rename_node(row.tile, row.node, "   ").unwrap();
+    assert_eq!(rows(&s, &[])[0].name, "Objek");
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(rows(&s, &[])[0].name, "Objek", "both renames gone");
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+}
+
+#[test]
+fn pick_node_holds_the_node_and_stays_in_scope() {
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    let free = rows(&s, &[])
+        .iter()
+        .find(|r| r.kind == "Objek")
+        .unwrap()
+        .node;
+    let mut t = Tool::line(APERTURE);
+    t.pick_node(&s, key, group);
+    assert_eq!(t.picked_nodes(), Some((key, vec![group])));
+    assert!(!t.preview().lines.is_empty(), "the outline shows");
+
+    // A member of a closed group is out of reach; so is what is outside a session.
+    let member = rows(&s, &[(key, group)])
+        .into_iter()
+        .find(|r| r.depth == 1)
+        .unwrap()
+        .node;
+    let mut t = Tool::line(APERTURE);
+    t.pick_node(&s, key, member);
+    assert_eq!(t.picked_nodes(), None);
+    s.enter(key, group).unwrap();
+    t.pick_node(&s, key, free);
+    assert_eq!(t.picked_nodes(), None);
+    t.pick_node(&s, key, member);
+    assert_eq!(t.picked_nodes(), Some((key, vec![member])));
+    assert_eq!(s.rename_node(key, free, "Luar"), Err(EditError::OutOfScope));
+}
+
+proptest! {
+    /// Any nesting, anything open: every row knows its top and depth, none twice.
+    #[test]
+    fn outline_rows_are_consistent(
+        groupings in proptest::collection::vec((0usize..8, 0usize..8), 0..6),
+        open in proptest::collection::vec(any::<bool>(), 12),
+    ) {
+        let mut s = scene();
+        for i in 0..4 {
+            typed_rectangle_at(&mut s, [10.0 + 20.0 * f64::from(i), 10.0, 0.0]);
+            let mut p = Tool::push_pull(APERTURE);
+            click(&mut p, &mut s, [12.5 + 20.0 * f64::from(i), 12.0, 0.0]);
+            typed(&mut p, &mut s, "3").unwrap();
+        }
+        let key = *s.project().tiles.keys().next().unwrap();
+        for (a, b) in groupings {
+            let tops = s.project().tiles[&key].top_level_nodes();
+            let (a, b) = (tops[a % tops.len()], tops[b % tops.len()]);
+            if a != b {
+                s.group(key, &[a, b]).unwrap();
+            }
+        }
+        let doc = &s.project().tiles[&key];
+        let groups = doc.group_ids();
+        let expanded: Vec<_> = groups
+            .iter()
+            .zip(open)
+            .filter(|(_, o)| *o)
+            .map(|(g, _)| (key, NodeId::Group(*g)))
+            .collect();
+        let tops = doc.top_level_nodes();
+        let list = rows(&s, &expanded);
+        let mut seen = std::collections::BTreeSet::new();
+        for row in &list {
+            prop_assert!(seen.insert(row.node), "{:?} twice", row.node);
+            prop_assert!(tops.contains(&row.top));
+            let mut depth = 0;
+            let mut at = row.node;
+            while let Some(parent) = doc.node_parent(at) {
+                at = NodeId::Group(parent);
+                depth += 1;
+            }
+            prop_assert_eq!(at, row.top);
+            prop_assert_eq!(depth, row.depth);
+        }
+        prop_assert!(tops.iter().all(|t| seen.contains(t)));
+    }
+}
+
+/// Run with --ignored --nocapture --release: what the lists cost on a big tile.
+#[test]
+#[ignore]
+fn outline_rows_cost() {
+    let mut doc = kernel::Document::new();
+    for k in 0..5_000 {
+        let (x, y) = (f64::from(k % 71) * 10.0, f64::from(k / 71) * 10.0);
+        let p = |a: f64, b: f64| Point3::new(x + a, y + b, 0.0);
+        let ring = [p(0.0, 0.0), p(5.0, 0.0), p(5.0, 4.0), p(0.0, 4.0)];
+        let plane = kernel::Plane::from_polygon(&ring).unwrap();
+        let sk = doc.add_sketch(plane);
+        let edit = doc.sketch_mut(sk).unwrap();
+        for i in 0..4 {
+            edit.add_segment(ring[i], ring[(i + 1) % 4]).unwrap();
+        }
+        let region = doc.extrudable_regions(sk).unwrap()[0];
+        doc.extrude_region(sk, region, 3.0).unwrap();
+    }
+    let s = Scene::new(Project::from_document(doc).unwrap());
+    let at = std::time::Instant::now();
+    let list = rows(&s, &[]);
+    println!("outline_rows, {} rows: {:?}", list.len(), at.elapsed());
+    let at = std::time::Instant::now();
+    let tags = s.tags();
+    println!("tags, {} tags: {:?}", tags.len(), at.elapsed());
+}

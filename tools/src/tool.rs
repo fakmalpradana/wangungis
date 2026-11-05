@@ -1107,6 +1107,21 @@ impl Tool {
     }
 
     /// The whole things Select has picked: top-level nodes, all in one tile.
+    /// Becomes Select holding just `node`, as a click on it would. Nothing happens
+    /// when it is out of scope.
+    pub fn pick_node(&mut self, scene: &Scene, tile: TileKey, node: NodeId) {
+        if !scene.node_in_scope(tile, node) {
+            return;
+        }
+        self.state = State::Select {
+            selected: None,
+            outline: scene.movable_lines(&Movable::Node { tile, node }),
+            nodes: vec![(tile, node)],
+        };
+        self.preview.snap = None;
+        self.refresh_lines();
+    }
+
     pub fn picked_nodes(&self) -> Option<(TileKey, Vec<NodeId>)> {
         let State::Select { nodes, .. } = &self.state else {
             return None;
