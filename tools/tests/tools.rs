@@ -2187,6 +2187,81 @@ fn a_drawing_outside_the_session_is_refused() {
     assert_eq!(s.project().save(), saved);
 }
 
+/// The Scene's own methods hold the line too, whatever a caller hands them.
+#[test]
+fn every_scene_method_refuses_what_is_out_of_scope() {
+    use wangungis_tools::{Erasable, Movable};
+    let mut s = scene();
+    let (key, group) = group_and_a_box(&mut s);
+    let out = s.project().tiles[&key]
+        .top_level_nodes()
+        .into_iter()
+        .find(|n| matches!(n, NodeId::Object(_)))
+        .unwrap();
+    let mut guide = Tool::tape(APERTURE);
+    click(&mut guide, &mut s, [100.0, 100.0, 0.0]);
+    hover(&mut guide, &mut s, [100.0, 105.0, 0.0]);
+    typed(&mut guide, &mut s, "1").unwrap();
+    s.enter(key, group).unwrap();
+    let saved = s.project().save();
+    let m = Movable::Node {
+        tile: key,
+        node: out,
+    };
+    let shift = kernel::Transform::translation(Vec3::new(5.0, 0.0, 0.0));
+    let count = std::num::NonZeroU32::new(2).unwrap();
+    let no = Err(EditError::OutOfScope);
+    assert_eq!(s.group(key, &[out]), no);
+    assert_eq!(s.make_component(key, &[out]), no);
+    assert_eq!(s.dissolve(key, &[out]), no);
+    assert_eq!(s.delete_nodes(key, &[out]), no);
+    assert_eq!(s.transform(&m, &shift), no);
+    assert_eq!(s.copy(&m, &shift, count), no);
+    assert_eq!(
+        s.erase(&Erasable::Node {
+            tile: key,
+            node: out
+        }),
+        no
+    );
+    assert_eq!(s.add_guide_point(Point3::new(3_000.0, 0.0, 0.0)), no);
+    assert_eq!(
+        s.add_guide_line(Point3::new(3_000.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)),
+        no
+    );
+    assert_eq!(s.delete_guides(), no);
+    assert_eq!(s.project().save(), saved);
+}
+
+/// A drawing owned by a solid goes with that solid: out of reach while its group
+/// is closed, editable inside.
+#[test]
+fn a_solids_own_drawing_follows_the_solid() {
+    let mut doc = kernel::Document::new();
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let ring = [p(0.0, 0.0), p(5.0, 0.0), p(5.0, 4.0), p(0.0, 4.0)];
+    let plane = kernel::Plane::from_polygon(&ring).unwrap();
+    let base = doc.add_sketch(plane);
+    let sk = doc.sketch_mut(base).unwrap();
+    for k in 0..4 {
+        sk.add_segment(ring[k], ring[(k + 1) % 4]).unwrap();
+    }
+    let region = doc.extrudable_regions(base).unwrap()[0];
+    let (solid, _) = doc.extrude_region(base, region, 3.0).unwrap();
+    // On the top face: an owned drawing must lie on a face of its solid.
+    let top =
+        kernel::Plane::from_point_normal(Point3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 1.0));
+    let owned = doc.add_sketch(top.unwrap());
+    doc.set_sketch_object_owner(owned, Some(solid)).unwrap();
+    let (group, _) = doc.group_nodes(&[NodeId::Object(solid)]).unwrap();
+
+    let mut s = Scene::new(Project::from_document(doc).unwrap());
+    let key = *s.project().tiles.keys().next().unwrap();
+    assert!(!s.sketch_editable(key, owned), "the group is closed");
+    s.enter(key, NodeId::Group(group)).unwrap();
+    assert!(s.sketch_editable(key, owned), "the group is open");
+}
+
 /// A line drawn inside goes with the group, and stays with it afterwards.
 #[test]
 fn a_drawing_made_inside_stays_inside() {

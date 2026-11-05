@@ -99,6 +99,14 @@ fn source_in_scope(doc: &Document, source: SnapSource) -> bool {
     source.instance.is_none() && in_scope(doc, NodeId::Object(source.object))
 }
 
+/// Whether Hew's drafting takes `q` for the plane `p`. Its own test is private,
+/// and this has to say the same: same-facing and coincident.
+fn planes_coincide(p: &Plane, q: &Plane) -> bool {
+    let anchor = Point3::ORIGIN + p.normal() * (-p.signed_distance(Point3::ORIGIN));
+    (p.normal() - q.normal()).length() < kernel::tol::NORMAL_DIRECTION
+        && q.signed_distance(anchor).abs() <= kernel::tol::PLANE_DIST
+}
+
 /// The solids on `plane` that a drawing may split.
 fn drawable(doc: &Document, plane: Plane) -> Vec<ObjectId> {
     let mut objects = doc.drawable_objects_on_plane(plane, None);
@@ -758,7 +766,9 @@ impl Scene {
     /// none open, one that sits in no group.
     pub fn sketch_editable(&self, key: TileKey, sketch: SketchId) -> bool {
         self.project.tiles.get(&key).is_some_and(|doc| {
-            if doc.session_stack().is_empty() {
+            if let Some(owner) = doc.sketch_owner_object(sketch) {
+                in_scope(doc, NodeId::Object(owner))
+            } else if doc.session_stack().is_empty() {
                 doc.sketch_owner_group(sketch).is_none()
             } else {
                 self.open_sketches.contains(&sketch)
@@ -777,11 +787,9 @@ impl Scene {
         };
         let taken = doc.visible_sketch_ids().into_iter().any(|id| {
             !self.sketch_editable(key, id)
-                && doc.sketch(id).is_some_and(|sk| {
-                    let other = sk.plane();
-                    other.normal().cross(plane.normal()).length() <= kernel::tol::POINT_MERGE
-                        && plane.signed_distance(other.point()).abs() <= kernel::tol::POINT_MERGE
-                })
+                && doc
+                    .sketch(id)
+                    .is_some_and(|sk| planes_coincide(&plane, &sk.plane()))
         });
         if taken {
             return Err(EditError::Unsupported(
@@ -803,6 +811,15 @@ impl Scene {
     fn check_tile(&self, key: TileKey) -> Result<(), EditError> {
         match self.session() {
             Some((open, _)) if open != key => Err(EditError::OutOfScope),
+            _ => Ok(()),
+        }
+    }
+
+    /// Refuses nodes outside the open scope.
+    fn check_nodes(&self, key: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_tile(key)?;
+        match self.project.tiles.get(&key) {
+            Some(doc) if !nodes.iter().all(|n| in_scope(doc, *n)) => Err(EditError::OutOfScope),
             _ => Ok(()),
         }
     }
@@ -1251,7 +1268,7 @@ impl Scene {
     pub fn erase(&mut self, e: &Erasable) -> Result<(), EditError> {
         match e {
             Erasable::Node { tile, node } => {
-                self.check_tile(*tile)?;
+                self.check_nodes(*tile, &[*node])?;
                 let doc = self.project.tile_mut(*tile)?;
                 doc.delete_node(*node).map_err(kernel_err)?;
                 self.record(*tile);
@@ -1297,6 +1314,10 @@ impl Scene {
     /// project bound, or any power on the way. `step` is project-local.
     fn check_moved(&self, m: &Movable, step: &Transform, count: u32) -> Result<(), EditError> {
         let key = m.tile();
+        match m {
+            Movable::Node { node, .. } => self.check_nodes(key, &[*node])?,
+            Movable::Island { sketch, .. } => self.check_sketch(key, *sketch)?,
+        }
         let doc = self
             .project
             .tiles
@@ -1438,6 +1459,7 @@ impl Scene {
     /// Adds a construction point, as one undo step.
     pub fn add_guide_point(&mut self, at: Point3) -> Result<(), EditError> {
         let (tile, local) = self.guide_home(at)?;
+        self.check_tile(tile)?;
         self.project
             .tile_mut(tile)?
             .add_guide_point(local)
@@ -1449,6 +1471,7 @@ impl Scene {
     /// Adds a construction line through `at`, as one undo step.
     pub fn add_guide_line(&mut self, at: Point3, direction: Vec3) -> Result<(), EditError> {
         let (tile, local) = self.guide_home(at)?;
+        self.check_tile(tile)?;
         self.project
             .tile_mut(tile)?
             .add_guide_line(local, direction)
@@ -1465,6 +1488,10 @@ impl Scene {
 
     /// Removes every construction line and point, one undo step per tile.
     pub fn delete_guides(&mut self) -> Result<(), EditError> {
+        // Guides of every tile go, and only the session's tile may change.
+        if self.session().is_some() {
+            return Err(EditError::OutOfScope);
+        }
         let tiles: Vec<TileKey> = self
             .project
             .tiles
@@ -1592,6 +1619,7 @@ impl Scene {
 
     /// Groups `nodes`, top-level nodes of one tile, as one undo step.
     pub fn group(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .group_nodes(nodes)
@@ -1603,6 +1631,7 @@ impl Scene {
     /// Turns `nodes`, top-level nodes of one tile, into one instance of a new
     /// component, as one undo step.
     pub fn make_component(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .make_component(nodes)
@@ -1615,7 +1644,7 @@ impl Scene {
     /// back into what they hold, as one undo step. Plain objects are left alone;
     /// with nothing else, that is refused. On refusal nothing changes.
     pub fn dissolve(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
-        self.check_tile(tile)?;
+        self.check_nodes(tile, nodes)?;
         let doc = self.project.tile_mut(tile)?;
         let mut made = 0;
         for node in nodes {
@@ -1643,6 +1672,7 @@ impl Scene {
 
     /// Deletes top-level `nodes` of one tile, as one undo step.
     pub fn delete_nodes(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
         self.project
             .tile_mut(tile)?
             .delete_selection(nodes)
