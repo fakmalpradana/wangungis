@@ -1019,3 +1019,19 @@ fn follow_me_sweeps_a_region_along_a_line() {
     s.undo().unwrap();
     assert!(bounds(&s).is_empty());
 }
+
+/// A tile holding only a guide is still part of the saved project.
+#[test]
+fn a_guide_alone_in_a_tile_is_saved() {
+    let mut s = scene();
+    s.add_guide_point(Point3::new(3_000.0, 3_000.0, 0.0))
+        .unwrap();
+    let reopened = Project::open(&s.project().save()).unwrap();
+    assert_eq!(
+        reopened.occupied().count(),
+        2,
+        "origin tile and the guide's"
+    );
+    assert_eq!(Scene::new(reopened).guide_lines().len(), 3);
+    assert_eq!(s.guide_lines().len(), 3);
+}
