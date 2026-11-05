@@ -16,6 +16,8 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 - **Baru:** proyek kosong dan kotak path dikosongkan.
 - **Perubahan belum disimpan:** Baru, Buka, dan menutup jendela menanyakan Simpan, Buang, atau Batal lebih dulu.
 - **Autosave** (#100): selama ada perubahan belum disimpan, setiap 60 detik saat tool tidak sedang berjalan, proyek ditulis ke `~/.wangungis/autosave.bin`. File dihapus setelah Simpan atau setelah pengguna memilih Buang. File yang masih ada saat aplikasi dibuka berarti sesi sebelumnya tidak berakhir normal, sehingga aplikasi menawarkan Pulihkan atau Buang. Satu file per pengguna: dua jendela saling menimpa (ponytail).
+- **Ekspor:** kotak path menentukan tujuan dan format lewat ekstensi: `.obj`, `.stl`, `.glb`, `.gltf`, `.3mf`. Tidak pernah menimpa file yang ada. Hanya `.obj` yang bisa untuk proyek lebih dari satu tile.
+- **Tampilan:** tombol Atas, Depan, Belakang, Kiri, Kanan, Iso mengganti arah pandang tanpa mengubah target. Atas memakai batas pitch orbit, sekitar 86°, jadi belum benar-benar tegak lurus.
 - Status bar: nilai yang diketik, jenis snap, galat, nama file, jumlah tile/objek/segitiga, EPSG + origin, status simpan, waktu per frame.
 - Galat baca/simpan/edit ditampilkan di status bar, di samping info model yang masih terbuka, dan tidak membuat aplikasi crash.
 

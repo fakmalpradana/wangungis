@@ -112,6 +112,8 @@ struct App {
     /// Another key or button went down while Ctrl was held.
     ctrl_chord: bool,
     error: Option<String>,
+    /// What just succeeded, until the next input replaces it.
+    notice: Option<String>,
     /// `None`: autosave is off, as when the home folder is unknown.
     autosave: Option<PathBuf>,
     /// When the last autosave ran, and whether anything changed since.
@@ -159,6 +161,7 @@ impl App {
             ctrl_held: false,
             ctrl_chord: false,
             error: None,
+            notice: None,
             autosave: None,
             autosaved_at: 0.0,
             autosave_stale: false,
@@ -336,6 +339,45 @@ impl App {
         }
     }
 
+    /// Writes the project to the path box as the format its extension names.
+    /// Never over an existing file.
+    fn export(&mut self) {
+        let target = PathBuf::from(self.path.trim());
+        let format = target
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .filter(|e| wangungis_io::FORMATS.contains(&e.as_str()));
+        let Some(format) = format else {
+            self.error = Some(format!(
+                "Isi kotak atas dengan path ber-ekstensi: {}.",
+                wangungis_io::FORMATS.join(", ")
+            ));
+            return;
+        };
+        if target.exists() {
+            self.error = Some(format!("{} sudah ada. Pakai nama lain.", target.display()));
+            return;
+        }
+        let written = wangungis_io::export(self.scene.project(), &format)
+            .map_err(|e| match e {
+                wangungis_io::ExportError::MultiTile => {
+                    "Format ini hanya untuk proyek satu tile. Pakai .obj.".to_string()
+                }
+                wangungis_io::ExportError::NothingToExport => {
+                    "Tidak ada solid untuk diekspor.".to_string()
+                }
+                other => format!("Ekspor gagal: {other:?}"),
+            })
+            .and_then(|bytes| write_atomic(&target, &bytes).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => {
+                self.error = None;
+                self.notice = Some(format!("Diekspor ke {}", target.display()));
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
     /// Rebuilds one tile's mesh and numbers from its document.
     fn upload(&mut self, key: TileKey) {
         let Some(doc) = self.scene.project().tiles.get(&key) else {
@@ -370,6 +412,9 @@ impl App {
     }
 
     fn feed(&mut self, input: Input) {
+        if !matches!(input, Input::Hover(_)) {
+            self.notice = None;
+        }
         match self.tool.handle(&mut self.scene, input) {
             Ok(()) => {}
             Err(e) => self.error = Some(e.to_string()),
@@ -840,6 +885,9 @@ impl App {
                 if ui.button("Simpan").clicked() {
                     self.save();
                 }
+                if ui.button("Ekspor").clicked() {
+                    self.export();
+                }
                 ui.separator();
                 for (label, make) in [
                     ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
@@ -878,6 +926,14 @@ impl App {
                 if ui.button("Zoom extents").clicked() {
                     self.fit_pending = true;
                 }
+                ui.separator();
+                for (label, yaw, pitch) in camera::VIEWS {
+                    if ui.button(label).clicked() {
+                        self.orbit.yaw = yaw;
+                        self.orbit.pitch = pitch;
+                        self.camera_moved();
+                    }
+                }
             });
         });
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -899,6 +955,10 @@ impl App {
                 }
                 if let Some(e) = &self.error {
                     ui.colored_label(egui::Color32::RED, e);
+                    ui.separator();
+                }
+                if let Some(n) = &self.notice {
+                    ui.label(n);
                     ui.separator();
                 }
                 ui.label(format!(
