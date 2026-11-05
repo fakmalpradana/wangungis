@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["scene", "render", "tools", "io", "ui"]
+members = ["scene", "render", "tools", "io", "pointcloud", "ui"]
 
 [workspace.package]
 version = "0.0.0"
@@ -15,6 +15,7 @@ wangungis-scene = { path = "scene" }
 wangungis-render = { path = "render" }
 wangungis-tools = { path = "tools" }
 wangungis-io = { path = "io" }
+wangungis-pointcloud = { path = "pointcloud" }
 kernel = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
 tessellate = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
 inference = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce3763dca17079f5263dc6137" }
@@ -22,6 +23,8 @@ mesh-export = { git = "https://github.com/hew3d/hew", rev = "612c1c15e68f7d9ce37
 wgpu = "30"
 # OS file windows (ADR-008).
 rfd = "0.17"
+# LAS reading (ADR-009).
+las = "0.11"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
