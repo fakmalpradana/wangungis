@@ -109,6 +109,9 @@ struct App {
     split_on_open: bool,
     overlay_shown: Option<Preview>,
     last_pointer: Option<egui::Pos2>,
+    moved_since_click: bool,
+    /// The path box had focus last frame.
+    path_focused: bool,
     ctrl_held: bool,
     /// Another key or button went down while Ctrl was held.
     ctrl_chord: bool,
@@ -127,6 +130,8 @@ struct App {
     closing: bool,
     #[cfg(test)]
     view_rect: egui::Rect,
+    #[cfg(test)]
+    path_rect: egui::Rect,
 }
 
 impl App {
@@ -159,6 +164,8 @@ impl App {
             split_on_open: false,
             overlay_shown: None,
             last_pointer: None,
+            moved_since_click: false,
+            path_focused: false,
             ctrl_held: false,
             ctrl_chord: false,
             error: None,
@@ -171,6 +178,8 @@ impl App {
             closing: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
+            #[cfg(test)]
+            path_rect: egui::Rect::NOTHING,
         };
         if path.is_some() {
             app.open();
@@ -422,6 +431,15 @@ impl App {
         if !matches!(input, Input::Hover(_)) {
             self.notice = None;
         }
+        match input {
+            Input::Hover(_) => self.moved_since_click = true,
+            // What a click picked sits pixels from the pointer, because of
+            // snapping. That is no direction until the mouse moves.
+            Input::Click(_) | Input::ClickAdd(_) => self.moved_since_click = false,
+            // Anything else changes what the parked pointer means to the tool.
+            _ if self.moved_since_click => self.last_pointer = None,
+            _ => {}
+        }
         match self.tool.handle(&mut self.scene, input) {
             Ok(()) => {}
             Err(e) => self.error = Some(e.to_string()),
@@ -489,6 +507,10 @@ impl App {
         self.sync_edits();
     }
 
+    fn tile_count(&self) -> usize {
+        self.scene.project().occupied().count()
+    }
+
     fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
         let placed: Vec<PlacedBounds> = self
             .stats
@@ -523,21 +545,32 @@ impl App {
             self.ctrl_chord = false;
         }
         self.ctrl_held = ctrl;
-        // Tab can park focus on a button, where keys would stop reaching the
-        // tools and Enter would press it. Only a text box keeps the keyboard.
-        if !ctx.text_edit_focused()
-            && let Some(id) = ctx.memory(|m| m.focused())
-        {
-            ctx.memory_mut(|m| m.surrender_focus(id));
-        }
+        // Only a text box keeps the keyboard, and it has no use for this one.
         if ctx.text_edit_focused() {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+                self.save();
+            }
             return;
         }
+        // Tab must not park focus. On a button, keys stop reaching the tools and
+        // Enter presses it. In the path box, tool keys edit the path and Enter
+        // starts opening whatever that became.
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+            m.move_focus(egui::FocusDirection::None);
+        });
         if tapped {
             self.feed(Input::ToggleCopy);
         }
         for ev in ctx.input(|i| i.events.clone()) {
             match ev {
+                // egui cleared the box's focus before this frame: Esc is spent.
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    ..
+                } if self.path_focused => {}
                 egui::Event::Text(text) => {
                     for ch in text.chars() {
                         if typed_accepts(&self.typed, ch) {
@@ -926,7 +959,15 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label("File:");
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
-                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let had_focus = std::mem::replace(&mut self.path_focused, field.has_focus());
+                #[cfg(test)]
+                {
+                    self.path_rect = field.rect;
+                }
+                // lost_focus stays true a frame longer: an Enter then is not the box's.
+                let enter = had_focus
+                    && field.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Buka").clicked() || enter {
                     self.leave(Leaving::Open);
                 }
@@ -1042,7 +1083,7 @@ impl App {
                         .as_deref()
                         .and_then(Path::file_name)
                         .map_or("Proyek baru".into(), |n| n.to_string_lossy()),
-                    self.scene.project().occupied().count(),
+                    self.tile_count(),
                     self.stats.values().map(|s| s.objects).sum::<usize>(),
                     self.stats.values().map(|s| s.triangles).sum::<usize>(),
                 ));
@@ -1058,7 +1099,7 @@ impl App {
                     ui.separator();
                     ui.colored_label(
                         egui::Color32::from_rgb(200, 120, 0),
-                        format!("Dipecah menjadi {} tile kernel 1 km", self.stats.len()),
+                        format!("Dipecah menjadi {} tile kernel 1 km", self.tile_count()),
                     );
                 }
                 if self.unsaved {
@@ -1164,8 +1205,9 @@ impl App {
         let m = ui.input(|i| i.modifiers);
         let held = resp.dragged_by(egui::PointerButton::Middle)
             || (m.alt && resp.dragged_by(egui::PointerButton::Primary));
-        if held {
-            let d = resp.drag_delta();
+        let d = resp.drag_delta();
+        // A held button that does not move changes nothing, and must not spin.
+        if held && d != egui::Vec2::ZERO {
             if m.shift {
                 self.orbit.pan(d.x, d.y, size.y);
             } else {
@@ -1215,6 +1257,9 @@ impl App {
             && let Some(p) = resp.interact_pointer_pos()
         {
             self.error = None;
+            // A click answers instead of the value; left over, it would block
+            // the tool letters and feed the next Enter.
+            self.typed.clear();
             let ray = ray_at(&self.orbit, p);
             let shift = resp.ctx.input(|i| i.modifiers.shift);
             self.feed(if shift {

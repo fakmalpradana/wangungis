@@ -989,6 +989,8 @@ impl Tool {
                 } else {
                     Some(axis)
                 };
+                // It was computed without this lock: a typed length must not use it.
+                c.cursor = None;
             }
             Input::ClickAdd(_) | Input::Cancel | Input::ToggleCopy => {}
         }

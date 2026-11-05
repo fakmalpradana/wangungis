@@ -43,7 +43,7 @@ Perilaku:
 - **Tape:** klik titik awal, lalu klik atau ketik jarak; `measure()` memberi jaraknya. Dari tepi menghasilkan garis panduan sejajar; dari titik, atau searah tepi, menghasilkan titik panduan.
 - **Follow Me:** klik region sebagai penampang, lalu klik garis sebagai jalur. Penampang harus tegak lurus jalur di ujungnya; penolakan kernel tampil di status bar.
 - **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.
-- **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
+- **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci. Pada Line, mengubah kunci melupakan posisi kursor, jadi panjang yang diketik menunggu `Hover` berikutnya dan tidak memakai arah dari sebelum kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 
 VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan.
