@@ -13,6 +13,7 @@ wangungis-io.workspace = true
 inference.workspace = true
 eframe.workspace = true
 wgpu.workspace = true
+rfd.workspace = true
 
 [dev-dependencies]
 pollster.workspace = true

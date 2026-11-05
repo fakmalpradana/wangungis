@@ -160,6 +160,12 @@ impl Driver {
         self.key(key);
     }
 
+    /// The file window waiting, answered as if the user chose `path`.
+    fn answer_dialog(&mut self, path: Option<&std::path::Path>) {
+        let dialog = self.app.dialog.take().expect("a file window is waiting");
+        self.app.answer_dialog(dialog, path.map(ToOwned::to_owned));
+    }
+
     /// Typed value, then Enter.
     fn value(&mut self, text: &str) {
         self.frame(vec![egui::Event::Text(text.into())]);
@@ -350,8 +356,10 @@ fn smoke_checklist_in_the_real_app() {
     let dir = std::env::temp_dir().join(format!("wangungis-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("uji.hew");
-    d.app.path = file.to_string_lossy().into_owned();
+    // Cmd+S on a project never saved asks where.
     d.key_with(K::S, COMMAND);
+    assert_eq!(d.app.dialog, Some(Dialog::SaveAs));
+    d.answer_dialog(Some(&file));
     assert_eq!(d.app.error, None);
     assert!(!d.app.unsaved);
     let saved = std::fs::read(&file).unwrap();
@@ -360,11 +368,12 @@ fn smoke_checklist_in_the_real_app() {
     d.app.new_project();
     d.frame(vec![]);
     assert_eq!(d.counts(), (0, 0));
-    assert!(d.app.path.is_empty());
+    assert_eq!(d.app.source.path, None);
     assert!(!d.app.scene.can_undo());
 
-    d.app.path = file.to_string_lossy().into_owned();
-    d.app.open();
+    d.key_with(K::O, COMMAND);
+    assert_eq!(d.app.dialog, Some(Dialog::Open));
+    d.answer_dialog(Some(&file));
     d.frame(vec![]);
     assert_eq!(d.app.error, None);
     assert_eq!((d.counts(), d.extents()), before);
@@ -374,13 +383,24 @@ fn smoke_checklist_in_the_real_app() {
     d.key_with(K::S, COMMAND);
     assert_eq!(std::fs::read(&file).unwrap(), saved);
 
-    // A different existing file is never replaced.
+    // A name changed here was never asked about: it replaces nothing.
     let other = dir.join("lain.hew");
     std::fs::write(&other, b"milik orang").unwrap();
-    d.app.path = other.to_string_lossy().into_owned();
-    d.key_with(K::S, COMMAND);
+    d.app.save_to(&dir.join("lain.wangun"));
     assert!(d.app.error.is_some());
     assert_eq!(std::fs::read(&other).unwrap(), b"milik orang");
+
+    // The window asked about this one: Save As replaces it and moves on to it.
+    d.key_with(K::S, COMMAND | egui::Modifiers::SHIFT);
+    assert_eq!(d.app.dialog, Some(Dialog::SaveAs));
+    d.answer_dialog(Some(&other));
+    assert_eq!(d.app.error, None);
+    assert_eq!(std::fs::read(&other).unwrap(), saved);
+    assert_eq!(d.app.source.path.as_deref(), Some(other.as_path()));
+    // Cancelling changes nothing.
+    d.key_with(K::S, COMMAND | egui::Modifiers::SHIFT);
+    d.answer_dialog(None);
+    assert_eq!(d.app.source.path.as_deref(), Some(other.as_path()));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -560,15 +580,13 @@ fn box_with_a_door_in_an_array_of_ten() {
     let dir = std::env::temp_dir().join(format!("wangungis-exit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("kota.hew");
-    d.app.path = file.to_string_lossy().into_owned();
-    d.key_with(K::S, COMMAND);
+    d.app.save_to(&file);
     assert_eq!(d.app.error, None);
     let saved = std::fs::read(&file).unwrap();
     let before = d.counts();
     d.app.new_project();
     d.frame(vec![]);
-    d.app.path = file.to_string_lossy().into_owned();
-    d.app.open();
+    d.app.open_path(&file);
     d.frame(vec![]);
     assert_eq!(d.counts(), before);
     close(d.extents(), [75.0, 4.0, 3.0]);
@@ -973,8 +991,7 @@ fn autosave_survives_a_crash_and_goes_after_a_save() {
     assert!(!next.app.modal());
 
     // Saving makes the autosave pointless.
-    next.app.path = dir.join("uji.hew").to_string_lossy().into_owned();
-    next.key_with(egui::Key::S, COMMAND);
+    next.app.save_to(&dir.join("uji.hew"));
     assert_eq!(next.app.error, None);
     assert!(!auto.exists());
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1138,56 +1155,96 @@ fn holding_still_while_navigating_goes_idle() {
 }
 
 #[test]
-fn the_keyboard_and_the_path_box() {
+fn the_keyboard_stays_with_the_tools() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut d) = Driver::start() else { return };
     use egui::Key as K;
 
-    // Tab from the view does not walk into the box and take the tool keys.
+    // Tab from the view does not park focus and take the tool keys.
     d.key(K::Tab);
     d.frame(vec![]);
     d.letter(K::L, "l");
     assert!(d.app.tool.same_kind(&Tool::line(0.0)));
-    assert!(d.app.path.is_empty());
+}
 
-    // Esc that leaves the box does not also cancel the gesture.
-    d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
-    assert!(d.app.tool.busy());
-    let box_at = d.app.path_rect.center();
-    d.click_at(box_at);
-    d.frame(vec![egui::Event::Text("abc".into())]);
-    assert_eq!(d.app.path, "abc", "the box has the keyboard");
-    d.key(K::Escape);
-    assert!(d.app.tool.busy(), "the rectangle survives");
-    d.key(K::Enter);
-    assert_eq!(d.app.error, None, "Enter after leaving opens nothing");
-    d.key(K::Escape);
-    assert!(!d.app.tool.busy(), "the next Esc is for the tool");
-
-    // Enter in the box still opens its path.
-    d.click_at(box_at);
-    d.key(K::Enter);
-    assert!(d.app.error.is_some(), "abc does not exist");
-
-    // Cmd+S works from the box.
-    let dir = std::env::temp_dir().join(format!("wangungis-box-{}", std::process::id()));
+/// With changes unsaved in a project never saved, Buka asks, Simpan opens the file
+/// window, and only a real answer goes on to the next window.
+#[test]
+fn leaving_through_a_save_window() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+    let dir = std::env::temp_dir().join(format!("wangungis-pergi-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("dari-kotak.hew");
-    d.click_at(box_at);
-    d.frame(vec![egui::Event::Key {
-        key: K::A,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers: COMMAND,
-    }]);
-    d.frame(vec![egui::Event::Text(file.to_string_lossy().into())]);
-    assert_eq!(d.app.path, file.to_string_lossy());
-    d.key_with(K::S, COMMAND);
-    assert_eq!(d.app.error, None);
-    assert!(file.exists(), "saved while the box had focus");
+
+    draw_a_box(&mut d);
+    d.key_with(K::O, COMMAND);
+    assert_eq!(d.app.leaving, Some(Leaving::Open));
+    assert_eq!(d.app.dialog, None, "not before the question");
+
+    // What the Simpan button in that question does.
+    d.app.save();
+    assert_eq!(d.app.dialog, Some(Dialog::SaveAs));
+    d.app.after_save = d.app.leaving.take();
+    d.answer_dialog(None);
+    assert_eq!(d.app.dialog, None);
+    assert!(d.app.unsaved, "cancelled: nothing saved");
+    assert_eq!(d.app.after_save, None, "and not going anywhere");
+
+    d.key_with(K::O, COMMAND);
+    d.app.save();
+    d.app.after_save = d.app.leaving.take();
+    d.answer_dialog(Some(&dir.join("pergi.hew")));
+    assert!(!d.app.unsaved);
+    assert_eq!(d.app.dialog, Some(Dialog::Open), "on to what was asked for");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Ekspor writes what the name asks for, and says why when it cannot.
+#[test]
+fn export_by_the_name_chosen() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-ekspor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    d.app.export_to(&dir.join("kosong.obj"));
+    assert!(d.app.error.is_some(), "nothing to export");
+    assert!(!dir.join("kosong.obj").exists());
+
+    draw_a_box(&mut d);
+    for name in ["m.obj", "m.glb", "m.gltf", "m.stl", "m.3mf"] {
+        d.app.dialog = Some(Dialog::Export);
+        d.answer_dialog(Some(&dir.join(name)));
+        assert_eq!(d.app.error, None, "{name}");
+        assert!(
+            std::fs::metadata(dir.join(name)).unwrap().len() > 0,
+            "{name}"
+        );
+    }
+    let saved_obj = std::fs::read(dir.join("m.obj")).unwrap();
+    // The file window asked: replacing is fine.
+    d.app.export_to(&dir.join("m.obj"));
+    assert_eq!(d.app.error, None);
+    assert_eq!(std::fs::read(dir.join("m.obj")).unwrap(), saved_obj);
+
+    d.app.export_to(&dir.join("m.dxf"));
+    assert!(d.app.error.is_some(), "not a format");
+    assert!(!dir.join("m.dxf").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The formats window lists every format the app really writes.
+#[test]
+fn the_formats_window_tells_the_truth() {
+    for format in wangungis_io::FORMATS {
+        assert!(
+            FILE_FORMATS
+                .iter()
+                .any(|(_, f, _)| *f == format!(".{format}")),
+            "{format}"
+        );
+    }
 }
 
 /// Uji asap step 18: a guide shows, in its own color, and says so.
