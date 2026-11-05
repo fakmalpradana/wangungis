@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 kernel.workspace = true
 wangungis-scene.workspace = true
+wangungis-pointcloud.workspace = true
 tessellate.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true

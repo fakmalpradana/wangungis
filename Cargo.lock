@@ -2804,9 +2804,12 @@ dependencies = [
  "eframe",
  "inference",
  "kernel",
+ "las",
  "pollster 1.0.1",
  "rfd",
+ "serde_json",
  "wangungis-io",
+ "wangungis-pointcloud",
  "wangungis-render",
  "wangungis-scene",
  "wangungis-tools",
@@ -2833,6 +2836,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "wangungis-render",
 ]
 
 [[package]]
@@ -2843,6 +2847,7 @@ dependencies = [
  "kernel",
  "pollster 1.0.1",
  "tessellate",
+ "wangungis-pointcloud",
  "wangungis-scene",
  "wgpu",
 ]
@@ -2864,7 +2869,10 @@ version = "0.0.0"
 dependencies = [
  "inference",
  "kernel",
+ "las",
  "proptest",
+ "wangungis-pointcloud",
+ "wangungis-render",
  "wangungis-scene",
 ]
 

@@ -8,6 +8,9 @@ license.workspace = true
 kernel.workspace = true
 inference.workspace = true
 wangungis-scene.workspace = true
+wangungis-pointcloud.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+las.workspace = true
+wangungis-render.workspace = true

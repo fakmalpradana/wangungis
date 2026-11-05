@@ -15,13 +15,14 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use inference::{
-    InferenceScene, PickRay, RANK_TIE_FRACTION, Snap, SnapKind, SnapQuery, SnapSource,
+    InferenceScene, PickRay, RANK_TIE_FRACTION, Snap, SnapKind, SnapLock, SnapQuery, SnapSource,
     rank_distance_bucket,
 };
 use kernel::{
     Document, KernelOp, Material, NodeId, ObjectId, Plane, Point3, Rgba8, SketchId, SketchIslandId,
     SketchRegionId, Transform, Vec3,
 };
+use wangungis_pointcloud::CloudSet;
 use wangungis_scene::project::{
     Project, ProjectError, TileKey, horizontal_reach, node_points, node_visible,
 };
@@ -146,6 +147,9 @@ fn drawable(doc: &Document, plane: Plane) -> Vec<ObjectId> {
 pub struct Hit {
     pub tile: TileKey,
     pub snap: Snap,
+    /// It is a point of a point cloud, not geometry. `snap.kind` is `Endpoint`, as
+    /// Hew's list has nothing else for an exact spot.
+    pub cloud: bool,
 }
 
 /// One line of the Outliner.
@@ -327,6 +331,8 @@ pub struct Scene {
     /// The drawing that belongs to the open session. Hew does not say for a
     /// group, except by closing it on a copy, so this is kept across hovers.
     open_sketches: Vec<SketchId>,
+    /// The project's point clouds. Never edited, never in the file.
+    pub clouds: CloudSet,
 }
 
 /// The sketches an open session owns. Costs a copy of the tile for a group.
@@ -542,6 +548,7 @@ impl Scene {
             redo: Vec::new(),
             dirty: BTreeSet::new(),
             open_sketches: Vec::new(),
+            clouds: CloudSet::default(),
         }
     }
 
@@ -811,12 +818,18 @@ impl Scene {
             let angle = to.cross(dir).length().atan2(depth) / query.weights.weight(snap.kind);
             // Every scene answers a lock with its bare line when it has nothing:
             // that answer must not beat real geometry from another cell.
+            // Doubled, to leave a rank between Hew's for a point cloud's point.
             let rank = if locked && snap.projected_from.is_none() {
                 u8::MAX
             } else {
-                snap.kind.rank_group()
+                snap.kind.rank_group() * 2
             };
-            found.push((rank, angle, depth, Hit { tile: key, snap }, aim));
+            let hit = Hit {
+                tile: key,
+                snap,
+                cloud: false,
+            };
+            found.push((rank, angle, depth, hit, aim));
         };
         let unit = SnapQuery { ray, ..*query };
         if let Some(snap) = self.base.resolve(&unit) {
@@ -840,6 +853,21 @@ impl Scene {
                 offer(key, snap);
             }
         });
+        if let Some(hit) = self.cloud_snap(&unit) {
+            let aim = hit.snap.projected_from.unwrap_or(hit.snap.position);
+            let to = aim - ray.origin;
+            let depth = to.dot(dir);
+            let angle = to.cross(dir).length().atan2(depth);
+            // Geometry on the model outranks it, down to edges. Faces do not: a
+            // face behind the cloud would take the point away from under the ray.
+            found.push((
+                SnapKind::OnFace.rank_group() * 2 - 1,
+                angle,
+                depth,
+                hit,
+                aim,
+            ));
+        }
         found.sort_by(|a, b| {
             let bucket = |d: f64| rank_distance_bucket(d, query.aperture * RANK_TIE_FRACTION);
             a.0.cmp(&b.0)
@@ -855,6 +883,46 @@ impl Scene {
             }
         }
         None
+    }
+
+    /// The cloud's point under a unit ray. Under a lock or on a drawing plane it
+    /// lands on that line or plane, and says where it came from.
+    fn cloud_snap(&self, query: &SnapQuery) -> Option<Hit> {
+        let o = query.ray.origin;
+        let d = query.ray.direction;
+        let at = self
+            .clouds
+            .pick([o.x, o.y, o.z], [d.x, d.y, d.z], query.aperture)?;
+        let point = Point3::new(at[0], at[1], at[2]);
+        let on_line = match (query.lock, query.anchor) {
+            (Some(lock), Some(anchor)) => {
+                let along = match lock {
+                    SnapLock::Axis(axis) => axis.unit(),
+                    SnapLock::Direction(v) => v.normalized().ok()?,
+                };
+                Some(anchor + along * (point - anchor).dot(along))
+            }
+            _ => None,
+        };
+        let on_plane = query
+            .constraint_plane
+            .map(|p| point - p.normal() * p.signed_distance(point));
+        let position = on_line.or(on_plane).unwrap_or(point);
+        Some(Hit {
+            tile: TileKey::of([position.x, position.y]),
+            snap: Snap {
+                position,
+                kind: SnapKind::Endpoint,
+                source: None,
+                sketch_source: None,
+                sketch_region_source: None,
+                sketch_curve_source: None,
+                direction: None,
+                projected_from: (position != point).then_some(point),
+                crossed_edge: None,
+            },
+            cloud: true,
+        })
     }
 
     /// Whether a solid face in any cell stands between `eye` and `point`. Each

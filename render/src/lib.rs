@@ -9,6 +9,7 @@
 //! Port of spike `wangungis-spikes/s6-native-render`.
 
 use bytemuck::{Pod, Zeroable};
+use wangungis_pointcloud::{ChangedChunk, CloudPoint, DrawChunk, Slice};
 use wangungis_scene::project::node_visible;
 use wgpu::util::DeviceExt;
 
@@ -35,6 +36,33 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location
 @fragment fn fs_overlay() -> @location(0) vec4<f32> { return vec4<f32>(u.light.xyz, 1.0); }
 "#;
 
+/// Point cloud chunks: one quad per point, its corners from the vertex index. The
+/// instance holds position as a fraction of the chunk and a color. A point outside
+/// the slice goes outside clip space, where nothing rasterizes.
+const CLOUD_SHADER: &str = r#"
+struct C {
+  view_proj: mat4x4<f32>, offset: vec4<f32>, scale: vec4<f32>,
+  slice_min: vec4<f32>, slice_max: vec4<f32>, half_px: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> c: C;
+struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec3<f32> };
+@vertex fn vs_cloud(@builtin(vertex_index) i: u32, @location(0) q: vec4<f32>, @location(1) color: vec4<f32>) -> O {
+  var o: O;
+  o.color = color.rgb;
+  let rel = c.offset.xyz + q.xyz * c.scale.xyz;
+  if (c.slice_min.w > 0.0 && (any(rel < c.slice_min.xyz) || any(rel > c.slice_max.xyz))) {
+    o.p = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    return o;
+  }
+  var p = c.view_proj * vec4<f32>(rel, 1.0);
+  let corner = vec2<f32>(f32(i & 1u) * 2.0 - 1.0, f32((i >> 1u) & 1u) * 2.0 - 1.0);
+  p = vec4<f32>(p.xy + corner * c.half_px.xy * p.w, p.zw);
+  o.p = p;
+  return o;
+}
+@fragment fn fs_cloud(i: O) -> @location(0) vec4<f32> { return vec4<f32>(i.color, 1.0); }
+"#;
+
 /// How solid geometry outside an open group looks, in a vertex's alpha.
 // ponytail: its edges stay dark, the edge pipeline has no color.
 const FADED: u8 = 90;
@@ -53,6 +81,17 @@ struct Uniform {
     view_proj: [[f32; 4]; 4],
     offset: [f32; 4],
     light: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CloudUniform {
+    view_proj: [[f32; 4]; 4],
+    offset: [f32; 4],
+    scale: [f32; 4],
+    slice_min: [f32; 4],
+    slice_max: [f32; 4],
+    half_px: [f32; 4],
 }
 
 /// CPU-side merged geometry of one tile, in the tile's own frame.
@@ -372,7 +411,21 @@ struct Overlay {
     bg: wgpu::BindGroup,
 }
 
+/// One chunk of points on the GPU.
+struct CloudChunk {
+    min: [f64; 3],
+    size: [f64; 3],
+    vb: wgpu::Buffer,
+    n: u32,
+    ub: wgpu::Buffer,
+    bg: wgpu::BindGroup,
+}
+
 pub struct Renderer {
+    cloud: wgpu::RenderPipeline,
+    cloud_chunks: std::collections::HashMap<(u32, usize), CloudChunk>,
+    /// What the next [`Renderer::draw`] shows, in draw order.
+    cloud_draws: Vec<DrawChunk>,
     tri: wgpu::RenderPipeline,
     edge: wgpu::RenderPipeline,
     over: wgpu::RenderPipeline,
@@ -500,7 +553,43 @@ impl Renderer {
                 bias: Default::default(),
             }),
         );
+        let cloud_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cloud"),
+            source: wgpu::ShaderSource::Wgsl(CLOUD_SHADER.into()),
+        });
+        let cloud_attrs = wgpu::vertex_attr_array![0 => Unorm16x4, 1 => Unorm8x4];
+        let cloud = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cloud"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &cloud_module,
+                entry_point: Some("vs_cloud"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CloudPoint>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &cloud_attrs,
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cloud_module,
+                entry_point: Some("fs_cloud"),
+                compilation_options: Default::default(),
+                targets: &target,
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: depth(true, Default::default()),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         Renderer {
+            cloud,
+            cloud_chunks: Default::default(),
+            cloud_draws: Vec::new(),
             tri,
             edge,
             over,
@@ -596,6 +685,108 @@ impl Renderer {
         self.tiles.clear();
     }
 
+    /// Replaces one chunk of a cloud's points. None left: drops it.
+    pub fn set_cloud_chunk(&mut self, device: &wgpu::Device, chunk: ChangedChunk<'_>) {
+        let key = (chunk.id, chunk.chunk);
+        if chunk.points.is_empty() {
+            self.cloud_chunks.remove(&key);
+            return;
+        }
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("cloud"),
+            contents: bytemuck::cast_slice(chunk.points),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let (ub, bg) = match self.cloud_chunks.remove(&key) {
+            Some(old) => (old.ub, old.bg),
+            None => {
+                let ub = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("cloud"),
+                    size: std::mem::size_of::<CloudUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: ub.as_entire_binding(),
+                    }],
+                });
+                (ub, bg)
+            }
+        };
+        self.cloud_chunks.insert(
+            key,
+            CloudChunk {
+                min: chunk.min,
+                size: chunk.size,
+                vb,
+                n: chunk.points.len() as u32,
+                ub,
+                bg,
+            },
+        );
+    }
+
+    /// Drops one cloud from the GPU.
+    pub fn remove_cloud(&mut self, id: u32) {
+        self.cloud_chunks.retain(|k, _| k.0 != id);
+    }
+
+    pub fn clear_clouds(&mut self) {
+        self.cloud_chunks.clear();
+        self.cloud_draws.clear();
+    }
+
+    /// Sets what the next [`Renderer::draw`] shows of the clouds. `viewport`: the
+    /// target's size in pixels, `point_px`: a point's edge in those pixels.
+    pub fn prepare_clouds(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        draws: &[DrawChunk],
+        viewport: [u32; 2],
+        point_px: f32,
+        slice: Option<Slice>,
+    ) {
+        let view_proj = camera.view_proj_at_eye();
+        // A quad's half size in clip units: a pixel is 2 / width of them, so half of
+        // `point_px` pixels is `point_px / width`.
+        let half_px = [
+            point_px / viewport[0].max(1) as f32,
+            point_px / viewport[1].max(1) as f32,
+            0.0,
+            0.0,
+        ];
+        let at = |p: [f64; 3], on: f32| {
+            let r = sub(p, camera.eye).map(|x| x as f32);
+            [r[0], r[1], r[2], on]
+        };
+        let (slice_min, slice_max) =
+            slice.map_or(([0.0; 4], [0.0; 4]), |s| (at(s.min, 1.0), at(s.max, 1.0)));
+        self.cloud_draws.clear();
+        for d in draws {
+            let Some(c) = self.cloud_chunks.get(&(d.id, d.chunk)) else {
+                continue;
+            };
+            // The f64 subtraction is the RTC step, as for tiles.
+            let o = sub(c.min, camera.eye).map(|x| x as f32);
+            let s = c.size.map(|x| x as f32);
+            let u = CloudUniform {
+                view_proj,
+                offset: [o[0], o[1], o[2], 0.0],
+                scale: [s[0], s[1], s[2], 0.0],
+                slice_min,
+                slice_max,
+                half_px,
+            };
+            queue.write_buffer(&c.ub, 0, bytemuck::bytes_of(&u));
+            self.cloud_draws.push(*d);
+        }
+    }
+
     /// Writes each tile's uniform for `camera`. Call before [`Renderer::draw`].
     pub fn prepare(&self, queue: &wgpu::Queue, camera: &Camera) {
         let view_proj = camera.view_proj_at_eye();
@@ -662,6 +853,18 @@ impl Renderer {
                 pass.draw(0..t.n_edge, 0..1);
                 calls += 1;
             }
+        }
+        if !self.cloud_draws.is_empty() {
+            pass.set_pipeline(&self.cloud);
+        }
+        for d in &self.cloud_draws {
+            let Some(c) = self.cloud_chunks.get(&(d.id, d.chunk)) else {
+                continue;
+            };
+            pass.set_bind_group(0, &c.bg, &[]);
+            pass.set_vertex_buffer(0, c.vb.slice(..));
+            pass.draw(0..4, 0..d.count.min(c.n));
+            calls += 1;
         }
         for o in &self.overlays {
             pass.set_pipeline(&self.over);

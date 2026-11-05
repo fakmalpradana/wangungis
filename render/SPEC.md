@@ -11,6 +11,7 @@ Renderer wgpu ber-batching dengan RTC per tile (ADR-003). Satu tile kernel (satu
 - `Renderer::new(&Device, TextureFormat)`: depth `DEPTH_FORMAT` (Depth32Float).
 - `Renderer::add_tile(&Device, origin_f64, &TileMesh)`: mengunggah tile, menggantikan tile dengan origin yang sama. `Renderer::clear_tiles()`.
 - `Renderer::set_overlay(&Device, &[OverlayLines { color, lines }])`: garis umpan balik tool. Satu warna per grup, satu draw call per grup, selalu di atas model, posisi `f64` lokal-proyek. Garis dipotong ke batas pandang di CPU setiap frame: lavapipe kehilangan garis sepanjang 200 m atau lebih di viewport lebar (terukur di CI; penyebab pastinya asumsi: ujung hasil potongan driver terlalu jauh di luar layar).
+- `Renderer::set_cloud_chunk(&Device, ChangedChunk)`, `remove_cloud(id)`, `clear_clouds()`: titik point cloud per chunk, 12 byte per titik: posisi `Unorm16x4` relatif chunk dan warna `Unorm8x4`. `Renderer::prepare_clouds(&Queue, &Camera, draws, viewport, point_px, slice)` menetapkan yang digambar pada `draw` berikutnya. Tiap titik satu quad (4 verteks per instance) berukuran piksel tetap, memakai depth buffer yang sama dengan solid, digambar setelah tile dan sebelum overlay. Titik di luar kotak potong dibuang di vertex shader, jadi memotong tidak mengunggah apa pun. Offset dihitung `f64` seperti RTC tile.
 - `Renderer::prepare(&Queue, &Camera)` lalu `Renderer::draw(&mut RenderPass) -> draw_calls`.
 - Renderer tidak tahu apa pun soal egui maupun UI.
 
@@ -18,7 +19,7 @@ Renderer wgpu ber-batching dengan RTC per tile (ADR-003). Satu tile kernel (satu
 - Offset tile terhadap kamera dihitung dalam `f64`. Hanya hasil kecilnya yang diubah ke `f32`.
 - Render tile di origin, di 40 km, dan di UTM penuh (430000, 9150000) identik selama kamera ikut bergeser. Terukur 0,00% piksel berbeda; box di tepi tile (±1,6 km dari frame) 0,003%. Ambang: ≤ 0,1% (`tests/golden.rs`).
 - Kontrol negatif: tanpa RTC, yaitu geometri `f32` di koordinat UTM, render salah (terukur 1,1–1,2% piksel berbeda, ambang > 0,5%; render tidak boleh kosong).
-- Jumlah draw call = 2 × jumlah tile + jumlah grup overlay (buffer kosong dilewati). Uniform tiap tile terpisah: dua tile menghasilkan dua kotak di tempat yang benar.
+- Jumlah draw call = 2 × jumlah tile + jumlah chunk titik yang digambar + jumlah grup overlay (buffer kosong dilewati). Uniform tiap tile terpisah: dua tile menghasilkan dua kotak di tempat yang benar.
 - Matriks view tetap finite saat kamera tegak lurus ke bawah atau mata = target.
 - Face diberi depth bias agar edge koplanar tidak z-fight.
 - Test GPU di-skip bila tidak ada adapter atau device (hardware lalu fallback software), kecuali `WANGUNGIS_REQUIRE_GPU` di-set. CI men-set variabel itu di ketiga OS.

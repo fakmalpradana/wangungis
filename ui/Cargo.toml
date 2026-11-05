@@ -10,6 +10,8 @@ wangungis-scene.workspace = true
 wangungis-render.workspace = true
 wangungis-tools.workspace = true
 wangungis-io.workspace = true
+wangungis-pointcloud.workspace = true
+serde_json.workspace = true
 inference.workspace = true
 eframe.workspace = true
 wgpu.workspace = true
@@ -17,3 +19,4 @@ rfd.workspace = true
 
 [dev-dependencies]
 pollster.workspace = true
+las.workspace = true
