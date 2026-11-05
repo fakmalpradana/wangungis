@@ -8,6 +8,7 @@ use inference::{
 };
 use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
+use wangungis_pointcloud::Slice;
 use wangungis_scene::project::TileKey;
 
 use crate::vcb::{self, Unit, Vcb};
@@ -25,6 +26,8 @@ const MIN_SCALE: f64 = 1e-3;
 /// Facets of an arc per full turn, and at least this many on any arc.
 const ARC_SIDES_PER_TURN: f64 = 48.0;
 const MIN_ARC_SIDES: usize = 4;
+/// Thinnest the slice box gets (m), so that its sides never pass each other.
+const MIN_SLICE: f64 = 0.05;
 /// Cosine under which a direction counts as lying in a plane.
 const IN_PLANE: f64 = 1e-6;
 
@@ -88,8 +91,89 @@ struct Armed {
     base: f64,
 }
 
+/// One side of the slice box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Grip {
+    axis: usize,
+    high: bool,
+}
+
+const GRIPS: [Grip; 6] = [
+    Grip {
+        axis: 0,
+        high: false,
+    },
+    Grip {
+        axis: 0,
+        high: true,
+    },
+    Grip {
+        axis: 1,
+        high: false,
+    },
+    Grip {
+        axis: 1,
+        high: true,
+    },
+    Grip {
+        axis: 2,
+        high: false,
+    },
+    Grip {
+        axis: 2,
+        high: true,
+    },
+];
+
+/// Middle of a side of the box.
+fn grip_at(slice: &Slice, grip: Grip) -> Point3 {
+    let mut c: [f64; 3] = std::array::from_fn(|k| (slice.min[k] + slice.max[k]) / 2.0);
+    c[grip.axis] = if grip.high {
+        slice.max[grip.axis]
+    } else {
+        slice.min[grip.axis]
+    };
+    Point3::new(c[0], c[1], c[2])
+}
+
+/// The grip a ray points at, within `aperture`, nearest the ray.
+fn grip_under(slice: &Slice, ray: &PickRay, aperture: f64) -> Option<Grip> {
+    let dir = ray.direction.normalized().ok()?;
+    GRIPS
+        .into_iter()
+        .filter_map(|g| {
+            let to = grip_at(slice, g) - ray.origin;
+            let angle = to.cross(dir).length().atan2(to.dot(dir));
+            (angle <= aperture).then_some((angle, g))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, g)| g)
+}
+
+/// Moves one side to `value`, stopping short of the side across from it.
+fn set_grip(slice: &mut Slice, grip: Grip, value: f64) {
+    let k = grip.axis;
+    if grip.high {
+        slice.max[k] = value.max(slice.min[k] + MIN_SLICE);
+    } else {
+        slice.min[k] = value.min(slice.max[k] - MIN_SLICE);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum State {
+    /// Draws and adjusts the box that hides the points outside it.
+    CloudSlice {
+        first: Option<Point3>,
+        cursor: Option<Point3>,
+        /// The side being moved, and the box to go back to on Esc.
+        holding: Option<(Grip, Slice)>,
+        hover: Option<Grip>,
+        /// As the scene has it, for the preview.
+        shown: Option<Slice>,
+        /// The last eye, to size the grips the same on screen.
+        eye: Option<Point3>,
+    },
     Select {
         selected: Option<Target>,
         outline: Vec<(Point3, Point3)>,
@@ -321,7 +405,8 @@ impl Chain {
                     crossed_edge: None,
                 };
                 let tile = self.tile;
-                return (position, Some(Hit { tile, snap }));
+                let cloud = false;
+                return (position, Some(Hit { tile, snap, cloud }));
             }
         }
         (point, hit)
@@ -486,6 +571,68 @@ fn pull_to(scene: &mut Scene, ray: PickRay, aperture: f64, armed: &mut Armed) ->
             None
         }
     }
+}
+
+/// Moves a side of the slice box to what the ray says: a point snapped to, or the
+/// nearest place on the line out of that side.
+fn pull_side(scene: &mut Scene, ray: PickRay, aperture: f64, grip: Grip) -> Option<Hit> {
+    let slice = scene.clouds.slice?;
+    let hit = scene.snap(&query(ray, aperture)).filter(|h| {
+        matches!(
+            h.snap.kind,
+            SnapKind::Endpoint
+                | SnapKind::Center
+                | SnapKind::Quadrant
+                | SnapKind::Intersection
+                | SnapKind::Midpoint
+                | SnapKind::OnEdge
+        )
+    });
+    let at = grip_at(&slice, grip);
+    let unit: [f64; 3] = std::array::from_fn(|k| f64::from(u8::from(k == grip.axis)));
+    let along = Vec3::new(unit[0], unit[1], unit[2]);
+    let value = match &hit {
+        Some(h) => {
+            let p = h.snap.position;
+            [p.x, p.y, p.z][grip.axis]
+        }
+        None => {
+            let d = along_line(&ray, at, along)?;
+            [at.x, at.y, at.z][grip.axis] + d
+        }
+    };
+    if let Some(slice) = &mut scene.clouds.slice {
+        set_grip(slice, grip, value);
+    }
+    hit
+}
+
+/// A corner of the box in plan: where a snap landed, or where the ray meets the
+/// level `z`.
+fn corner_at(ray: &PickRay, hit: Option<&Hit>, z: f64) -> Option<Point3> {
+    if let Some(h) = hit {
+        return Some(h.snap.position);
+    }
+    let level =
+        Plane::from_point_normal(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0)).ok()?;
+    ray_on_plane(ray, &level)
+}
+
+/// The twelve edges of a box.
+fn box_lines(min: [f64; 3], max: [f64; 3]) -> Vec<(Point3, Point3)> {
+    let at = |i: usize| {
+        let pick = |k: usize| if i >> k & 1 == 1 { max[k] } else { min[k] };
+        Point3::new(pick(0), pick(1), pick(2))
+    };
+    let mut lines = Vec::with_capacity(12);
+    for i in 0..8usize {
+        for k in 0..3 {
+            if i >> k & 1 == 0 {
+                lines.push((at(i), at(i | 1 << k)));
+            }
+        }
+    }
+    lines
 }
 
 /// The plane of the solid face or sketch region an `OnFace` snap landed on.
@@ -879,6 +1026,21 @@ impl Tool {
         )
     }
 
+    /// The box that hides the points outside it.
+    pub fn cloud_slice(aperture: f64) -> Self {
+        Self::with(
+            State::CloudSlice {
+                first: None,
+                cursor: None,
+                holding: None,
+                hover: None,
+                shown: None,
+                eye: None,
+            },
+            aperture,
+        )
+    }
+
     pub fn push_pull(aperture: f64) -> Self {
         Self::with(
             State::PushPull {
@@ -1025,6 +1187,18 @@ impl Tool {
             }
             State::Rectangle { first: None, .. } => "Klik sudut pertama.",
             State::Rectangle { .. } => "Klik sudut lawan atau ketik ukuran, mis. 5;4.",
+            State::CloudSlice { first: Some(_), .. } => {
+                "Klik sudut seberang. Tinggi kotak mengikuti seluruh awan."
+            }
+            State::CloudSlice {
+                holding: Some(_), ..
+            } => "Gerakkan sisi kotak, lalu klik. Esc membatalkan.",
+            State::CloudSlice { shown: Some(_), .. } => {
+                "Klik tanda di tengah sisi untuk menggesernya. Tampilkan semua ada di panel kanan."
+            }
+            State::CloudSlice { .. } => {
+                "Klik sudut pertama area yang ingin dilihat, paling mudah dari tampilan atas."
+            }
             State::PushPull {
                 armed: None,
                 keep: true,
@@ -1119,6 +1293,7 @@ impl Tool {
     /// True while a gesture is under way, so Esc means "cancel it".
     pub fn busy(&self) -> bool {
         match &self.state {
+            State::CloudSlice { first, holding, .. } => first.is_some() || holding.is_some(),
             State::Select {
                 selected, nodes, ..
             } => selected.is_some() || !nodes.is_empty(),
@@ -1151,6 +1326,7 @@ impl Tool {
         let unit = self.unit;
         let paint = self.paint.take();
         *self = match self.state {
+            State::CloudSlice { .. } => Self::cloud_slice(aperture),
             State::Select { .. } => Self::select(aperture),
             State::Line { .. } => Self::line(aperture),
             State::Rectangle { .. } => Self::rectangle(aperture),
@@ -1229,11 +1405,19 @@ impl Tool {
             other => other,
         };
         if input == Input::Cancel {
+            if let State::CloudSlice {
+                holding: Some((_, before)),
+                ..
+            } = self.state
+            {
+                scene.clouds.slice = Some(before);
+            }
             self.reset();
             return Ok(());
         }
         let hovering = matches!(input, Input::Hover(_));
         match &self.state {
+            State::CloudSlice { .. } => self.handle_cloud_slice(scene, input),
             State::Select { .. } => self.handle_select(scene, input),
             State::Line { .. } => self.handle_line(scene, input),
             State::Rectangle { .. } => self.handle_rectangle(scene, input),
@@ -2227,6 +2411,83 @@ impl Tool {
         Ok(())
     }
 
+    fn handle_cloud_slice(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::CloudSlice {
+            first,
+            cursor,
+            holding,
+            hover,
+            shown,
+            eye,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => {
+                *eye = Some(ray.origin);
+                self.preview.snap = None;
+                if let Some((grip, _)) = holding {
+                    self.preview.snap = pull_side(scene, ray, aperture, *grip);
+                } else if let Some(a) = first {
+                    let hit = scene.snap(&query(ray, aperture));
+                    *cursor = corner_at(&ray, hit.as_ref(), a.z);
+                    self.preview.snap = hit;
+                } else if let Some(slice) = scene.clouds.active_slice() {
+                    *hover = grip_under(&slice, &ray, aperture);
+                } else if !scene.clouds.is_empty() {
+                    self.preview.snap = scene.snap(&query(ray, aperture));
+                }
+            }
+            Input::Click(ray) | Input::ClickAdd(ray) => {
+                *eye = Some(ray.origin);
+                let Some((_, top)) = scene.clouds.bounds() else {
+                    return Err(needs("impor point cloud dulu"));
+                };
+                let (bottom, _) = scene.clouds.bounds().unwrap_or(([0.0; 3], top));
+                if let Some((grip, _)) = holding {
+                    pull_side(scene, ray, aperture, *grip);
+                    *holding = None;
+                } else if let Some(a) = first {
+                    let hit = scene.snap(&query(ray, aperture));
+                    let Some(b) = corner_at(&ray, hit.as_ref(), a.z) else {
+                        return Ok(());
+                    };
+                    let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+                    if dx < MIN_SLICE || dy < MIN_SLICE {
+                        return Ok(());
+                    }
+                    scene.clouds.slice = Some(Slice {
+                        min: [a.x.min(b.x), a.y.min(b.y), bottom[2]],
+                        max: [
+                            a.x.max(b.x),
+                            a.y.max(b.y),
+                            top[2].max(bottom[2] + MIN_SLICE),
+                        ],
+                    });
+                    scene.clouds.slice_on = true;
+                    *first = None;
+                    *cursor = None;
+                } else if let Some(slice) = scene.clouds.active_slice() {
+                    if let Some(grip) = grip_under(&slice, &ray, aperture) {
+                        *holding = Some((grip, slice));
+                        *hover = None;
+                    }
+                } else {
+                    let hit = scene.snap(&query(ray, aperture));
+                    *first = corner_at(&ray, hit.as_ref(), bottom[2]);
+                }
+            }
+            Input::Typed(_) => {
+                return Err(needs("kotak potong diatur dengan klik, bukan angka"));
+            }
+            Input::LockAxis(_) | Input::LockNormal | Input::Cancel | Input::ToggleCopy => {}
+        }
+        *shown = scene.clouds.active_slice();
+        Ok(())
+    }
+
     fn handle_push_pull(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::PushPull {
@@ -2409,7 +2670,39 @@ impl Tool {
 
     /// Rebuilds the preview lines from the state.
     fn refresh_lines(&mut self) {
+        let aperture = self.aperture;
         self.preview.lines = match &self.state {
+            State::CloudSlice {
+                first: Some(a),
+                cursor,
+                ..
+            } => cursor.map_or_else(Vec::new, |b| {
+                box_lines(
+                    [a.x.min(b.x), a.y.min(b.y), a.z],
+                    [a.x.max(b.x), a.y.max(b.y), a.z],
+                )
+            }),
+            State::CloudSlice {
+                shown: Some(slice),
+                hover,
+                holding,
+                eye,
+                ..
+            } => {
+                let mut lines = box_lines(slice.min, slice.max);
+                let lit = holding.map(|h| h.0).or(*hover);
+                for grip in GRIPS {
+                    let c = grip_at(slice, grip);
+                    let far = eye.map_or(1.0, |e| (c - e).length());
+                    let r = far * aperture * if lit == Some(grip) { 1.5 } else { 0.8 };
+                    for (x, y, z) in [(r, 0.0, 0.0), (0.0, r, 0.0), (0.0, 0.0, r)] {
+                        let v = Vec3::new(x, y, z);
+                        lines.push((c - v, c + v));
+                    }
+                }
+                lines
+            }
+            State::CloudSlice { .. } => Vec::new(),
             State::Select { outline, .. } => outline.clone(),
             State::Line { chain } => chain
                 .iter()

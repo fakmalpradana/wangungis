@@ -1,6 +1,6 @@
 # ADR-009: Impor point cloud
 
-- Status: **Accepted** 2026-11-05
+- Status: **Accepted** 2026-11-05 (disetujui pemilik lewat rencana)
 
 ## Keputusan
 - Impor LAS memakai crate `las` 0.11, berlisensi MIT dan ditulis dalam Rust murni.

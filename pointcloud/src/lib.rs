@@ -1,5 +1,12 @@
 //! LAS point clouds cached as shuffled spatial chunks. No GPU code here.
 
+mod set;
+
+pub use set::{
+    ChangedChunk, Cloud, CloudSet, DrawChunk, MAX_CHUNK_POINTS, MAX_DRAW_BUDGET, MAX_POINT_SIZE,
+    MIN_DRAW_BUDGET, MIN_POINT_SIZE, SavedCloud, SavedClouds, Slice, View, saved_clouds_path,
+};
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};

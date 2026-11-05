@@ -8,6 +8,7 @@
 //! skip, unless WANGUNGIS_REQUIRE_GPU is set, in which case they fail.
 
 use kernel::{Document, Material, ObjectId, Plane, Point3, Rgba8, Vec3};
+use wangungis_pointcloud::{ChangedChunk, CloudPoint, DrawChunk, Slice};
 use wangungis_render::{Camera, DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
 use wangungis_scene::project::Project;
 
@@ -680,4 +681,158 @@ fn sketch_regions_fill_from_both_sides_around_holes() {
     let (a, b) = (solid(&above), solid(&holed));
     // The hole takes 16 of the 100 square meters, give or take perspective.
     assert!(b < a * 0.9 && b > a * 0.7, "filled {a}, with hole {b}");
+}
+
+/// A flat grid of points on z = 0: `n` x `n` across 10 x 10 m, its corner at `at`.
+fn add_cloud_grid(r: &mut Renderer, device: &wgpu::Device, at: [f64; 3], n: u16) {
+    let step = 65535 / (n - 1);
+    let points: Vec<CloudPoint> = (0..n)
+        .flat_map(|y| {
+            (0..n).map(move |x| CloudPoint {
+                pos: [x * step, y * step, 0, 0],
+                color: [200, 40, 40, 255],
+            })
+        })
+        .collect();
+    r.set_cloud_chunk(
+        device,
+        ChangedChunk {
+            id: 7,
+            chunk: 0,
+            min: at,
+            size: [10.0, 10.0, 0.0],
+            points: &points,
+        },
+    );
+}
+
+fn cloud_pixels(
+    dq: &(wgpu::Device, wgpu::Queue),
+    at: [f64; 3],
+    count: u32,
+    point_px: f32,
+    slice: Option<Slice>,
+) -> (Vec<u8>, usize) {
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    add_cloud_grid(&mut r, &dq.0, at, 64);
+    let cam = camera(at);
+    let draws = [DrawChunk {
+        id: 7,
+        chunk: 0,
+        count,
+    }];
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], point_px, slice);
+    shoot(dq, &r, &cam)
+}
+
+/// Pixels of the points' color.
+fn red(px: &[u8]) -> usize {
+    px.chunks(4)
+        .filter(|p| p[0] > 150 && p[1] < 90 && p[2] < 90)
+        .count()
+}
+
+/// Points hold their place at UTM as well as at home, by the same RTC as tiles.
+#[test]
+fn points_render_the_same_at_utm() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let (home, calls) = cloud_pixels(&dq, [0.0; 3], 4096, 2.0, None);
+    assert_eq!(calls, 1);
+    assert!(red(&home) > 500, "{}", red(&home));
+    let (far, _) = cloud_pixels(&dq, [710_386.5, 9_316_096.9, 0.0], 4096, 2.0, None);
+    let d = diff(&home, &far);
+    assert!(d <= 0.001, "{:.3}% differ", d * 100.0);
+}
+
+/// A bigger point covers more of the view, a smaller count less.
+#[test]
+fn point_size_and_count_change_what_shows() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let (small, _) = cloud_pixels(&dq, [0.0; 3], 4096, 1.0, None);
+    let (big, _) = cloud_pixels(&dq, [0.0; 3], 4096, 6.0, None);
+    assert!(red(&big) > 2 * red(&small), "{} {}", red(&big), red(&small));
+    let (few, _) = cloud_pixels(&dq, [0.0; 3], 100, 6.0, None);
+    assert!(red(&few) * 2 < red(&big), "{} {}", red(&few), red(&big));
+}
+
+/// Outside the box nothing shows. Taking the box away gives the same picture back.
+#[test]
+fn a_slice_hides_what_is_outside_it() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let at = [710_386.5, 9_316_096.9, 0.0];
+    let (all, _) = cloud_pixels(&dq, at, 4096, 3.0, None);
+    let half = Slice {
+        min: [at[0], at[1], -1.0],
+        max: [at[0] + 5.0, at[1] + 10.0, 1.0],
+    };
+    let (cut, _) = cloud_pixels(&dq, at, 4096, 3.0, Some(half));
+    assert!(red(&cut) > 100, "{}", red(&cut));
+    assert!(red(&cut) < red(&all) * 3 / 4, "{} {}", red(&cut), red(&all));
+    let (back, _) = cloud_pixels(&dq, at, 4096, 3.0, None);
+    assert_eq!(back, all, "identical once it is off");
+
+    let away = Slice {
+        min: [at[0], at[1], 5.0],
+        max: [at[0] + 10.0, at[1] + 10.0, 6.0],
+    };
+    let (none, _) = cloud_pixels(&dq, at, 4096, 3.0, Some(away));
+    assert_eq!(red(&none), 0, "the whole grid is below the box");
+}
+
+/// A solid in front hides points behind it, and points in front of it stay.
+#[test]
+fn points_and_solids_share_the_depth_buffer() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let at = [0.0; 3];
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    add_cloud_grid(&mut r, &dq.0, at, 64);
+    let cam = camera(at);
+    let draws = [DrawChunk {
+        id: 7,
+        chunk: 0,
+        count: 4096,
+    }];
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 3.0, None);
+    let (open, _) = shoot(&dq, &r, &cam);
+    let doc = box_doc(1.0, 1.0);
+    r.add_tile(&dq.0, [0.0; 3], &TileMesh::from_document(&doc).unwrap());
+    let (hidden, calls) = shoot(&dq, &r, &cam);
+    assert_eq!(calls, 3, "faces, edges, one chunk");
+    assert!(red(&hidden) < red(&open), "{} {}", red(&hidden), red(&open));
+    assert!(red(&hidden) > 100, "the rest stays");
+
+    r.clear_clouds();
+    let (none, calls) = shoot(&dq, &r, &cam);
+    assert_eq!(calls, 2);
+    assert_eq!(red(&none), 0);
+}
+
+/// Replacing a chunk's points and dropping a cloud leave nothing behind.
+#[test]
+fn cloud_chunks_replace_and_go() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dq) = gpu() else { return };
+    let at = [0.0; 3];
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    add_cloud_grid(&mut r, &dq.0, at, 64);
+    add_cloud_grid(&mut r, &dq.0, at, 8);
+    let cam = camera(at);
+    // Asking beyond what it holds draws what it holds.
+    let draws = [DrawChunk {
+        id: 7,
+        chunk: 0,
+        count: 4096,
+    }];
+    r.prepare_clouds(&dq.1, &cam, &draws, [W, H], 3.0, None);
+    let (few, calls) = shoot(&dq, &r, &cam);
+    assert_eq!(calls, 1);
+    assert!(red(&few) > 0);
+    r.remove_cloud(7);
+    let (none, calls) = shoot(&dq, &r, &cam);
+    assert_eq!(calls, 0);
+    assert_eq!(red(&none), 0);
 }

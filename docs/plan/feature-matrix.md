@@ -107,7 +107,7 @@ Legenda:
 | 61 | Impor GeoTIFF/DEM sebagai terrain | P | – | S | M | 0.2 | GDAL/tiff crate | U G | R | belum |
 | 62 | Impor OSM | P | – | C | M | 0.2 | osmpbf crate (asumsi) | U | R | belum |
 | 63 | Basemap/ortofoto sebagai referensi | P | P | C | M | 0.3 | GDAL | G | R | belum |
-| 64 | Impor point cloud (LAS/LAZ) | P | – | C | L | 0.4 | las crate / PDAL | U B | R | belum |
+| 64 | Impor point cloud (LAS/LAZ) | P | – | C | L | 0.1 | las crate (ADR-009) | U B | R | parsial (LAS; LAZ, reproyeksi, dan warna per kelas belum) |
 
 ## LOD tools
 

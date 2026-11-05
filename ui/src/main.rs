@@ -12,12 +12,20 @@ mod smoke;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use camera::Orbit;
 use eframe::{egui, egui_wgpu};
 use inference::{Axis, PickRay, SnapKind};
 use kernel::{NodeId, Point3, Vec3};
+use wangungis_pointcloud::{
+    CloudFile, ImportError, MAX_DRAW_BUDGET, MAX_POINT_SIZE, MIN_DRAW_BUDGET, MIN_POINT_SIZE,
+    Progress, SavedCloud, SavedClouds, View as CloudView, saved_clouds_path,
+};
 use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
+use wangungis_scene::ProjectOrigin;
 use wangungis_scene::project::{Project, TileKey, node_visible};
 use wangungis_tools::tool::{Input, Preview, Tool};
 use wangungis_tools::vcb::Unit;
@@ -170,6 +178,16 @@ struct App {
     after_save: Option<Leaving>,
     /// The window saying which files go where.
     formats_open: bool,
+    /// The import under way, and those waiting for it.
+    cloud_import: Option<CloudImport>,
+    cloud_queue: Vec<QueuedCloud>,
+    /// Clouds the project names whose files could not be read this time. Kept, so
+    /// that saving does not forget a disk that is only unplugged.
+    clouds_missing: Vec<SavedCloud>,
+    /// `None`: imports are off, as when the home folder is unknown.
+    cache_dir: Option<PathBuf>,
+    /// Screen scale, as a point's size is in screen points.
+    ppp: f32,
     ctrl_held: bool,
     /// Another key or button went down while Ctrl was held.
     ctrl_chord: bool,
@@ -196,20 +214,25 @@ impl App {
             .wgpu_render_state
             .clone()
             .expect("eframe started with the wgpu renderer");
-        let mut app = Self::with_render_state(rs, path);
+        let mut app = Self::with_render_state(rs);
         app.autosave = default_autosave();
         app.recovery = app.autosave.as_ref().is_some_and(|p| p.exists());
+        app.cache_dir = user_file("cache");
         app.unit_file = user_file("unit");
         if let Some(p) = &app.unit_file {
             app.unit = read_unit(p);
             app.tool.set_unit(app.unit);
         }
+        // Last: a project's clouds need the folders above.
+        if let Some(path) = path {
+            app.open_path(Path::new(&path));
+        }
         app
     }
 
-    fn with_render_state(rs: egui_wgpu::RenderState, path: Option<String>) -> Self {
+    fn with_render_state(rs: egui_wgpu::RenderState) -> Self {
         let renderer = Renderer::new(&rs.device, COLOR_FORMAT);
-        let mut app = App {
+        App {
             rs,
             renderer,
             view: None,
@@ -237,6 +260,11 @@ impl App {
             dialog: None,
             after_save: None,
             formats_open: false,
+            cloud_import: None,
+            cloud_queue: Vec::new(),
+            clouds_missing: Vec::new(),
+            cache_dir: None,
+            ppp: 1.0,
             ctrl_held: false,
             ctrl_chord: false,
             error: None,
@@ -249,17 +277,16 @@ impl App {
             closing: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
-        };
-        if let Some(path) = path {
-            app.open_path(Path::new(&path));
         }
-        app
     }
 
     /// Starts over on `scene`: every tile uploaded, tool and typing cleared.
     fn adopt(&mut self, scene: Scene) {
         self.scene = scene;
         self.renderer.clear_tiles();
+        self.renderer.clear_clouds();
+        self.cancel_cloud_imports();
+        self.clouds_missing.clear();
         self.stats.clear();
         self.tool.reset();
         self.typed.clear();
@@ -302,6 +329,7 @@ impl App {
         if let Some(p) = &self.autosave {
             // Absent is fine: nothing was autosaved yet.
             let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(saved_clouds_path(p));
         }
     }
 
@@ -320,7 +348,9 @@ impl App {
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| write_atomic(&path, &bytes));
+            .and_then(|()| write_atomic(&path, &bytes))
+            .map_err(|e| e.to_string())
+            .and_then(|()| self.write_saved_clouds(&path));
         match written {
             Ok(()) => self.autosave_stale = false,
             Err(e) => self.error = Some(format!("Autosave gagal: {e}")),
@@ -343,6 +373,7 @@ impl App {
                 self.unsaved = true;
                 self.split_on_open = false;
                 self.fit_pending = true;
+                self.load_saved_clouds(&path);
             }
             Err(e) => self.error = Some(format!("Autosave tidak bisa dibuka: {e}")),
         }
@@ -382,6 +413,7 @@ impl App {
                 };
                 self.adopt(Scene::new(project));
                 self.fit_pending = true;
+                self.load_saved_clouds(path);
             }
             Err(e) => self.error = Some(e),
         }
@@ -416,13 +448,257 @@ impl App {
                     path: Some(target),
                     container: !single,
                 };
-                self.unsaved = false;
                 self.split_on_open = false;
                 self.error = None;
-                self.drop_autosave();
+                // Saved means all of it: closing must still ask otherwise.
+                let project = self.source.path.clone().expect("set just above");
+                match self.write_saved_clouds(&project) {
+                    Ok(()) => {
+                        self.unsaved = false;
+                        self.drop_autosave();
+                    }
+                    Err(e) => {
+                        self.error = Some(format!(
+                            "Proyek tersimpan, tetapi daftar point cloud tidak: {e}"
+                        ));
+                    }
+                }
             }
             Err(e) => self.error = Some(format!("Tidak bisa menyimpan {}: {e}", target.display())),
         }
+    }
+
+    /// Writes the companion file beside `project`, or removes it when no cloud is
+    /// left.
+    fn write_saved_clouds(&self, project: &Path) -> Result<(), String> {
+        let file = saved_clouds_path(project);
+        let dir = project.parent().unwrap_or(Path::new(""));
+        let mut saved = self.scene.clouds.saved(dir);
+        saved.clouds.extend(self.clouds_missing.iter().cloned());
+        if saved.clouds.is_empty() {
+            return match std::fs::remove_file(&file) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            };
+        }
+        let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;
+        write_atomic(&file, &bytes).map_err(|e| e.to_string())
+    }
+
+    /// Takes a cloud out of the project. With the last one gone, what was placed by
+    /// it goes too, so that the next cloud starts clean.
+    fn remove_cloud(&mut self, id: u32) {
+        self.scene.clouds.remove(id);
+        self.unsaved = true;
+        self.autosave_stale = true;
+        if self.scene.clouds.is_empty() && self.clouds_missing.is_empty() {
+            self.scene.clouds.frame = [0.0; 3];
+            self.scene.clouds.slice = None;
+            self.scene.clouds.slice_on = false;
+        }
+    }
+
+    /// Reads the companion file of a project just opened, if it has one.
+    fn load_saved_clouds(&mut self, project: &Path) {
+        let file = saved_clouds_path(project);
+        let Ok(bytes) = std::fs::read(&file) else {
+            return;
+        };
+        let saved: SavedClouds = match serde_json::from_slice(&bytes) {
+            Ok(saved) => saved,
+            Err(e) => {
+                self.error = Some(format!("{} tidak bisa dibaca: {e}", file.display()));
+                return;
+            }
+        };
+        self.scene.clouds.apply_saved(&saved);
+        let dir = project.parent().unwrap_or(Path::new(""));
+        for cloud in saved.clouds {
+            self.cloud_queue.push(QueuedCloud {
+                source: dir.join(cloud.path),
+                visible: cloud.visible,
+                restoring: true,
+            });
+            self.next_cloud_import();
+        }
+    }
+
+    /// Imports a LAS in the background. One at a time; the rest wait their turn.
+    fn import_cloud(&mut self, source: PathBuf) {
+        self.cloud_queue.push(QueuedCloud {
+            source,
+            visible: true,
+            restoring: false,
+        });
+        self.next_cloud_import();
+    }
+
+    fn next_cloud_import(&mut self) {
+        if self.cloud_import.is_some() || self.cloud_queue.is_empty() {
+            return;
+        }
+        let queued = self.cloud_queue.remove(0);
+        let source = queued.source.clone();
+        let Some(dir) = self.cache_dir.clone() else {
+            self.error =
+                Some("Folder pengguna tidak diketahui, jadi tidak ada tempat cache.".into());
+            return;
+        };
+        let progress = Arc::new(Progress::default());
+        let (tx, done) = std::sync::mpsc::channel();
+        let job = CloudImport {
+            queued,
+            progress: Arc::clone(&progress),
+            done,
+        };
+        std::thread::spawn(move || {
+            // A closed receiver means the project moved on: nothing to tell.
+            let _ = tx.send(open_or_import_cloud(&source, &dir, &progress));
+        });
+        self.cloud_import = Some(job);
+    }
+
+    fn cancel_cloud_imports(&mut self) {
+        self.cloud_queue.clear();
+        if let Some(job) = self.cloud_import.take() {
+            job.progress.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Picks up an import that has finished.
+    fn poll_cloud_import(&mut self) {
+        let Some(job) = &self.cloud_import else {
+            return;
+        };
+        let answer = match job.done.try_recv() {
+            Err(TryRecvError::Empty) => return,
+            Ok(answer) => answer,
+            // The thread died without answering.
+            Err(TryRecvError::Disconnected) => Err(ImportError::Panicked),
+        };
+        let job = self.cloud_import.take().expect("checked above");
+        match answer {
+            Ok(file) => self.place_cloud(file, job.queued),
+            Err(ImportError::Cancelled) => self.notice = Some("Impor dibatalkan.".into()),
+            Err(e) => {
+                self.error = Some(format!("{}: {e}", job.queued.source.display()));
+                // Only what the project already named is worth remembering.
+                if job.queued.restoring {
+                    self.clouds_missing.push(SavedCloud {
+                        path: job.queued.source,
+                        visible: job.queued.visible,
+                    });
+                }
+            }
+        }
+        self.next_cloud_import();
+    }
+
+    /// Fits a cloud to the project: same CRS, or none to compare. A project that has
+    /// not begun takes its origin from the cloud. One with work in it keeps its
+    /// coordinates, as Hew's history has no room for a new origin under it.
+    fn place_cloud(&mut self, file: CloudFile, queued: QueuedCloud) {
+        let QueuedCloud {
+            source,
+            visible,
+            restoring,
+        } = queued;
+        let epsg = file.info.epsg;
+        let project_epsg = self.scene.project().origin.map(|o| o.epsg).or_else(|| {
+            let first = self.scene.clouds.clouds().first()?;
+            first.info.epsg
+        });
+        if let (Some(a), Some(b)) = (epsg, project_epsg)
+            && a != b
+        {
+            self.error = Some(format!(
+                "{} memakai EPSG:{a}, proyek memakai EPSG:{b}. Reproyeksi belum didukung.",
+                source.display()
+            ));
+            return;
+        }
+        let center: [f64; 3] = std::array::from_fn(|k| {
+            if k == 2 {
+                0.0
+            } else {
+                ((file.info.min[k] + file.info.max[k]) / 2.0).round()
+            }
+        });
+        let brand_new = self.source.path.is_none() && !self.unsaved && !self.scene.can_undo();
+        let mut note = None;
+        if let Some(o) = self.scene.project().origin {
+            self.scene.clouds.frame = o.origin;
+        } else if let (true, Some(epsg)) = (brand_new && self.scene.clouds.is_empty(), epsg) {
+            let origin = ProjectOrigin {
+                epsg,
+                origin: center,
+            };
+            match Project::new(Some(origin)) {
+                Ok(project) => {
+                    let queue = std::mem::take(&mut self.cloud_queue);
+                    self.adopt(Scene::new(project));
+                    self.cloud_queue = queue;
+                    self.scene.clouds.frame = center;
+                }
+                Err(e) => {
+                    self.error = Some(format!("Origin proyek tidak bisa dibuat: {e:?}"));
+                    return;
+                }
+            }
+        } else if self.scene.clouds.is_empty() && self.scene.clouds.frame == [0.0; 3] {
+            self.scene.clouds.frame = center;
+            note = Some(
+                "Proyek belum punya origin: model tetap di koordinat lokal, tengah awan di titik nol.",
+            );
+        }
+        if epsg.is_none() {
+            note = Some("LAS tidak menyebut CRS: koordinatnya dipakai apa adanya.");
+        }
+        let points = file.info.points;
+        let id = self.scene.clouds.add(file, source);
+        self.scene.clouds.set_visible(id, visible);
+        self.fit_pending = true;
+        if !restoring {
+            self.unsaved = true;
+            self.autosave_stale = true;
+        }
+        self.notice = Some(format!(
+            "{points} titik dimuat.{}",
+            note.map_or_else(String::new, |n| format!(" {n}"))
+        ));
+    }
+
+    /// Brings the clouds up to this view: takes in what was read, decides what to
+    /// draw, uploads what changed.
+    fn update_clouds(&mut self, cam: &wangungis_render::Camera, viewport: [u32; 2]) {
+        let point_px = self.scene.clouds.point_size * self.ppp;
+        let height = f64::from(viewport[1].max(1));
+        let view = CloudView {
+            eye: cam.eye,
+            view_proj: cam.view_proj_at_eye(),
+            focal_px: height / (2.0 * (f64::from(cam.fovy) / 2.0).tan()),
+            point_px: f64::from(point_px),
+        };
+        let clouds = &mut self.scene.clouds;
+        clouds.poll();
+        clouds.plan(&view);
+        if let Some(e) = clouds.error.take() {
+            self.error = Some(e);
+        }
+        for id in clouds.take_removed() {
+            self.renderer.remove_cloud(id);
+        }
+        let device = &self.rs.device;
+        let renderer = &mut self.renderer;
+        clouds.take_changed(|chunk| renderer.set_cloud_chunk(device, chunk));
+        renderer.prepare_clouds(
+            &self.rs.queue,
+            cam,
+            clouds.draws(),
+            viewport,
+            point_px,
+            clouds.active_slice(),
+        );
     }
 
     /// Writes the project to `target` as the format its extension names.
@@ -474,6 +750,7 @@ impl App {
                 }
             }
             Dialog::Export => self.export_to(&path),
+            Dialog::ImportCloud => self.import_cloud(path),
         }
     }
 
@@ -539,6 +816,7 @@ impl App {
     }
 
     fn feed(&mut self, input: Input) {
+        let slice_before = (self.scene.clouds.slice, self.scene.clouds.slice_on);
         if !matches!(input, Input::Hover(_)) {
             self.notice = None;
         }
@@ -559,6 +837,11 @@ impl App {
             }
             Ok(()) => {}
             Err(e) => self.error = Some(e.to_string()),
+        }
+        // The box is saved with the project.
+        if (self.scene.clouds.slice, self.scene.clouds.slice_on) != slice_before {
+            self.unsaved = true;
+            self.autosave_stale = true;
         }
         self.sync_edits();
     }
@@ -944,7 +1227,13 @@ impl App {
             .iter()
             .map(|(k, s)| (k.center(), s.bounds))
             .collect();
-        union_bounds(&placed)
+        match (union_bounds(&placed), self.scene.clouds.bounds()) {
+            (Some(a), Some(b)) => Some((
+                std::array::from_fn(|k| a.0[k].min(b.0[k])),
+                std::array::from_fn(|k| a.1[k].max(b.1[k])),
+            )),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Keys and typed text, unless a text box has them.
@@ -1062,6 +1351,7 @@ impl App {
             K::M if self.typed.is_empty() => self.switch_tool(Tool::move_tool),
             K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
             K::B if self.typed.is_empty() => self.switch_tool(Tool::paint),
+            K::K if self.typed.is_empty() => self.switch_tool(Tool::cloud_slice),
             K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
             K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
             // C copies in the tools that can; everywhere else it is Circle.
@@ -1182,9 +1472,13 @@ impl App {
         });
     }
 
-    fn render(&self) {
+    fn render(&mut self) {
+        let Some(size) = self.view.as_ref().map(|v| v.size) else {
+            return;
+        };
+        let cam = self.orbit.camera(size[0] as f32 / size[1] as f32);
+        self.update_clouds(&cam, size);
         let Some(v) = &self.view else { return };
-        let cam = self.orbit.camera(v.size[0] as f32 / v.size[1] as f32);
         self.renderer.prepare(&self.rs.queue, &cam);
         let cv = v.color.create_view(&Default::default());
         let mut enc = self.rs.device.create_command_encoder(&Default::default());
@@ -1270,6 +1564,15 @@ fn paint_tip(ui: &egui::Ui, view: egui::Rect, at: egui::Pos2, text: &str) {
     painter.galley(pos, text, white);
 }
 
+/// What a snap is called on screen. A point of a cloud is not a model's corner.
+fn hit_label(hit: &wangungis_tools::Hit) -> &'static str {
+    if hit.cloud {
+        "Titik awan"
+    } else {
+        snap_label(hit.snap.kind)
+    }
+}
+
 fn snap_label(kind: SnapKind) -> &'static str {
     match kind {
         SnapKind::Endpoint => "Titik ujung",
@@ -1321,6 +1624,36 @@ enum Dialog {
     Open,
     SaveAs,
     Export,
+    ImportCloud,
+}
+
+/// A LAS waiting to be imported.
+struct QueuedCloud {
+    source: PathBuf,
+    visible: bool,
+    /// The project's companion file names it, so it changes nothing to save.
+    restoring: bool,
+}
+
+/// A LAS on its way to becoming a cache.
+struct CloudImport {
+    queued: QueuedCloud,
+    progress: Arc<Progress>,
+    done: Receiver<Result<CloudFile, ImportError>>,
+}
+
+/// The cache of `source` in `dir`, built first when there is none that opens.
+fn open_or_import_cloud(
+    source: &Path,
+    dir: &Path,
+    progress: &Progress,
+) -> Result<CloudFile, ImportError> {
+    let cache = wangungis_pointcloud::cache_path(source, dir).map_err(ImportError::Io)?;
+    if let Ok(file) = CloudFile::open(&cache) {
+        return Ok(file);
+    }
+    wangungis_pointcloud::import_las(source, &cache, progress)?;
+    CloudFile::open(&cache)
 }
 
 impl Dialog {
@@ -1359,6 +1692,10 @@ impl Dialog {
                 .add_filter("STL (.stl)", &["stl"])
                 .add_filter("3MF (.3mf)", &["3mf"])
                 .save_file(),
+            Dialog::ImportCloud => window
+                .set_title("Impor point cloud")
+                .add_filter("Point cloud LAS (.las)", &["las", "LAS"])
+                .pick_file(),
             Dialog::Export => window
                 .set_title("Ekspor model")
                 .set_file_name(format!("{stem}.obj"))
@@ -1372,7 +1709,7 @@ impl Dialog {
 }
 
 /// What the file windows can read and write, as the Format window shows it.
-const FILE_FORMATS: [(&str, &str, &str); 7] = [
+const FILE_FORMATS: [(&str, &str, &str); 8] = [
     (
         "Buka, Simpan",
         ".hew",
@@ -1392,6 +1729,11 @@ const FILE_FORMATS: [(&str, &str, &str); 7] = [
     ("Ekspor", ".gltf", "Satu tile, dengan warna. Teks."),
     ("Ekspor", ".stl", "Satu tile, tanpa warna."),
     ("Ekspor", ".3mf", "Satu tile, dengan warna."),
+    (
+        "Impor",
+        ".las",
+        "Point cloud LAS 1.0 sampai 1.4, tanpa LAZ. Menjadi acuan untuk menggambar. Tidak mengubah model, tidak ikut terekspor.",
+    ),
 ];
 
 /// Writes through a temporary file, so a failed write cannot damage `target`.
@@ -1516,6 +1858,7 @@ impl App {
                     ("Putar (Q)", Tool::rotate),
                     ("Skala (S)", Tool::scale),
                     ("Cat (B)", Tool::paint),
+                    ("Potong area (K)", Tool::cloud_slice),
                     ("Hapus (E)", Tool::eraser),
                 ] {
                     if ui
@@ -1618,7 +1961,7 @@ impl App {
                     ui.separator();
                 }
                 if let Some(hit) = self.tool.preview().snap {
-                    ui.label(snap_label(hit.snap.kind));
+                    ui.label(hit_label(&hit));
                     ui.separator();
                 }
                 if let Some(e) = &self.error {
@@ -1665,6 +2008,7 @@ impl App {
             .resizable(true)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.cloud_panel(ui);
                     self.outline_panel(ui);
                     self.tags_panel(ui);
                 });
@@ -1674,6 +2018,7 @@ impl App {
             .show(ui, |ui| {
                 let size = ui.available_size();
                 let ppp = ui.ctx().pixels_per_point();
+                self.ppp = ppp;
                 let max = self.rs.device.limits().max_texture_dimension_2d as f32;
                 let px = [size.x, size.y].map(|v| (v * ppp).round().clamp(1.0, max) as u32);
                 if self.view.as_ref().is_some_and(|v| v.size != px) {
@@ -1700,17 +2045,108 @@ impl App {
                 }
                 self.refresh_overlay(size.y);
                 self.render();
+                if self.scene.clouds.busy() {
+                    ui.ctx().request_repaint();
+                }
                 if let Some(v) = &self.view {
                     egui::Image::new((v.id, size)).paint_at(ui, rect);
                 }
                 if let (Some(hit), Some(at)) = (self.tool.preview().snap, resp.hover_pos()) {
-                    paint_tip(ui, rect, at, snap_label(hit.snap.kind));
+                    paint_tip(ui, rect, at, hit_label(&hit));
                 }
             });
         #[cfg(not(test))]
         if let Some(dialog) = self.dialog.take() {
             self.run_dialog(dialog);
         }
+    }
+
+    /// The clouds in the project. Nothing shows until there is one.
+    fn cloud_panel(&mut self, ui: &mut egui::Ui) {
+        if self.scene.clouds.is_empty() && self.clouds_missing.is_empty() {
+            return;
+        }
+        egui::CollapsingHeader::new("Point cloud")
+            .default_open(true)
+            .show(ui, |ui| {
+                let rows: Vec<(u32, String, u64, bool)> = self
+                    .scene
+                    .clouds
+                    .clouds()
+                    .iter()
+                    .map(|c| (c.id, c.name(), c.info.points, c.visible))
+                    .collect();
+                for (id, name, points, mut visible) in rows {
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut visible, &name).changed() {
+                            self.scene.clouds.set_visible(id, visible);
+                            self.unsaved = true;
+                        }
+                        if ui
+                            .small_button("Lepas")
+                            .on_hover_text("Dari proyek saja. File LAS tidak terhapus.")
+                            .clicked()
+                        {
+                            self.remove_cloud(id);
+                        }
+                    });
+                    ui.weak(format!("{:.1} juta titik", points as f64 / 1e6));
+                }
+                for missing in self.clouds_missing.clone() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(170, 40, 40),
+                        format!("Tidak terbaca: {}", missing.path.display()),
+                    );
+                }
+                let clouds = &mut self.scene.clouds;
+                let mut budget = clouds.draw_budget as f64 / 1e6;
+                let changed = ui
+                    .add(
+                        egui::Slider::new(
+                            &mut budget,
+                            MIN_DRAW_BUDGET as f64 / 1e6..=MAX_DRAW_BUDGET as f64 / 1e6,
+                        )
+                        .text("juta titik digambar"),
+                    )
+                    .on_hover_text("Turunkan bila gerakan kamera terasa berat.")
+                    .changed();
+                if changed {
+                    clouds.draw_budget = (budget * 1e6) as u64;
+                    self.unsaved = true;
+                }
+                if ui.checkbox(&mut clouds.snap, "Snap ke titik").changed() {
+                    self.unsaved = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut clouds.point_size, MIN_POINT_SIZE..=MAX_POINT_SIZE)
+                            .text("ukuran titik"),
+                    )
+                    .changed()
+                {
+                    self.unsaved = true;
+                }
+                ui.separator();
+                let has_box = clouds.slice.is_some();
+                ui.add_enabled_ui(has_box, |ui| {
+                    if ui.checkbox(&mut clouds.slice_on, "Potong aktif").changed() {
+                        self.unsaved = true;
+                        self.last_pointer = None;
+                    }
+                });
+                if ui
+                    .add_enabled(clouds.slice_on, egui::Button::new("Tampilkan semua"))
+                    .on_hover_text("Memunculkan titik di luar kotak. Kotaknya tetap diingat.")
+                    .clicked()
+                {
+                    clouds.slice_on = false;
+                    self.unsaved = true;
+                    self.last_pointer = None;
+                }
+                if !has_box {
+                    ui.weak("Pakai Potong area (K) untuk melihat satu area saja.");
+                }
+            });
     }
 
     /// The Berkas menu. Every entry says what it reads or writes.
@@ -1754,11 +2190,59 @@ impl App {
             ) {
                 self.dialog = Some(Dialog::Export);
             }
+            if item(
+                ui,
+                "Impor point cloud…",
+                "Memuat .las sebagai acuan. Hanya titik yang perlu terlihat yang dimuat.",
+            ) {
+                self.dialog = Some(Dialog::ImportCloud);
+            }
             ui.separator();
             if item(ui, "Format yang didukung…", "Penjelasan tiap format.") {
                 self.formats_open = true;
             }
         });
+    }
+
+    /// How far an import has come, with its way out.
+    fn import_window(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.cloud_import else {
+            return;
+        };
+        let p = &job.progress;
+        let (done, total) = (
+            p.done.load(Ordering::Relaxed),
+            p.total.load(Ordering::Relaxed),
+        );
+        let phase = match p.phase.load(Ordering::Relaxed) {
+            wangungis_pointcloud::PHASE_SCAN => "Membaca",
+            wangungis_pointcloud::PHASE_WRITE => "Menulis cache",
+            _ => "Mengacak",
+        };
+        let mut cancel = false;
+        egui::Window::new("Mengimpor point cloud")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -40.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    job.queued
+                        .source
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+                );
+                ui.add(
+                    egui::ProgressBar::new(done as f32 / total.max(1) as f32)
+                        .text(phase)
+                        .desired_width(240.0),
+                );
+                cancel = ui.button("Batal").clicked();
+            });
+        if cancel {
+            p.cancel.store(true, Ordering::Relaxed);
+        }
+        // Nothing else asks for a frame while the thread works.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     /// The window explaining the formats.
@@ -1791,6 +2275,8 @@ impl App {
     /// The questions that must be answered before going on.
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.formats_window(ctx);
+        self.poll_cloud_import();
+        self.import_window(ctx);
         let window = |title: &str| {
             egui::Window::new(title.to_owned())
                 .collapsible(false)

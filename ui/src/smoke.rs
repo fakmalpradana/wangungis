@@ -67,7 +67,7 @@ impl Driver {
     fn start() -> Option<Self> {
         let mut d = Driver {
             ctx: egui::Context::default(),
-            app: App::with_render_state(render_state()?, None),
+            app: App::with_render_state(render_state()?),
             time: 0.0,
         };
         // Panels take their size from the frame before: let the layout settle.
@@ -1245,6 +1245,584 @@ fn the_formats_window_tells_the_truth() {
             "{format}"
         );
     }
+}
+
+/// A LAS of a green roof at 12 m over a 40 x 40 m square, 1 m apart, far from zero.
+fn write_roof_las(path: &std::path::Path, wkt_epsg: Option<u32>) {
+    use las::{Builder, Color, Point, Writer, point::Format};
+    let mut b = Builder::from((1, 4));
+    b.point_format = Format::new(7).unwrap();
+    for t in [
+        &mut b.transforms.x,
+        &mut b.transforms.y,
+        &mut b.transforms.z,
+    ] {
+        t.scale = 0.001;
+    }
+    b.transforms.x.offset = 710_000.0;
+    b.transforms.y.offset = 9_316_000.0;
+    let mut header = b.into_header().unwrap();
+    if let Some(epsg) = wkt_epsg {
+        let wkt = format!("PROJCS[\"uji\",AUTHORITY[\"EPSG\",\"{epsg}\"]]");
+        header.set_wkt_crs(wkt.into_bytes()).unwrap();
+    }
+    let mut w = Writer::from_path(path, header).unwrap();
+    for y in 0..40 {
+        for x in 0..40 {
+            w.write_point(Point {
+                x: 710_000.0 + f64::from(x),
+                y: 9_316_000.0 + f64::from(y),
+                z: 12.0,
+                gps_time: Some(0.0),
+                color: Some(Color::new(0, 60000, 0)),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+    }
+    w.close().unwrap();
+}
+
+/// Frames until the import and the reads behind it have ended.
+fn settle_clouds(d: &mut Driver) {
+    let start = std::time::Instant::now();
+    loop {
+        d.frame(vec![]);
+        d.frame(vec![]);
+        if d.app.cloud_import.is_none()
+            && d.app.cloud_queue.is_empty()
+            && !d.app.scene.clouds.busy()
+        {
+            d.frame(vec![]);
+            return;
+        }
+        assert!(start.elapsed().as_secs() < 60, "the import never ended");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+fn green_pixels(d: &Driver) -> usize {
+    let (_, _, px) = d.pixels();
+    // The roof's own color: the view's Y axis is green too.
+    px.chunks(4).filter(|p| p[..3] == [0, 234, 0]).count()
+}
+
+/// The whole job through the app: import, see it, draw on it, slice it, save it,
+/// open it again.
+#[test]
+fn a_las_from_import_to_reopen() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-las-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+
+    // Through the menu's route. A brand-new project takes its origin from the cloud.
+    d.app.dialog = Some(Dialog::ImportCloud);
+    d.answer_dialog(Some(&source));
+    settle_clouds(&mut d);
+    assert_eq!(d.app.error, None);
+    let origin = d.app.scene.project().origin.expect("taken from the cloud");
+    assert_eq!(origin.epsg, 32748);
+    assert_eq!(origin.origin, [710_020.0, 9_316_020.0, 0.0]);
+    assert!(d.app.unsaved);
+    assert!(d.app.notice.as_deref().is_some_and(|n| n.contains("1600")));
+    assert_eq!(d.app.scene.clouds.clouds().len(), 1);
+    let all = green_pixels(&d);
+    assert!(all > 500, "the roof shows: {all}");
+    d.dump("awan-1");
+
+    // A footprint on the ground, under the roof: the roof would take the clicks.
+    d.app.scene.clouds.snap = false;
+    d.letter(K::R, "r");
+    d.click([-5.0, -5.0, 0.0]);
+    d.hover([-4.0, -4.0, 0.0]);
+    d.value("5;4");
+    d.app.scene.clouds.snap = true;
+    // Pulled up to a point of the roof.
+    d.letter(K::P, "p");
+    d.click([-2.5, -3.0, 0.0]);
+    d.hover([5.0, 5.0, 12.0]);
+    let snap = d.app.tool.preview().snap;
+    assert!(snap.is_some_and(|h| h.cloud), "{snap:?}");
+    assert_eq!(snap.map(|h| hit_label(&h)), Some("Titik awan"));
+    d.click([5.0, 5.0, 12.0]);
+    assert_eq!(d.app.error, None);
+    let (_, hi) = d
+        .app
+        .scene
+        .project()
+        .tiles
+        .values()
+        .next()
+        .map_or(([0.0; 3], [0.0; 3]), |doc| {
+            let m = wangungis_render::TileMesh::from_document(doc).unwrap();
+            let (a, b) = m.bounds().unwrap();
+            (a.map(f64::from), b.map(f64::from))
+        });
+    assert!(
+        (hi[2] - 12.0).abs() < 0.01,
+        "the wall reaches the roof: {hi:?}"
+    );
+
+    // The point size shows at once.
+    let small = green_pixels(&d);
+    d.app.scene.clouds.point_size = 6.0;
+    d.frame(vec![]);
+    assert!(green_pixels(&d) > small, "bigger points");
+    d.app.scene.clouds.point_size = 2.0;
+    d.frame(vec![]);
+
+    // Two clicks make a box. What is outside hides, and comes back.
+    d.letter(K::Space, " ");
+    settle_clouds(&mut d);
+    let full = green_pixels(&d);
+    d.letter(K::K, "k");
+    d.app.scene.clouds.snap = false;
+    d.click([-20.0, -20.0, 12.0]);
+    assert!(d.app.tool.busy());
+    d.click([0.0, 0.0, 12.0]);
+    assert!(!d.app.tool.busy());
+    assert_eq!(d.app.error, None);
+    d.app.scene.clouds.snap = true;
+    // Away from the tool, whose lines cover pixels.
+    d.letter(K::Space, " ");
+    d.frame(vec![]);
+    let cut = green_pixels(&d);
+    d.dump("awan-2-potong");
+    assert!(cut < full * 2 / 3, "{cut} of {full}");
+    assert!(cut > 0);
+
+    d.app.scene.clouds.slice_on = false;
+    d.frame(vec![]);
+    assert_eq!(green_pixels(&d), full, "all back");
+    d.app.scene.clouds.slice_on = true;
+    d.frame(vec![]);
+
+    // Saved with its companion, then opened: the same cloud, the same box.
+    let project = dir.join("kota.hew");
+    d.app.save_to(&project);
+    assert_eq!(d.app.error, None);
+    assert!(wangungis_pointcloud::saved_clouds_path(&project).exists());
+    let slice = d.app.scene.clouds.slice;
+    d.app.new_project();
+    d.frame(vec![]);
+    assert!(d.app.scene.clouds.is_empty());
+    d.app.open_path(&project);
+    settle_clouds(&mut d);
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.app.scene.clouds.clouds().len(), 1);
+    assert_eq!(d.app.scene.clouds.slice, slice);
+    assert!(d.app.scene.clouds.slice_on);
+    assert!(!d.app.unsaved, "opening changes nothing");
+    assert!(green_pixels(&d) > 0);
+
+    // Lepas, save: no companion left behind.
+    let id = d.app.scene.clouds.clouds()[0].id;
+    d.app.remove_cloud(id);
+    d.frame(vec![]);
+    assert_eq!(green_pixels(&d), 0);
+    assert_eq!(d.app.scene.clouds.slice, None, "the box went with it");
+    d.app.save_to(&project);
+    assert!(!wangungis_pointcloud::saved_clouds_path(&project).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What cannot be imported says so and leaves the app running: garbage, a missing
+/// file, a CRS that is not the project's, a cancel. A project with work in it keeps
+/// its coordinates.
+#[test]
+fn a_las_that_cannot_come_in() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-lasburuk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+
+    let junk = dir.join("sampah.las");
+    std::fs::write(&junk, vec![7u8; 5000]).unwrap();
+    d.app.import_cloud(junk.clone());
+    settle_clouds(&mut d);
+    assert!(d.app.error.is_some(), "garbage");
+    assert!(d.app.scene.clouds.is_empty());
+
+    d.app.error = None;
+    d.app.import_cloud(dir.join("tidak-ada.las"));
+    settle_clouds(&mut d);
+    assert!(d.app.error.is_some(), "missing");
+
+    // Work first: the model keeps its coordinates and the cloud comes to it.
+    d.app.error = None;
+    d.app.clouds_missing.clear();
+    draw_a_box(&mut d);
+    let saved = d.app.scene.project().save();
+    let utm = dir.join("utm48.las");
+    write_roof_las(&utm, Some(32748));
+    d.app.import_cloud(utm);
+    settle_clouds(&mut d);
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.app.scene.project().origin, None);
+    assert_eq!(
+        d.app.scene.project().save(),
+        saved,
+        "the model is untouched"
+    );
+    assert_eq!(d.app.scene.clouds.frame, [710_020.0, 9_316_020.0, 0.0]);
+    assert!(d.app.scene.can_undo());
+    assert!(
+        d.app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("origin"))
+    );
+
+    // Another zone next to it: refused.
+    let other = dir.join("utm49.las");
+    write_roof_las(&other, Some(32749));
+    d.app.import_cloud(other);
+    settle_clouds(&mut d);
+    assert!(d.app.error.as_deref().is_some_and(|e| e.contains("32749")));
+    assert_eq!(d.app.scene.clouds.clouds().len(), 1);
+
+    // Moving on from the project stops what was under way.
+    d.app.error = None;
+    let late = dir.join("akhir.las");
+    write_roof_las(&late, None);
+    d.app.import_cloud(late);
+    d.app.new_project();
+    settle_clouds(&mut d);
+    assert!(d.app.scene.clouds.is_empty());
+    assert_eq!(d.app.error, None);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Saved means all of it: a companion file that cannot be written keeps the project
+/// marked as changed, so that closing still asks.
+#[test]
+fn a_companion_that_cannot_be_written_is_not_saved() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-pendamping-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+    d.app.import_cloud(source);
+    settle_clouds(&mut d);
+    let project = dir.join("kota.hew");
+    // A folder in the companion's place.
+    std::fs::create_dir(wangungis_pointcloud::saved_clouds_path(&project)).unwrap();
+    d.app.save_to(&project);
+    assert!(
+        d.app
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("point cloud"))
+    );
+    assert!(d.app.unsaved);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A crash with a cloud in the project: the autosave brings the cloud back too.
+#[test]
+fn recovery_brings_the_clouds_back() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-pulih-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    d.app.autosave = Some(dir.join("autosave.bin"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+    d.app.import_cloud(source);
+    settle_clouds(&mut d);
+    let frame = d.app.scene.clouds.frame;
+    d.app.scene.clouds.point_size = 5.0;
+    d.app.autosave_stale = true;
+    d.app.autosaved_at = -1e9;
+    d.frame(vec![]);
+    assert!(dir.join("autosave.bin").exists());
+
+    let Some(mut next) = Driver::start() else {
+        return;
+    };
+    next.app.cache_dir = Some(dir.join("cache"));
+    next.app.autosave = Some(dir.join("autosave.bin"));
+    next.app.recover();
+    settle_clouds(&mut next);
+    assert_eq!(next.app.error, None);
+    assert_eq!(next.app.scene.clouds.clouds().len(), 1);
+    assert_eq!(next.app.scene.clouds.frame, frame);
+    assert_eq!(next.app.scene.clouds.point_size, 5.0);
+    assert!(next.app.unsaved);
+
+    next.app.drop_autosave();
+    assert!(!wangungis_pointcloud::saved_clouds_path(&dir.join("autosave.bin")).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The next cloud after the last one is removed starts clean: no old box, no old frame.
+#[test]
+fn a_new_cloud_after_the_last_one_starts_clean() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-baru-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    draw_a_box(&mut d);
+    let first = dir.join("a.las");
+    write_roof_las(&first, None);
+    d.app.import_cloud(first);
+    settle_clouds(&mut d);
+    assert_eq!(d.app.scene.clouds.frame, [710_020.0, 9_316_020.0, 0.0]);
+    d.app.scene.clouds.slice = Some(wangungis_pointcloud::Slice {
+        min: [0.0; 3],
+        max: [1.0; 3],
+    });
+    d.app.scene.clouds.slice_on = true;
+    let id = d.app.scene.clouds.clouds()[0].id;
+    d.app.remove_cloud(id);
+    assert_eq!(d.app.scene.clouds.frame, [0.0; 3]);
+    assert_eq!(d.app.scene.clouds.active_slice(), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Using the box tool without changing the box changes nothing to save.
+#[test]
+fn the_box_tool_alone_changes_nothing() {
+    use egui::Key as K;
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    d.letter(K::K, "k");
+    d.key(K::Escape);
+    assert!(!d.app.unsaved);
+}
+
+/// A project whose companion file names a LAS that went away still opens, and
+/// saving does not forget it.
+#[test]
+fn a_project_whose_las_went_away() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = std::env::temp_dir().join(format!("wangungis-lashilang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    d.app.cache_dir = Some(dir.join("cache"));
+    let source = dir.join("atap.las");
+    write_roof_las(&source, Some(32748));
+    d.app.import_cloud(source.clone());
+    settle_clouds(&mut d);
+    let project = dir.join("kota.hew");
+    d.app.save_to(&project);
+    assert_eq!(d.app.error, None);
+
+    std::fs::remove_file(&source).unwrap();
+    d.app.new_project();
+    d.app.open_path(&project);
+    settle_clouds(&mut d);
+    assert!(d.app.error.is_some(), "says so");
+    assert!(d.app.scene.clouds.is_empty());
+    assert_eq!(d.app.clouds_missing.len(), 1);
+
+    d.app.error = None;
+    d.app.save_to(&project);
+    let companion = std::fs::read_to_string(wangungis_pointcloud::saved_clouds_path(&project));
+    assert!(companion.unwrap().contains("atap.las"), "not forgotten");
+
+    // A damaged companion file: the project opens anyway.
+    std::fs::write(wangungis_pointcloud::saved_clouds_path(&project), "{ rusak").unwrap();
+    d.app.open_path(&project);
+    settle_clouds(&mut d);
+    assert!(d.app.error.is_some());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The real thing, when a sample is at hand: `WANGUNGIS_LAS_SAMPLE=<file>`. Times the
+/// import, the first picture, frames while orbiting and picks, and prints memory.
+#[test]
+#[ignore]
+fn real_las_numbers() {
+    use std::time::{Duration, Instant};
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let Some(sample) = std::env::var_os("WANGUNGIS_LAS_SAMPLE") else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("wangungis-lasnyata-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    d.app.cache_dir = Some(dir.clone());
+    let rss = || {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0)
+            / 1024
+    };
+    println!("rss before: {} MB", rss());
+
+    let t = Instant::now();
+    d.app.import_cloud(sample.clone().into());
+    while d.app.cloud_import.is_some() {
+        d.frame(vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    println!(
+        "import: {:.2} s, rss {} MB",
+        t.elapsed().as_secs_f64(),
+        rss()
+    );
+    assert_eq!(d.app.error, None);
+    d.frame(vec![]);
+    d.frame(vec![]);
+
+    let t = Instant::now();
+    settle_clouds(&mut d);
+    println!(
+        "first full view settled: {:.2} s",
+        t.elapsed().as_secs_f64()
+    );
+    let drawn = |d: &Driver| {
+        d.app
+            .scene
+            .clouds
+            .draws()
+            .iter()
+            .map(|x| u64::from(x.count))
+            .sum::<u64>()
+    };
+    let held = |d: &Driver| {
+        d.app
+            .scene
+            .clouds
+            .clouds()
+            .iter()
+            .map(|c| c.held_points())
+            .sum::<u64>()
+    };
+    println!(
+        "full view: {} drawn, {} held, rss {} MB",
+        drawn(&d),
+        held(&d),
+        rss()
+    );
+    d.dump("real-1-penuh");
+
+    // Reopening from the cache.
+    let source: std::path::PathBuf = sample.into();
+    let saved = d.app.scene.clouds.clouds().len();
+    let t = Instant::now();
+    d.app.new_project();
+    d.app.import_cloud(source);
+    settle_clouds(&mut d);
+    println!("from the cache: {:.2} s", t.elapsed().as_secs_f64());
+    assert_eq!(d.app.scene.clouds.clouds().len(), saved);
+
+    // Orbit: frame times with the camera moving, read back so that the GPU's work counts.
+    let mut times = Vec::new();
+    for i in 0..60 {
+        d.app.orbit.yaw += 0.03;
+        d.app.camera_moved();
+        let t = Instant::now();
+        d.frame(vec![]);
+        d.pixels();
+        times.push(t.elapsed().as_secs_f64() * 1000.0);
+        let _ = i;
+    }
+    times.sort_by(f64::total_cmp);
+    println!(
+        "orbit full view: median {:.1} ms, worst {:.1} ms, {} drawn",
+        times[30],
+        times[59],
+        drawn(&d)
+    );
+
+    // Zoom in on one spot: more points come in, within the budget.
+    d.app.orbit.distance /= 12.0;
+    d.app.camera_moved();
+    settle_clouds(&mut d);
+    println!(
+        "zoomed in: {} drawn, {} held, rss {} MB",
+        drawn(&d),
+        held(&d),
+        rss()
+    );
+    d.dump("real-2-dekat");
+
+    let cloud_snap = |d: &mut Driver, count: u32| {
+        let mut worst = 0.0f64;
+        let mut hits = 0;
+        let mut total = 0.0;
+        for i in 0..count {
+            let f = f64::from(i) / f64::from(count) * 6.0;
+            let ray = inference::PickRay {
+                origin: Point3::new(
+                    d.app.orbit.eye()[0],
+                    d.app.orbit.eye()[1],
+                    d.app.orbit.eye()[2],
+                ),
+                direction: {
+                    let (_, dir) = d.app.orbit.ray(
+                        400.0 + 50.0 * f.sin() as f32,
+                        300.0 + 50.0 * f.cos() as f32,
+                        800.0,
+                        600.0,
+                    );
+                    Vec3::new(dir[0], dir[1], dir[2])
+                },
+            };
+            let t = Instant::now();
+            let hit = d.app.scene.clouds.pick(
+                [ray.origin.x, ray.origin.y, ray.origin.z],
+                [ray.direction.x, ray.direction.y, ray.direction.z],
+                0.008,
+            );
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            worst = worst.max(ms);
+            total += ms;
+            hits += usize::from(hit.is_some());
+        }
+        (total / f64::from(count), worst, hits)
+    };
+    let (mean, worst, hits) = cloud_snap(&mut d, 60);
+    println!("pick: mean {mean:.2} ms, worst {worst:.2} ms, {hits} of 60 hit");
+
+    // One building's worth, by the box.
+    let (lo, hi) = d.app.scene.clouds.bounds().unwrap();
+    d.app.scene.clouds.slice = Some(wangungis_pointcloud::Slice {
+        min: [-50.0, -50.0, lo[2]],
+        max: [50.0, 50.0, hi[2]],
+    });
+    d.app.scene.clouds.slice_on = true;
+    let t = Instant::now();
+    d.frame(vec![]);
+    println!(
+        "slice on, one frame: {:.1} ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
+    settle_clouds(&mut d);
+    println!("sliced: {} drawn, {} held", drawn(&d), held(&d));
+    d.dump("real-3-potong");
+    let t = Instant::now();
+    d.app.scene.clouds.slice_on = false;
+    d.frame(vec![]);
+    println!(
+        "slice off, one frame: {:.1} ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
+    println!("rss end: {} MB", rss());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Uji asap step 18: a guide shows, in its own color, and says so.

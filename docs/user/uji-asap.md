@@ -81,13 +81,19 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face,
 27. **Edit isi komponen.** Buat komponen dari satu kotak, salin dengan **M**, lalu klik dua kali salah satunya. Salinan lainnya hilang dari layar selama mengedit; ini batas v0.1. Tarik atapnya, tekan **Esc**: kedua salinan ikut berubah.
 28. **Tags.** Di panel kanan, bagian Tags: pilih kotak, isi "Lantai 1" lalu **Buat dan beri**. Hilangkan centangnya: kotak hilang dan tidak bisa di-snap. Centang lagi. Coba **Lepas**, **Ubah nama**, **Hapus**, dan simpan lalu buka ulang.
 29. **Outliner.** Di panel kanan, bagian Outliner: setiap objek, grup, dan komponen punya satu baris. Klik **+** pada grup untuk melihat isinya. Klik baris untuk memilih, klik dua kali untuk masuk. Hilangkan centang untuk menyembunyikan. Pilih baris, isi nama, tekan **Ubah nama**. Bila punya model kota, buka dan periksa apakah panel tetap ringan.
+30. **Snap Push/Pull.** Buat dua kotak, tinggi 3 m dan 6 m. Tekan **P**, klik atap kotak rendah, arahkan kursor ke sudut atap kotak tinggi: penanda dan tulisan "Titik ujung" muncul. Klik: tinggi keduanya sama persis. Coba juga tepi, dan atap kotak lain dari tengahnya.
+31. **Push/Pull dua objek.** Tekan **Spasi**, klik kotak pertama, Shift + klik kotak kedua. Tekan **P**: tepinya tetap menyala. Klik atap salah satunya, ketik `1` lalu Enter: keduanya naik 1 m, dan satu **Cmd+Z** mengembalikan keduanya. Cara lain: di tool **P**, Shift + klik dua face atau dua persegi gambar, lalu ketik jarak atau klik tinggi. Shift + klik lagi melepas.
+32. **Impor point cloud.** **Berkas > Impor point cloud**, pilih `.las`. Jendela progres muncul di kanan bawah dan aplikasi tetap bisa dipakai; **Batal** menghentikannya. Setelah selesai, kamera memuat seluruh awan. Status menulis jumlah titik. Orbit dan zoom: nilai apakah terasa ringan, dan catat bila tersendat. Tutup lalu impor file yang sama lagi: harus nyaris seketika.
+33. **Membangun di atas awan.** Dari tampilan atas, tekan **R**, klik sudut bangunan: tooltip menulis "Titik awan". Klik sudut seberang, lalu **P**, klik persegi itu, arahkan ke titik di atap, klik: tembok berhenti setinggi atap. Untuk menggambar di tanah di bawah atap, klik titik tanah, atau matikan **Snap ke titik** di panel. Simpan, buka lagi: awan ikut muncul. Berkas `<proyek>.pointcloud.json` harus ikut bila proyek disalin.
+34. **Ukuran titik dan potong area.** Geser **ukuran titik** di panel: langsung berubah. Tekan **K**, dari tampilan atas klik dua sudut mengelilingi satu bangunan: titik di luar kotak hilang, dan yang di dalam menjadi lebih rapat. Klik tanda silang di tengah sisi atas, gerakkan, klik lagi: sisi turun. Coba dari samping, dengan snap ke titik atap. **Tampilkan semua** memunculkan semuanya, **Potong aktif** menghidupkan lagi kotak yang sama. Nilai apakah cara memilihnya cukup mudah.
 
 ## Pengaman data
 Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
 
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
-- Belum ada dialog file.
+- Jendela berkas di Windows dan Linux belum diuji manusia. Di Linux butuh xdg-desktop-portal atau zenity.
+- Point cloud: hanya `.las`, belum `.laz`. Tanpa reproyeksi, jadi EPSG berbeda ditolak. Warna dari RGB berkas, atau dari ketinggian bila tidak ada; belum ada warna atau saring per kelas. Kotak potong sejajar sumbu, belum bisa diputar. Solid menutupi titik di dalamnya. Cache di `~/.wangungis/cache/` memakai ±35% ukuran LAS dan belum dibersihkan otomatis.
 - Selama komponen dibuka, salinan lainnya hilang dari layar sampai ditutup.
 - Tidak bisa menggambar pada bidang yang berisi gambar di sisi lain batas grup. Misalnya, garis bebas di dalam grup yang menempel di tanah menghalangi garis baru di tanah di luar grup. Aplikasi menolak dengan pesan.
 - Cat hanya warna solid, tanpa tekstur dan transparansi. Tag belum punya warna. Tinggal satu presisi per satuan, dan ft hanya desimal.
