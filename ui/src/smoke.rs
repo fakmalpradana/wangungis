@@ -491,7 +491,33 @@ fn box_with_a_door_in_an_array_of_ten() {
     d.dump("exit-1-door-drawn");
 
     d.letter(K::P, "p");
-    d.click([3.5, 2.0, 1.0]);
+    // Where the corner snapped depends on the zoom: ask the model where it went.
+    let door = {
+        let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
+        let o = doc.object(doc.visible_object_ids()[0]).unwrap();
+        let ring: Vec<Point3> = o
+            .faces()
+            .values()
+            .map(|f| o.loop_positions(f.outer_loop).collect::<Vec<_>>())
+            .find(|r| {
+                let span = |k: fn(&Point3) -> f64| {
+                    let (lo, hi) = r
+                        .iter()
+                        .map(k)
+                        .fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+                    hi - lo
+                };
+                span(|p| p.y) < 1e-6 && (span(|p| p.x) - 1.0).abs() < 1e-3
+            })
+            .expect("the door face");
+        let n = ring.len() as f64;
+        [
+            ring.iter().map(|p| p.x).sum::<f64>() / n,
+            ring[0].y,
+            ring.iter().map(|p| p.z).sum::<f64>() / n,
+        ]
+    };
+    d.click(door);
     assert!(d.app.tool.busy(), "the door face is picked");
     d.value("-4");
     assert_eq!(

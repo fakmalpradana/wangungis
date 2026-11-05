@@ -138,6 +138,11 @@ pub enum Erasable {
     },
 }
 
+/// How far (m) either way from its origin a guide line is drawn and snapped to.
+const GUIDE_REACH_M: f64 = 200.0;
+/// Half-size (m) of the cross drawn for a guide point.
+const GUIDE_CROSS_M: f64 = 0.25;
+
 /// Lines drawn for a picked object at most. Past this the preview is partial,
 /// never the edit.
 const MAX_PREVIEW_LINES: usize = 5_000;
@@ -150,6 +155,7 @@ const IN_PLANE: f64 = 1e-6;
 struct Cell {
     nodes: Vec<NodeId>,
     sketches: Vec<SketchId>,
+    guides: Vec<kernel::GuideId>,
     lo: Option<[f64; 3]>,
     hi: [f64; 3],
     scene: Option<InferenceScene>,
@@ -304,7 +310,29 @@ fn partition(doc: &Document) -> Cells {
             cell.sketches.push(id);
         }
     }
+    for id in doc.guide_ids() {
+        if !doc.guide_shown(id) {
+            continue;
+        }
+        let Some(guide) = doc.guide(id) else { continue };
+        if let Some(cell) = place(&mut cells, guide_extent(guide)) {
+            cell.guides.push(id);
+        }
+    }
     cells
+}
+
+/// The two ends of what is drawn and snapped to for `guide`.
+fn guide_extent(guide: &kernel::Guide) -> Vec<Point3> {
+    match guide {
+        kernel::Guide::Line {
+            origin, direction, ..
+        } => vec![
+            *origin - *direction * GUIDE_REACH_M,
+            *origin + *direction * GUIDE_REACH_M,
+        ],
+        kernel::Guide::Point { position } => vec![*position],
+    }
 }
 
 /// The inference over one cell. Project axes are the base scene's job.
@@ -371,6 +399,11 @@ fn build_cell(doc: &Document, cell: &Cell) -> InferenceScene {
             })
             .collect();
         s.add_sketch_faces(id, &faces);
+    }
+    for &id in &cell.guides {
+        if let Some(guide) = doc.guide(id) {
+            s.add_guide(id, guide);
+        }
     }
     s
 }
@@ -1184,6 +1217,132 @@ impl Scene {
             self.redo()?;
         }
         made
+    }
+
+    /// Adds a construction point, as one undo step.
+    pub fn add_guide_point(&mut self, at: Point3) -> Result<(), EditError> {
+        let (tile, local) = self.guide_home(at)?;
+        self.project
+            .tile_mut(tile)?
+            .add_guide_point(local)
+            .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Adds a construction line through `at`, as one undo step.
+    pub fn add_guide_line(&mut self, at: Point3, direction: Vec3) -> Result<(), EditError> {
+        let (tile, local) = self.guide_home(at)?;
+        self.project
+            .tile_mut(tile)?
+            .add_guide_line(local, direction)
+            .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    fn guide_home(&self, at: Point3) -> Result<(TileKey, Point3), EditError> {
+        check_local([at.x, at.y, at.z]).map_err(|_| EditError::OutOfProject)?;
+        let tile = TileKey::of([at.x, at.y]);
+        Ok((tile, offset(at, tile.center())))
+    }
+
+    /// Removes every construction line and point, one undo step per tile.
+    pub fn delete_guides(&mut self) -> Result<(), EditError> {
+        let tiles: Vec<TileKey> = self
+            .project
+            .tiles
+            .iter()
+            .filter(|(_, d)| !d.guide_ids().is_empty())
+            .map(|(k, _)| *k)
+            .collect();
+        for tile in tiles {
+            self.project
+                .tile_mut(tile)?
+                .delete_all_guides()
+                .map_err(kernel_err)?;
+            self.record(tile);
+        }
+        Ok(())
+    }
+
+    /// Lines to draw for the construction geometry, project-local.
+    pub fn guide_lines(&self) -> Vec<(Point3, Point3)> {
+        let mut out = Vec::new();
+        for (key, doc) in &self.project.tiles {
+            let c = key.center();
+            for id in doc.guide_ids() {
+                if !doc.guide_shown(id) {
+                    continue;
+                }
+                let Some(guide) = doc.guide(id) else { continue };
+                match guide {
+                    kernel::Guide::Line { .. } => {
+                        let ends = guide_extent(guide);
+                        out.push((onset(ends[0], c), onset(ends[1], c)));
+                    }
+                    kernel::Guide::Point { position } => {
+                        let p = onset(*position, c);
+                        for u in [
+                            Vec3::new(GUIDE_CROSS_M, 0.0, 0.0),
+                            Vec3::new(0.0, GUIDE_CROSS_M, 0.0),
+                            Vec3::new(0.0, 0.0, GUIDE_CROSS_M),
+                        ] {
+                            out.push((p - u, p + u));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The direction of the edge under `hit`, when it lies on one: solid or
+    /// drawn. `None` on a corner, a face or a guide.
+    pub fn edge_direction(&self, hit: &Hit) -> Option<Vec3> {
+        let doc = self.project.tiles.get(&hit.tile)?;
+        let (a, b) = if let Some((sketch, edge)) = hit.snap.sketch_source {
+            let sk = doc.sketch(sketch)?;
+            let e = sk.edges().get(edge)?;
+            (sk.vertices()[e.from].position, sk.vertices()[e.to].position)
+        } else {
+            let source = hit.snap.source?;
+            let inference::ElementRef::Edge(edge) = source.element else {
+                return None;
+            };
+            if source.instance.is_some() {
+                return None;
+            }
+            doc.object(source.object)?.edge_endpoints(edge)?
+        };
+        (b - a).normalized().ok()
+    }
+
+    /// Sweeps a region along the drawing connected to `path_edge`, into a solid.
+    /// Both must lie in `tile`. One undo step.
+    pub fn follow_me(
+        &mut self,
+        tile: TileKey,
+        profile: (SketchId, SketchRegionId),
+        path: (SketchId, kernel::SketchEdgeId),
+    ) -> Result<(), EditError> {
+        let doc = self.project.tile_mut(tile)?;
+        let sk = doc
+            .sketch(path.0)
+            .ok_or(EditError::Kernel("sketch hilang".into()))?;
+        let island = sk
+            .island_of_edge(path.1)
+            .and_then(|i| sk.islands().get(i))
+            .ok_or(EditError::Kernel("garis hilang".into()))?;
+        let route = kernel::FollowMePath::SketchEdges {
+            sketch: path.0,
+            edges: island.edges.clone(),
+        };
+        doc.follow_me(profile.0, profile.1, &route)
+            .map_err(kernel_err)?;
+        self.guard_reach(tile)?;
+        self.record(tile);
+        Ok(())
     }
 
     /// Groups `nodes`, top-level nodes of one tile, as one undo step.

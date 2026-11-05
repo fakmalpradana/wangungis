@@ -6,12 +6,12 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 ## Perilaku
 - `wangungis [file.hew | file.wangun]`: membuka file dari argumen. Bisa juga lewat kotak path + tombol **Buka** (atau Enter). Tanpa argumen: proyek baru kosong.
 - File dibuka lewat `scene::project::Project::open`. Setiap tile kernel menjadi satu tile render di pusatnya. `.hew` yang geometrinya melewati 1,5 km langsung dipecah menjadi tile 1 km di memori.
-- **Tool** (logika di crate `tools`): Pilih (Spasi), Garis (L), Persegi (R), Lingkaran (C), Poligon (G), Busur (A), Push/Pull (P), Offset (F), Pindah (M), Putar (Q), Skala (S), Hapus (E). Klik kiri milik tool. Saat Pindah atau Putar, C atau menekan Ctrl beralih ke menyalin; status bar menulis "Menyalin".
+- **Tool** (logika di crate `tools`): Pilih (Spasi), Garis (L), Persegi (R), Lingkaran (C), Poligon (G), Busur (A), Push/Pull (P), Offset (F), Pindah (M), Putar (Q), Skala (S), Hapus (E), Ukur (T), Follow Me. Klik kiri milik tool. Saat Pindah atau Putar, C atau menekan Ctrl beralih ke menyalin; status bar menulis "Menyalin".
 - **Nilai:** angka yang diketik langsung masuk tanpa perlu fokus, ditampilkan di status bar, Enter mengirim, Backspace menghapus, Esc membatalkan. Huruf satuan (`m`, `c`) hanya dihitung setelah ada angka. `x`, `*`, dan `/` boleh mengawali nilai, untuk jumlah array.
 - **Kunci sumbu:** panah kanan = X, kiri = Y, atas = Z.
 - **Undo/Redo:** Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, atau tombol. Gesture yang sedang berjalan dibatalkan, karena id-nya bisa basi.
 - **Navigasi:** seret tengah = orbit, Shift+seret tengah = pan. Di trackpad: Alt+seret kiri = orbit, Shift+Alt+seret kiri = pan. Scroll = zoom. **Zoom extents** memasukkan seluruh model ke layar.
-- **Overlay:** sumbu proyek (merah X, hijau Y, biru Z), pratinjau tool (oranye), dan penanda snap (hijau titik ujung, sian titik tengah, merah tepi, biru face).
+- **Overlay:** sumbu proyek (merah X, hijau Y, biru Z), garis dan titik panduan (abu-abu; **Hapus panduan** menghapus semuanya), pratinjau tool (oranye), dan penanda snap (hijau titik ujung, sian titik tengah, merah tepi, biru face).
 - **Simpan** (Cmd/Ctrl+S): proyek satu tile disimpan sebagai `.hew`, selebihnya `.wangun`. File hanya ditimpa bila jenisnya sama, jadi `.hew` yang dipecah atau bertambah tile disimpan di sebelahnya (`kota.hew` menjadi `kota.wangun`; nama lain mendapat tambahan `.wangun`). Path di kotak atas menentukan tujuan, jadi nama baru berarti Save As; kotak kosong berarti file yang sedang dibuka. File lain yang sudah ada tidak pernah ditimpa: Simpan menolak dan meminta nama lain. Penulisan lewat file sementara, sehingga gagal tulis tidak merusak file lama.
 - **Baru:** proyek kosong dan kotak path dikosongkan.
 - **Perubahan belum disimpan:** Baru, Buka, dan menutup jendela menanyakan Simpan, Buang, atau Batal lebih dulu.

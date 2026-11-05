@@ -131,6 +131,15 @@ enum State {
         cursor: Option<Point3>,
         hover: Vec<(Point3, Point3)>,
     },
+    Tape {
+        /// The start, and the edge direction when it lies on an edge.
+        from: Option<(Point3, Option<Vec3>)>,
+        cursor: Option<Point3>,
+    },
+    Follow {
+        profile: Option<(TileKey, SketchId, SketchRegionId)>,
+        outline: Vec<(Point3, Point3)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -670,6 +679,37 @@ impl Tool {
         )
     }
 
+    pub fn tape(aperture: f64) -> Self {
+        Self::with(
+            State::Tape {
+                from: None,
+                cursor: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn follow_me(aperture: f64) -> Self {
+        Self::with(
+            State::Follow {
+                profile: None,
+                outline: Vec::new(),
+            },
+            aperture,
+        )
+    }
+
+    /// What the Tape reads now, in meters.
+    pub fn measure(&self) -> Option<f64> {
+        match &self.state {
+            State::Tape {
+                from: Some((a, _)),
+                cursor: Some(b),
+            } => Some((*b - *a).length()),
+            _ => None,
+        }
+    }
+
     /// Whether a copying toggle means anything to this tool, so C can mean
     /// Circle everywhere else.
     pub fn can_copy(&self) -> bool {
@@ -728,6 +768,8 @@ impl Tool {
             State::Round { center, .. } => center.is_some(),
             State::Arc { start, .. } => start.is_some(),
             State::Offset { armed, .. } => armed.is_some(),
+            State::Tape { from, .. } => from.is_some(),
+            State::Follow { profile, .. } => profile.is_some(),
         }
     }
 
@@ -750,6 +792,8 @@ impl Tool {
             State::Round { .. } => Self::circle(aperture),
             State::Arc { .. } => Self::arc(aperture),
             State::Offset { .. } => Self::offset(aperture),
+            State::Tape { .. } => Self::tape(aperture),
+            State::Follow { .. } => Self::follow_me(aperture),
         };
     }
 
@@ -786,6 +830,8 @@ impl Tool {
             State::Round { .. } => self.handle_round(scene, input),
             State::Arc { .. } => self.handle_arc(scene, input),
             State::Offset { .. } => self.handle_offset(scene, input),
+            State::Tape { .. } => self.handle_tape(scene, input),
+            State::Follow { .. } => self.handle_follow(scene, input),
         }?;
         if !hovering {
             // A click or typed value ends what the marker described.
@@ -1408,6 +1454,119 @@ impl Tool {
         Ok(())
     }
 
+    fn handle_tape(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Tape { from, cursor } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        let point = |scene: &mut Scene, ray: PickRay, a: Point3| {
+            let q = SnapQuery {
+                anchor: Some(a),
+                ..query(ray, aperture)
+            };
+            let hit = scene.snap(&q);
+            let p = hit.map(|h| h.snap.position).or_else(|| {
+                let plane = Plane::from_point_normal(a, Vec3::new(0.0, 0.0, 1.0)).ok()?;
+                ray_on_plane(&ray, &plane)
+            });
+            (p, hit)
+        };
+        let mut to = None;
+        match input {
+            Input::Hover(ray) => match from {
+                Some((a, _)) => {
+                    let (p, hit) = point(scene, ray, *a);
+                    *cursor = p;
+                    self.preview.snap = hit;
+                }
+                None => self.preview.snap = scene.snap(&query(ray, aperture)),
+            },
+            Input::Click(ray) => match from {
+                Some((a, _)) => to = point(scene, ray, *a).0,
+                None => {
+                    let hit = scene.snap(&query(ray, aperture));
+                    let start = hit
+                        .map(|h| h.snap.position)
+                        .or_else(|| ray_on_plane(&ray, &ground()));
+                    *from = start.map(|p| (p, hit.and_then(|h| scene.edge_direction(&h))));
+                }
+            },
+            Input::Typed(text) => {
+                let (Some((a, _)), Some(c)) = (&*from, *cursor) else {
+                    return Err(needs("klik titik awal lalu arahkan kursor dulu"));
+                };
+                let Some(Vcb::One(len)) = vcb::parse(&text) else {
+                    return Err(needs("pita ukur butuh satu jarak"));
+                };
+                let dir = (c - *a)
+                    .normalized()
+                    .map_err(|_| needs("arahkan kursor dulu"))?;
+                to = Some(*a + dir * len);
+            }
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        if let (Some(b), Some((a, along))) = (to, *from)
+            && (b - a).length() >= MIN_LEN
+        {
+            match along {
+                // From an edge: a parallel line. Measured along that edge it
+                // would be the edge's own line, so a point instead.
+                Some(u) if (b - a).cross(u).length() > MIN_LEN => scene.add_guide_line(b, u)?,
+                _ => scene.add_guide_point(b)?,
+            }
+            *from = None;
+            *cursor = None;
+        }
+        Ok(())
+    }
+
+    fn handle_follow(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Follow { profile, outline } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        match input {
+            Input::Hover(ray) => {
+                self.preview.snap = scene.snap(&pick_query(ray, aperture));
+            }
+            Input::Click(ray) => {
+                let hit = scene.snap(&pick_query(ray, aperture));
+                match (*profile, hit) {
+                    (None, Some(h)) => {
+                        if let Some((sketch, region)) = h.snap.sketch_region_source {
+                            *profile = Some((h.tile, sketch, region));
+                            *outline = scene.outline(Target::Region {
+                                tile: h.tile,
+                                sketch,
+                                region,
+                            });
+                        } else {
+                            return Err(needs("klik region tertutup sebagai penampang"));
+                        }
+                    }
+                    (Some((tile, sketch, region)), Some(h)) => {
+                        let Some(path) = h.snap.sketch_source else {
+                            return Err(needs("klik garis sebagai jalur"));
+                        };
+                        if h.tile != tile {
+                            return Err(needs("penampang dan jalur harus di tile yang sama"));
+                        }
+                        scene.follow_me(tile, (sketch, region), path)?;
+                        *profile = None;
+                        outline.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Input::ClickAdd(_)
+            | Input::Typed(_)
+            | Input::LockAxis(_)
+            | Input::Cancel
+            | Input::ToggleCopy => {}
+        }
+        Ok(())
+    }
+
     fn handle_erase(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::Erase { hover } = &mut self.state else {
@@ -1670,6 +1829,11 @@ impl Tool {
                 _ => Vec::new(),
             },
             State::Erase { hover } => hover.clone(),
+            State::Tape { from, cursor } => match (from, cursor) {
+                (Some((a, _)), Some(b)) => vec![(*a, *b)],
+                _ => Vec::new(),
+            },
+            State::Follow { outline, .. } => outline.clone(),
             State::Round {
                 sides,
                 center,

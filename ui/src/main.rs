@@ -32,6 +32,7 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
+const GUIDE_COLOR: [f32; 3] = [0.45, 0.45, 0.6];
 /// Seconds between autosaves of a project with unsaved changes.
 const AUTOSAVE_S: f64 = 60.0;
 
@@ -405,6 +406,8 @@ impl App {
         if !dirty.is_empty() {
             self.unsaved = true;
             self.autosave_stale = true;
+            // Guides are in the overlay.
+            self.overlay_shown = None;
         }
         for key in dirty {
             self.upload(key);
@@ -602,6 +605,7 @@ impl App {
             K::G if self.typed.is_empty() => self.switch_tool(Tool::polygon),
             K::A if self.typed.is_empty() => self.switch_tool(Tool::arc),
             K::F if self.typed.is_empty() => self.switch_tool(Tool::offset),
+            K::T if self.typed.is_empty() => self.switch_tool(Tool::tape),
             _ => {}
         }
     }
@@ -615,6 +619,15 @@ impl App {
         }
         let p3 = |p: Point3| [p.x, p.y, p.z];
         let mut groups = axes_overlay();
+        groups.push(OverlayLines {
+            color: GUIDE_COLOR,
+            lines: self
+                .scene
+                .guide_lines()
+                .iter()
+                .map(|(a, b)| (p3(*a), p3(*b)))
+                .collect(),
+        });
         groups.push(OverlayLines {
             color: PREVIEW_COLOR,
             lines: preview
@@ -931,6 +944,8 @@ impl App {
                     ("Busur (A)", Tool::arc),
                     ("Push/Pull (P)", Tool::push_pull),
                     ("Offset (F)", Tool::offset),
+                    ("Follow Me", Tool::follow_me),
+                    ("Ukur (T)", Tool::tape),
                     ("Pindah (M)", Tool::move_tool),
                     ("Putar (Q)", Tool::rotate),
                     ("Skala (S)", Tool::scale),
@@ -955,6 +970,13 @@ impl App {
                     .clicked()
                 {
                     self.redo();
+                }
+                if ui.button("Hapus panduan").clicked() {
+                    match self.scene.delete_guides() {
+                        Ok(()) => self.error = None,
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                    self.sync_edits();
                 }
                 if ui.button("Grup").clicked() {
                     self.on_picked(|s, t, n| s.group(t, n));
@@ -988,6 +1010,10 @@ impl App {
                     &self.typed
                 });
                 ui.separator();
+                if let Some(m) = self.tool.measure() {
+                    ui.label(format!("Jarak: {m:.3} m"));
+                    ui.separator();
+                }
                 if self.tool.copying() {
                     ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
                     ui.separator();
