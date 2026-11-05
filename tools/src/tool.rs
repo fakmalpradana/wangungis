@@ -3,7 +3,7 @@
 //! preview.
 
 use inference::{
-    ApertureMode, Axis, ElementRef, PickRay, SnapLock, SnapQuery, SnapSource, SnapWeights,
+    ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
 use kernel::{Plane, Point3, SketchId, SketchRegionId, Vec3};
 use wangungis_scene::project::TileKey;
@@ -71,7 +71,7 @@ enum State {
         chain: Option<Chain>,
     },
     Rectangle {
-        first: Option<(Point3, Plane)>,
+        first: Option<(Point3, Plane, TileKey)>,
         cursor: Option<Point3>,
     },
     PushPull {
@@ -85,7 +85,7 @@ enum State {
 struct Chain {
     anchor: Point3,
     plane: Plane,
-    sketch: Option<(TileKey, SketchId)>,
+    tile: TileKey,
     cursor: Option<Point3>,
     lock: Option<Axis>,
 }
@@ -162,18 +162,24 @@ fn on_plane(p: Point3, plane: &Plane) -> Point3 {
     p - plane.normal() * plane.signed_distance(p)
 }
 
-/// A first click: the point and the plane the drawing will lie on. The face
-/// under the cursor gives the plane; any other snap a horizontal plane through
-/// it; nothing at all the ground.
-fn first_point(
-    scene: &mut Scene,
-    ray: PickRay,
-    aperture: f64,
-) -> Option<(Point3, Plane, Option<Hit>)> {
+/// A first click: the point, the plane the drawing will lie on, and the tile
+/// holding what it joins. The face under the cursor gives the plane; any other
+/// snap a horizontal plane through it; nothing at all the ground.
+fn first_point(scene: &mut Scene, ray: PickRay, aperture: f64) -> Option<(Point3, Plane, TileKey)> {
+    let own_tile = |p: Point3| TileKey::of([p.x, p.y]);
     let Some(hit) = scene.snap(&query(ray, aperture)) else {
-        return ray_on_plane(&ray, &ground()).map(|p| (p, ground(), None));
+        return ray_on_plane(&ray, &ground()).map(|p| (p, ground(), own_tile(p)));
     };
     let p = hit.snap.position;
+    // A pure direction snap carries no geometry, so no tile of its own.
+    let tile = match hit.snap.kind {
+        SnapKind::Endpoint
+        | SnapKind::Midpoint
+        | SnapKind::Center
+        | SnapKind::OnEdge
+        | SnapKind::OnFace => hit.tile,
+        _ => own_tile(p),
+    };
     let on_face = hit.snap.source.and_then(|s| match s.element {
         ElementRef::Face(_) if s.instance.is_none() => scene.face_shape(hit.tile, s),
         _ => None,
@@ -198,7 +204,7 @@ fn first_point(
             }
         }
     };
-    Some((on_plane(p, &plane), plane, Some(hit)))
+    Some((on_plane(p, &plane), plane, tile))
 }
 
 /// A later point of a gesture, kept on `plane`. `anchor` turns on axis inference
@@ -405,11 +411,11 @@ impl Tool {
             },
             Input::Click(ray) => match chain {
                 None => {
-                    if let Some((anchor, plane, _)) = first_point(scene, ray, aperture) {
+                    if let Some((anchor, plane, tile)) = first_point(scene, ray, aperture) {
                         *chain = Some(Chain {
                             anchor,
                             plane,
-                            sketch: None,
+                            tile,
                             cursor: None,
                             lock: None,
                         });
@@ -461,15 +467,10 @@ impl Tool {
         if (end - c.anchor).length() < MIN_LEN {
             return Ok(false);
         }
-        let regions = |s: &Scene, t: Option<(TileKey, SketchId)>| {
-            t.map_or(0, |(k, id)| s.region_count(k, id))
-        };
-        let before = regions(scene, c.sketch);
-        let drawn = scene.draw(c.sketch, c.plane, &[(c.anchor, end)])?;
-        c.sketch = Some(drawn);
+        let drawn = scene.draw(Some(c.tile), c.plane, &[(c.anchor, end)])?;
         c.anchor = end;
         c.cursor = None;
-        Ok(regions(scene, c.sketch) > before)
+        Ok(drawn.closed)
     }
 
     fn handle_rectangle(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
@@ -479,7 +480,7 @@ impl Tool {
         };
         match input {
             Input::Hover(ray) => match first {
-                Some((_, plane)) => {
+                Some((_, plane, _)) => {
                     let next = next_point(scene, ray, None, plane, None, aperture);
                     *cursor = next.map(|n| n.0);
                     self.preview.snap = next.and_then(|n| n.1);
@@ -488,14 +489,12 @@ impl Tool {
             },
             Input::Click(ray) => match first {
                 None => {
-                    if let Some((p, plane, _)) = first_point(scene, ray, aperture) {
-                        *first = Some((p, plane));
-                    }
+                    *first = first_point(scene, ray, aperture);
                 }
-                Some((a, plane)) => {
+                Some((a, plane, tile)) => {
                     if let Some((b, _)) = next_point(scene, ray, None, plane, None, aperture) {
                         let (w, d) = spans(*a, b, plane);
-                        if Self::draw_rectangle(scene, *a, plane, w, d)? {
+                        if Self::draw_rectangle(scene, *a, plane, *tile, w, d)? {
                             *first = None;
                             *cursor = None;
                         }
@@ -503,7 +502,7 @@ impl Tool {
                 }
             },
             Input::Typed(text) => {
-                let Some((a, plane)) = first else {
+                let Some((a, plane, tile)) = first else {
                     return Err(needs("klik sudut pertama dulu"));
                 };
                 let Some(Vcb::Two(w, d)) = vcb::parse(&text) else {
@@ -514,7 +513,7 @@ impl Tool {
                 // `<` rather than signum: -0.0 has a negative sign.
                 let side = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
                 let (w, d) = (w * side(cw), d * side(cd));
-                if Self::draw_rectangle(scene, *a, plane, w, d)? {
+                if Self::draw_rectangle(scene, *a, plane, *tile, w, d)? {
                     *first = None;
                     *cursor = None;
                 }
@@ -530,13 +529,14 @@ impl Tool {
         scene: &mut Scene,
         a: Point3,
         plane: &Plane,
+        tile: TileKey,
         w: f64,
         d: f64,
     ) -> Result<bool, EditError> {
         if w.abs() < MIN_LEN || d.abs() < MIN_LEN {
             return Ok(false);
         }
-        scene.draw(None, *plane, &ring(&rectangle(a, plane, w, d)))?;
+        scene.draw(Some(tile), *plane, &ring(&rectangle(a, plane, w, d)))?;
         Ok(true)
     }
 
@@ -650,7 +650,7 @@ impl Tool {
                 .filter_map(|c| c.cursor.map(|p| (c.anchor, p)))
                 .collect(),
             State::Rectangle { first, cursor } => match (first, cursor) {
-                (Some((a, plane)), Some(b)) => {
+                (Some((a, plane, _)), Some(b)) => {
                     let (w, d) = spans(*a, *b, plane);
                     ring(&rectangle(*a, plane, w, d))
                 }

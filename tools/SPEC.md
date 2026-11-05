@@ -7,7 +7,7 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `Scene::new(project)`, `project()`, `take_dirty()`: tile yang berubah sejak panggilan terakhir, untuk dibuat ulang mesh-nya oleh renderer.
 - `snap(&SnapQuery) -> Option<Hit>`: snap Hew lintas tile. `Hit { tile, snap }`: posisi lokal proyek; `snap.source` dan id sketch berlaku di `tile`.
 - `pick_face(&PickRay) -> Option<FaceHit>`: face solid terdekat.
-- `draw(target, plane, segments)`: menggambar segmen sebagai **satu** langkah undo, pada sketch `target` atau sketch baru di tile milik titik pertama. Tile dibuat bila belum ada.
+- `draw(tile, plane, segments) -> Drawn`: menggambar segmen sebagai **satu** langkah undo lewat mesin drafting Hew (`Document::draft`), di tile `tile` atau tile milik titik pertama. Semua gambar pada bidang itu menyatu: bentuk di atas face solid membelah face (auto-split, #14), garis yang bertemu gambar lain tersambung dengannya. Tile dibuat bila belum ada. `Drawn { tile, sketch, closed }`: `closed` berarti ada region atau face baru.
 - `extrude(tile, sketch, region, distance)`, `push_pull(tile, source, distance)`.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
@@ -22,7 +22,7 @@ Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle
 
 Perilaku:
 - **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang.
-- **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Rantai baru selalu sketch baru, jadi tidak bisa menutup loop bersama rantai lama (ponytail).
+- **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
 - **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.

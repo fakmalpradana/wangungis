@@ -27,4 +27,4 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 - Dialog file native.
 - Form pengisian origin.
 - Lazy-load per tile.
-- Isian region, Move/array, auto-split face (rencana v0.1 berikutnya).
+- Move/array (rencana v0.1 berikutnya).

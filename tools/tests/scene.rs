@@ -29,9 +29,15 @@ fn rect_segments(x: f64, y: f64, w: f64, d: f64) -> Vec<(Point3, Point3)> {
     (0..4).map(|k| (r[k], r[(k + 1) % 4])).collect()
 }
 
+/// A rectangle on the ground, in the tile of its first corner.
+fn draw_rect(s: &mut Scene, x: f64, y: f64, w: f64, d: f64) -> (TileKey, SketchId) {
+    let drawn = s.draw(None, ground(), &rect_segments(x, y, w, d)).unwrap();
+    (drawn.tile, drawn.sketch.unwrap())
+}
+
 /// Draws a rectangle and extrudes it `h` up, as two undo steps.
 fn add_box(s: &mut Scene, x: f64, y: f64, w: f64, d: f64, h: f64) -> TileKey {
-    let (key, sk) = s.draw(None, ground(), &rect_segments(x, y, w, d)).unwrap();
+    let (key, sk) = draw_rect(s, x, y, w, d);
     let region = regions(s, key, sk)[0];
     s.extrude(key, sk, region, h).unwrap();
     key
@@ -119,9 +125,7 @@ fn query(eye: [f64; 3], at: [f64; 3]) -> SnapQuery {
 fn smoke_box_undo_redo_save() {
     let mut s = scene();
     assert!(!s.can_undo());
-    let (key, sk) = s
-        .draw(None, ground(), &rect_segments(0.0, 0.0, 5.0, 4.0))
-        .unwrap();
+    let (key, sk) = draw_rect(&mut s, 0.0, 0.0, 5.0, 4.0);
     assert_eq!(key, TileKey::ORIGIN);
     assert_eq!(
         regions(&s, key, sk).len(),
@@ -189,13 +193,16 @@ fn new_edit_clears_redo() {
 fn line_chain_closes_into_a_region() {
     let mut s = scene();
     let segs = rect_segments(1.0, 1.0, 5.0, 4.0);
-    let (key, sk) = s.draw(None, ground(), &segs[..1]).unwrap();
+    let first = s.draw(None, ground(), &segs[..1]).unwrap();
+    assert!(!first.closed);
+    let key = first.tile;
+    let mut last = first;
     for seg in &segs[1..] {
-        assert_eq!(
-            s.draw(Some((key, sk)), ground(), &[*seg]).unwrap(),
-            (key, sk)
-        );
+        last = s.draw(Some(key), ground(), &[*seg]).unwrap();
+        assert_eq!(last.tile, key);
     }
+    assert!(last.closed, "the closing segment makes the region");
+    let sk = last.sketch.unwrap();
     assert_eq!(regions(&s, key, sk).len(), 1);
     s.undo().unwrap();
     assert_eq!(regions(&s, key, sk).len(), 0, "undo reopens the loop");
@@ -453,15 +460,14 @@ fn refused_drawing_leaves_no_sketch_or_tile() {
     assert_eq!(s.project().tiles.len(), 1, "no tile created");
     assert!(s.project().tiles[&TileKey::ORIGIN].sketch_ids().is_empty());
     assert!(!s.can_undo());
-    // A sketch that does not exist in that tile is refused too.
-    let (key, sk) = s
-        .draw(None, ground(), &rect_segments(0.0, 0.0, 2.0, 2.0))
-        .unwrap();
+    // A refused drawing in a tile that does not exist yet does not create it.
     let elsewhere = TileKey { i: 5, j: 5 };
-    let seg = (far, Point3::new(3_001.0, 0.0, 0.0));
-    assert!(s.draw(Some((elsewhere, sk)), ground(), &[seg]).is_err());
+    let (a, b) = (
+        Point3::new(5_000.0, 5_000.0, 0.0),
+        Point3::new(5_000.0, 5_000.0, 2.0),
+    );
+    assert!(s.draw(Some(elsewhere), ground(), &[(a, b)]).is_err());
     assert_eq!(s.project().tiles.len(), 1);
-    let _ = key;
 }
 
 /// Hovering beside a corner, on the far side of the cursor along the face: the
@@ -576,8 +582,8 @@ fn instances_snap_and_pick_unless_hidden() {
 fn segment_on_an_existing_edge_is_no_undo_step() {
     let mut s = scene();
     let segs = rect_segments(0.0, 0.0, 5.0, 4.0);
-    let (key, sk) = s.draw(None, ground(), &segs).unwrap();
-    s.draw(Some((key, sk)), ground(), &segs[..1]).unwrap();
+    let key = s.draw(None, ground(), &segs).unwrap().tile;
+    s.draw(Some(key), ground(), &segs[..1]).unwrap();
     assert_eq!(s.undo().unwrap(), Some(key));
     assert_eq!(
         sketch_edges(s.project()),
@@ -723,5 +729,149 @@ proptest! {
         s.redo().unwrap();
         assert_box(s.project(), lo, hi);
         assert_box(&Project::open(&s.project().save()).unwrap(), lo, hi);
+    }
+}
+
+fn top_plane(z: f64) -> Plane {
+    Plane::from_point_normal(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0)).unwrap()
+}
+
+fn ring_at(z: f64, x: f64, y: f64, w: f64, d: f64) -> Vec<(Point3, Point3)> {
+    let p = |a: f64, b: f64| Point3::new(x + a, y + b, z);
+    let r = [p(0.0, 0.0), p(w, 0.0), p(w, d), p(0.0, d)];
+    (0..4).map(|k| (r[k], r[(k + 1) % 4])).collect()
+}
+
+/// The only object of a one-box project, with its id.
+fn the_object(s: &Scene, key: TileKey) -> (kernel::ObjectId, &kernel::Object) {
+    let doc = &s.project().tiles[&key];
+    let id = doc.visible_object_ids()[0];
+    (id, doc.object(id).unwrap())
+}
+
+/// The face straight below (`x`, `y`, `z` + 50 m).
+fn face_at(s: &mut Scene, key: TileKey, x: f64, y: f64, z: f64) -> inference::SnapSource {
+    let found = s
+        .pick_face(&PickRay {
+            origin: Point3::new(x, y, z + 50.0),
+            direction: Vec3::new(0.0, 0.0, -1.0),
+        })
+        .expect("a face under the ray");
+    assert_eq!(found.tile, key);
+    assert!(matches!(found.source.element, ElementRef::Face(_)));
+    found.source
+}
+
+/// Drawing on a face splits it, as one undo step, and the new face can be
+/// pulled on its own: this is auto-split (#14).
+#[test]
+fn a_shape_on_a_face_splits_it() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    assert_eq!(the_object(&s, key).1.faces().len(), 6);
+
+    let drawn = s
+        .draw(Some(key), top_plane(3.0), &ring_at(3.0, 1.0, 1.0, 2.0, 2.0))
+        .unwrap();
+    assert!(drawn.closed, "the loop is a new face");
+    let (_, obj) = the_object(&s, key);
+    assert_eq!(obj.faces().len(), 7, "the top face was split");
+    assert!(sketch_edges(s.project()) == 0, "nothing stayed a sketch");
+
+    // Pull the inner face up: a tower on the box.
+    let inner = face_at(&mut s, key, 2.0, 2.0, 3.0);
+    s.push_pull(key, inner, 2.0).unwrap();
+    let (_, b) = solids(s.project());
+    let (lo, hi) = b.unwrap();
+    assert!((hi[2] - 5.0).abs() < MM && lo[2].abs() < MM);
+    kernel_valid(&s, key);
+
+    // Undo the pull, then the split: back to a plain box.
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 6);
+    s.redo().unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 7);
+    kernel_valid(&s, key);
+}
+
+/// The box with a door of the v0.1 exit task: a rectangle on a wall touching
+/// the floor edge, pushed through the whole box.
+#[test]
+fn a_door_goes_through_the_wall() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    // The wall y = 0 faces -y.
+    let wall =
+        Plane::from_point_normal(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0)).unwrap();
+    let p = |x: f64, z: f64| Point3::new(x, 0.0, z);
+    let door = [p(2.0, 0.0), p(3.0, 0.0), p(3.0, 2.0), p(2.0, 2.0)];
+    let segs: Vec<_> = (0..4).map(|k| (door[k], door[(k + 1) % 4])).collect();
+    assert!(s.draw(Some(key), wall, &segs).unwrap().closed);
+    kernel_valid(&s, key);
+
+    let face = s
+        .pick_face(&PickRay {
+            origin: Point3::new(2.5, -10.0, 1.0),
+            direction: Vec3::new(0.0, 1.0, 0.0),
+        })
+        .unwrap();
+    s.push_pull(key, face.source, -4.0).unwrap();
+    kernel_valid(&s, key);
+    // Looking through the opening, the ray passes the box.
+    assert!(
+        s.pick_face(&PickRay {
+            origin: Point3::new(2.5, -10.0, 1.0),
+            direction: Vec3::new(0.0, 1.0, 0.0),
+        })
+        .is_none(),
+        "the door opens right through"
+    );
+}
+
+/// Separate strokes on one plane join, whichever order they come in.
+#[test]
+fn strokes_on_a_plane_join_up() {
+    let mut s = scene();
+    let segs = rect_segments(0.0, 0.0, 5.0, 4.0);
+    let d0 = s.draw(None, ground(), &segs[..2]).unwrap();
+    let d1 = s.draw(Some(d0.tile), ground(), &segs[2..]).unwrap();
+    assert!(d1.closed, "a later stroke closes the earlier one");
+    // A line across the region divides it.
+    let across = (Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 4.0, 0.0));
+    let d2 = s.draw(Some(d0.tile), ground(), &[across]).unwrap();
+    assert!(d2.closed);
+    let sk = d2.sketch.unwrap();
+    assert_eq!(regions(&s, d0.tile, sk).len(), 2);
+}
+
+/// Random rectangles on a box's top keep the kernel's invariants, undo included.
+fn kernel_valid(s: &Scene, key: TileKey) {
+    let doc = &s.project().tiles[&key];
+    for id in doc.visible_object_ids() {
+        doc.object(id).unwrap().validate().unwrap();
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    #[test]
+    fn drawing_on_a_face_never_breaks_it(
+        x in 0.1f64..4.0, y in 0.1f64..3.0, w in 0.1f64..0.9, d in 0.1f64..0.9, pull in -2.5f64..2.5,
+    ) {
+        let mut s = scene();
+        let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+        let drawn = s.draw(Some(key), top_plane(3.0), &ring_at(3.0, x, y, w, d)).unwrap();
+        prop_assert!(drawn.closed);
+        kernel_valid(&s, key);
+        let inner = face_at(&mut s, key, x + w / 2.0, y + d / 2.0, 3.0);
+        if pull.abs() > 0.01 {
+            s.push_pull(key, inner, pull).unwrap();
+            kernel_valid(&s, key);
+            s.undo().unwrap();
+        }
+        s.undo().unwrap();
+        kernel_valid(&s, key);
+        prop_assert_eq!(the_object(&s, key).1.faces().len(), 6);
     }
 }

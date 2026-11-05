@@ -470,3 +470,66 @@ fn mesh_holds_instances_and_sketches_but_not_hidden_nodes() {
     let (lo, hi) = drawn.bounds().expect("sketch bounds");
     assert_eq!((lo[0], hi[0]), (7.0, 9.0));
 }
+
+/// A closed sketch region is filled from either side, and a hole stays open.
+#[test]
+fn sketch_regions_fill_from_both_sides_around_holes() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let plane = kernel::Plane::from_point_normal(
+        Point3::new(0.0, 0.0, 0.0),
+        kernel::Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let ring = |x: f64, y: f64, w: f64, d: f64| {
+        let p = |a: f64, b: f64| Point3::new(x + a, y + b, 0.0);
+        let r = [p(0.0, 0.0), p(w, 0.0), p(w, d), p(0.0, d)];
+        (0..4)
+            .map(move |k| (r[k], r[(k + 1) % 4]))
+            .collect::<Vec<_>>()
+    };
+    let mut doc = Document::new();
+    let id = doc.add_sketch(plane);
+    let sk = doc.sketch_mut(id).unwrap();
+    for (a, b) in ring(-5.0, -5.0, 10.0, 10.0) {
+        sk.add_segment(a, b).unwrap();
+    }
+    let mesh = TileMesh::from_document(&doc).unwrap();
+    assert_eq!(mesh.triangle_count(), 4, "two triangles per side");
+
+    let eye = |z: f64| Camera {
+        eye: [0.0, -1.0, z],
+        target: [0.0; 3],
+        fovy: 0.8,
+        aspect: 1.0,
+        near: 0.1,
+        far: 200.0,
+    };
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    r.add_tile(&dq.0, [0.0; 3], &mesh);
+    let (above, _) = shoot(&dq, &r, &eye(20.0));
+    let (below, _) = shoot(&dq, &r, &eye(-20.0));
+    let solid = |px: &[u8]| coverage(px);
+    assert!(solid(&above) > 0.1, "above: {}", solid(&above));
+    assert!(solid(&below) > 0.1, "below: {}", solid(&below));
+
+    // A hole: the inner loop becomes its own region, unless it is faceless.
+    let sk = doc.sketch_mut(id).unwrap();
+    for (a, b) in ring(-2.0, -2.0, 4.0, 4.0) {
+        sk.add_segment(a, b).unwrap();
+    }
+    let inner = sk
+        .regions()
+        .iter()
+        .find(|(_, r)| r.holes.is_empty())
+        .map(|(id, _)| id)
+        .unwrap();
+    sk.set_region_faceless(inner, true).unwrap();
+    let mesh = TileMesh::from_document(&doc).unwrap();
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    r.add_tile(&dq.0, [0.0; 3], &mesh);
+    let (holed, _) = shoot(&dq, &r, &eye(20.0));
+    let (a, b) = (solid(&above), solid(&holed));
+    // The hole takes 16 of the 100 square meters, give or take perspective.
+    assert!(b < a * 0.9 && b > a * 0.7, "filled {a}, with hole {b}");
+}

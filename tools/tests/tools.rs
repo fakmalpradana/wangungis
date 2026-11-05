@@ -88,6 +88,22 @@ fn edges(s: &Scene) -> usize {
         .sum()
 }
 
+/// Solid faces whose outer loop lies wholly where `on` says, tile-local.
+fn faces_where(s: &Scene, on: impl Fn(Point3) -> bool) -> usize {
+    let mut n = 0;
+    for doc in s.project().tiles.values() {
+        for id in doc.visible_object_ids() {
+            let o = doc.object(id).unwrap();
+            n += o
+                .faces()
+                .values()
+                .filter(|f| o.loop_positions(f.outer_loop).all(&on))
+                .count();
+        }
+    }
+    n
+}
+
 /// Draws the 5 x 4 m rectangle at (10, 10) with typed sizes.
 fn typed_rectangle(s: &mut Scene) {
     let mut r = Tool::rectangle(APERTURE);
@@ -166,20 +182,12 @@ fn drawing_on_a_face_stays_on_it() {
     click(&mut r, &mut s, [11.0, 11.0, 3.0]);
     hover(&mut r, &mut s, [12.0, 12.0, 3.0]);
     typed(&mut r, &mut s, "1;1").unwrap();
-    let mut z = Vec::new();
-    for doc in s.project().tiles.values() {
-        for id in doc.sketch_ids() {
-            let sk = doc.sketch(id).unwrap();
-            if !sk.edges().is_empty() {
-                z.extend(
-                    sk.edges()
-                        .values()
-                        .map(|e| sk.vertices()[e.from].position.z),
-                );
-            }
-        }
-    }
-    assert!(z.iter().any(|v| (v - 3.0).abs() <= MM), "not on top: {z:?}");
+    assert_eq!(
+        faces_where(&s, |p| (p.z - 3.0).abs() <= MM),
+        2,
+        "top not split"
+    );
+    assert_eq!(edges(&s), 0, "nothing stayed a sketch");
 }
 
 #[test]
@@ -343,18 +351,11 @@ fn click_near_a_wall_edge_draws_on_the_wall() {
     assert!(r.busy());
     r.handle(&mut s, Input::Hover(east(13.0, 1.0))).unwrap();
     typed(&mut r, &mut s, "1;1").unwrap();
-    let doc = s.project().tiles.values().next().unwrap();
-    let on_wall = doc
-        .sketch_ids()
-        .iter()
-        .filter_map(|i| doc.sketch(*i))
-        .any(|k| {
-            !k.edges().is_empty()
-                && k.edges()
-                    .values()
-                    .all(|e| (k.vertices()[e.from].position.x - 15.0).abs() <= MM)
-        });
-    assert!(on_wall, "no drawing on the wall");
+    assert_eq!(
+        faces_where(&s, |p| (p.x - 15.0).abs() <= MM),
+        2,
+        "wall not split"
+    );
 }
 
 /// A ray exactly on a face's edge still arms Push/Pull.
