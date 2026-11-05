@@ -16,6 +16,7 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
 - `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
 - `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. `dissolve` melewati objek biasa, dan menolak bila tidak ada grup atau komponen. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
+- `tags`, `set_tag_hidden`, `tag_nodes`, `untag_nodes`, `rename_tag`, `delete_tag`: mengelola tag lintas tile. Nama bertingkat ditampilkan dengan pemisah `/`. Memberi dan melepas tag pada satu seleksi menjadi satu langkah undo. Mengganti nama dan menghapus tag menjadi satu langkah undo untuk setiap tile yang berubah. Visibilitas tag berlaku pada semua tile, disimpan bersama proyek, tidak masuk riwayat undo, dan tile baru mewarisi tag yang sedang tersembunyi. Node dengan tag tersembunyi tidak dirender, tidak bisa dipilih, dan tidak menjadi sasaran snap.
 - `add_guide_point`, `add_guide_line`, `delete_guides`, `guide_lines`, `edge_direction`: panduan konstruksi. Garis panduan digambar dan bisa di-snap ±200 m dari titiknya (ponytail; Hew menganggapnya tak terbatas).
 - `follow_me(tile, profile, path)`, `follow_me_face(tile, source, path)`: menyapu region, atau face solid, sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile, satu langkah undo. Hasil dari face menyatu dengan solidnya bila bersentuhan.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
@@ -84,3 +85,4 @@ Ukuran nyata `city25k.hew` (24.964 objek, Apple M4, release): snap pertama 51 ms
 
 ## Non-goals
 Renderer, UI, auto-split face, Move/array.
+Warna tag tidak termasuk v0.1.

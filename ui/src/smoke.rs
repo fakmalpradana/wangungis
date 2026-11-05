@@ -1283,3 +1283,43 @@ fn select_delete_and_group_through_the_app() {
     assert!(d.app.typed.is_empty());
     assert_eq!(d.counts().0, 2);
 }
+
+#[test]
+fn tag_visibility_through_the_app() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+    draw_a_box(&mut d);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    let shown = d.model_pixels();
+    assert!(shown > 1000);
+
+    d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    d.app.tag_picked("Bangunan");
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.counts(), (1, 12));
+    assert_eq!(d.app.tag_rows, vec![("Bangunan".to_string(), false)]);
+
+    d.app.set_tag_visible("Bangunan", false);
+    d.frame(vec![]);
+    assert_eq!(d.counts(), (0, 0));
+    assert_eq!(d.app.tag_rows, vec![("Bangunan".to_string(), true)]);
+    assert!(d.model_pixels() < shown / 10);
+
+    d.app.set_tag_visible("Bangunan", true);
+    d.frame(vec![]);
+    assert_eq!(d.counts(), (1, 12));
+    assert!(d.model_pixels() > 1000);
+    d.app.undo();
+    let (&tile, doc) = d.app.scene.project().tiles.iter().next().unwrap();
+    let node = doc.top_level_nodes()[0];
+    assert!(
+        d.app.scene.project().tiles[&tile]
+            .node_tags(node)
+            .is_empty()
+    );
+    assert_eq!(d.counts(), (1, 12));
+}

@@ -1,7 +1,7 @@
 //! Tools driven by scripted input, the way the UI will drive them: rays and
 //! typed text in, geometry out. This is the uji asap without a GPU.
 
-use inference::{Axis, PickRay, SnapKind};
+use inference::{ApertureMode, Axis, PickRay, SnapKind, SnapQuery, SnapWeights};
 use kernel::{NodeId, Point3, Rgba8, Vec3};
 use proptest::prelude::*;
 use wangungis_scene::ProjectOrigin;
@@ -27,6 +27,21 @@ fn ray(at: [f64; 3]) -> PickRay {
     PickRay {
         origin,
         direction: Point3::new(at[0], at[1], at[2]) - origin,
+    }
+}
+
+fn snap_query(at: [f64; 3]) -> SnapQuery {
+    SnapQuery {
+        ray: ray(at),
+        anchor: None,
+        lock: None,
+        aperture: APERTURE,
+        aperture_mode: ApertureMode::Cone,
+        constraint_plane: None,
+        weights: SnapWeights::default(),
+        soft_axis_aperture_scale: None,
+        off_plane_points: false,
+        see_through_points: false,
     }
 }
 
@@ -2230,7 +2245,209 @@ fn every_scene_method_refuses_what_is_out_of_scope() {
         no
     );
     assert_eq!(s.delete_guides(), no);
+    assert_eq!(s.tag_nodes(key, &[out], "Luar"), no);
+    assert_eq!(s.untag_nodes(key, &[out], "Luar"), no);
+    assert_eq!(s.rename_tag("Luar", "Baru"), no);
+    assert_eq!(s.delete_tag("Luar"), no);
     assert_eq!(s.project().save(), saved);
+}
+
+#[test]
+fn tags_hide_nodes_from_pick_and_snap_then_show_them_again() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (&tile, doc) = s.project().tiles.iter().next().unwrap();
+    let node = doc.top_level_nodes()[0];
+
+    s.tag_nodes(tile, &[node], "Bangunan/Atap").unwrap();
+    assert_eq!(s.tags(), vec![("Bangunan/Atap".into(), false)]);
+    assert!(s.pick_face(&ray([12.5, 12.0, 3.0])).is_some());
+    assert!(s.snap(&snap_query([10.0, 10.0, 3.0])).is_some());
+
+    s.set_tag_hidden("Bangunan/Atap", true).unwrap();
+    assert_eq!(s.tags(), vec![("Bangunan/Atap".into(), true)]);
+    assert!(s.pick_face(&ray([12.5, 12.0, 3.0])).is_none());
+    assert!(s.snap(&snap_query([10.0, 10.0, 3.0])).is_none());
+
+    s.set_tag_hidden("Bangunan/Atap", false).unwrap();
+    assert!(s.pick_face(&ray([12.5, 12.0, 3.0])).is_some());
+    assert!(s.snap(&snap_query([10.0, 10.0, 3.0])).is_some());
+}
+
+#[test]
+fn a_tag_carried_only_by_a_node_is_listed() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (&tile, doc) = s.project().tiles.iter().next().unwrap();
+    let node = doc.top_level_nodes()[0];
+    s.tag_nodes(tile, &[node], "Warisan").unwrap();
+    assert!(s.project().tiles[&tile].tag_meta().next().is_none());
+    assert_eq!(s.tags(), vec![("Warisan".into(), false)]);
+}
+
+#[test]
+fn tag_and_untag_each_undo_as_one_step() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (&tile, doc) = s.project().tiles.iter().next().unwrap();
+    let nodes = doc.top_level_nodes();
+
+    s.tag_nodes(tile, &nodes, "Dinding").unwrap();
+    assert_eq!(
+        s.project().tiles[&tile].node_tags(nodes[0]),
+        &[vec![String::from("Dinding")]]
+    );
+    s.undo().unwrap();
+    assert!(s.project().tiles[&tile].node_tags(nodes[0]).is_empty());
+    s.redo().unwrap();
+    s.untag_nodes(tile, &nodes, "Dinding").unwrap();
+    assert!(s.project().tiles[&tile].node_tags(nodes[0]).is_empty());
+    s.undo().unwrap();
+    assert_eq!(
+        s.project().tiles[&tile].node_tags(nodes[0]),
+        &[vec![String::from("Dinding")]]
+    );
+}
+
+#[test]
+fn tags_and_visibility_round_trip_byte_identically() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (&tile, doc) = s.project().tiles.iter().next().unwrap();
+    let node = doc.top_level_nodes()[0];
+    s.tag_nodes(tile, &[node], "Bangunan/Atap").unwrap();
+    s.set_tag_hidden("Bangunan/Atap", true).unwrap();
+    let saved = s.project().save();
+    let back = Scene::new(Project::open(&saved).unwrap());
+    assert_eq!(back.tags(), vec![("Bangunan/Atap".into(), true)]);
+    assert_eq!(back.project().save(), saved);
+}
+
+#[test]
+fn a_hidden_tag_applies_to_every_tile_and_new_tiles() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    typed_rectangle_at(&mut s, [3_010.0, 10.0, 0.0]);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [3_012.0, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    let placed: Vec<_> = s
+        .project()
+        .tiles
+        .iter()
+        .map(|(k, d)| (*k, d.top_level_nodes()[0]))
+        .collect();
+    for (tile, node) in &placed {
+        s.tag_nodes(*tile, &[*node], "Rahasia").unwrap();
+    }
+    s.set_tag_hidden("Rahasia", true).unwrap();
+    assert!(
+        s.project()
+            .tiles
+            .values()
+            .all(|d| d.tag_hidden(&["Rahasia".into()]))
+    );
+
+    typed_rectangle_at(&mut s, [6_010.0, 10.0, 0.0]);
+    assert!(
+        s.project()
+            .tiles
+            .values()
+            .all(|d| d.tag_hidden(&["Rahasia".into()]))
+    );
+}
+
+#[test]
+fn blank_tag_names_are_refused() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (&tile, doc) = s.project().tiles.iter().next().unwrap();
+    let node = doc.top_level_nodes()[0];
+    let no = Err(EditError::Unsupported("nama tag kosong"));
+    assert_eq!(s.tag_nodes(tile, &[node], "  "), no);
+    assert_eq!(s.untag_nodes(tile, &[node], "A/ "), no);
+    assert_eq!(s.set_tag_hidden("", true), no);
+    assert_eq!(s.rename_tag("A", " "), no);
+    assert_eq!(s.delete_tag(" "), no);
+}
+
+#[test]
+fn rename_and_delete_tags_cross_tiles_with_one_undo_each() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    typed_rectangle_at(&mut s, [3_010.0, 10.0, 0.0]);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [3_012.0, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    let placed: Vec<_> = s
+        .project()
+        .tiles
+        .iter()
+        .map(|(k, d)| (*k, d.top_level_nodes()[0]))
+        .collect();
+    for (tile, node) in &placed {
+        s.tag_nodes(*tile, &[*node], "Lama").unwrap();
+    }
+
+    s.rename_tag("Lama", "Baru").unwrap();
+    assert_eq!(s.tags(), vec![("Baru".into(), false)]);
+    s.undo().unwrap();
+    assert_eq!(s.tags().len(), 2, "only the last tile was undone");
+    s.undo().unwrap();
+    assert_eq!(s.tags(), vec![("Lama".into(), false)]);
+    s.redo().unwrap();
+    s.redo().unwrap();
+
+    s.delete_tag("Baru").unwrap();
+    assert!(s.tags().is_empty());
+    s.undo().unwrap();
+    assert_eq!(s.tags(), vec![("Baru".into(), false)]);
+    s.undo().unwrap();
+    assert_eq!(s.tags(), vec![("Baru".into(), false)]);
+}
+
+#[test]
+fn failed_cross_tile_rename_rolls_back_and_clears_redo() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    typed_rectangle_at(&mut s, [3_010.0, 10.0, 0.0]);
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [3_012.0, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    let placed: Vec<_> = s
+        .project()
+        .tiles
+        .iter()
+        .map(|(k, d)| (*k, d.top_level_nodes()[0]))
+        .collect();
+    for (tile, node) in &placed {
+        s.tag_nodes(*tile, &[*node], "A").unwrap();
+    }
+    s.tag_nodes(placed[1].0, &[placed[1].1], "B").unwrap();
+    s.add_guide_point(Point3::new(20.0, 20.0, 0.0)).unwrap();
+    s.undo().unwrap();
+    assert!(s.can_redo());
+    let saved = s.project().save();
+
+    assert!(s.rename_tag("A", "B").is_err());
+    assert_eq!(s.project().save(), saved);
+    assert!(!s.can_redo());
+}
+
+#[test]
+fn tags_lists_a_group_inside_a_component_definition() {
+    let mut s = scene();
+    let (tile, group) = group_and_a_box(&mut s);
+    s.make_component(tile, &[group]).unwrap();
+    let instance = s.project().tiles[&tile]
+        .top_level_nodes()
+        .into_iter()
+        .find(|node| matches!(node, NodeId::Instance(_)))
+        .unwrap();
+    s.enter(tile, instance).unwrap();
+    let inner = s.project().tiles[&tile].session_direct_members().unwrap()[0];
+    s.tag_nodes(tile, &[inner], "Isi").unwrap();
+    assert_eq!(s.tags(), vec![("Isi".into(), false)]);
 }
 
 /// A group inside a component: what is drawn in it is its own, while it is open.

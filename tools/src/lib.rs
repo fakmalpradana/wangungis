@@ -84,6 +84,15 @@ fn kernel_err<E: fmt::Debug>(e: E) -> EditError {
     EditError::Kernel(text)
 }
 
+fn tag_path(name: &str) -> Result<Vec<String>, EditError> {
+    let path: Vec<String> = name.split('/').map(str::trim).map(str::to_owned).collect();
+    if path.is_empty() || path.iter().any(String::is_empty) {
+        Err(EditError::Unsupported("nama tag kosong"))
+    } else {
+        Ok(path)
+    }
+}
+
 /// Whether `node` may be edited now: a direct member of the open session, or
 /// with none open, top-level. What sits inside a group or component needs
 /// entering first.
@@ -512,6 +521,168 @@ impl Scene {
         std::mem::take(&mut self.dirty)
     }
 
+    /// Every tag in the project, sorted by its slash-separated path. Walks every
+    /// node: call it when something changed, not every frame.
+    pub fn tags(&self) -> Vec<(String, bool)> {
+        let mut tags = BTreeMap::<Vec<String>, bool>::new();
+        for doc in self.project.tiles.values() {
+            for (path, hidden) in doc.tag_meta() {
+                tags.entry(path.to_vec())
+                    .and_modify(|h| *h |= hidden)
+                    .or_insert(hidden);
+            }
+            // Repeats are harmless, and a dedup here would be quadratic in a city.
+            let mut nodes: Vec<NodeId> = doc
+                .live_object_ids()
+                .into_iter()
+                .map(NodeId::Object)
+                .chain(doc.group_ids().into_iter().map(NodeId::Group))
+                .chain(doc.instance_ids().into_iter().map(NodeId::Instance))
+                .collect();
+            for component in doc.component_ids() {
+                nodes.extend(doc.def_member_nodes(component).unwrap_or_default());
+            }
+            let mut at = 0;
+            while at < nodes.len() {
+                if let NodeId::Group(group) = nodes[at] {
+                    nodes.extend(doc.group_members(group).unwrap_or_default());
+                }
+                at += 1;
+            }
+            for node in nodes {
+                for path in doc.node_tags(node) {
+                    let hidden = doc.tag_hidden(path);
+                    tags.entry(path.clone())
+                        .and_modify(|h| *h |= hidden)
+                        .or_insert(hidden);
+                }
+            }
+        }
+        tags.into_iter()
+            .map(|(path, hidden)| (path.join("/"), hidden))
+            .collect()
+    }
+
+    /// Sets tag visibility in every tile. This is view state, not undoable.
+    pub fn set_tag_hidden(&mut self, name: &str, hidden: bool) -> Result<(), EditError> {
+        let path = tag_path(name)?;
+        let tiles: Vec<_> = self.project.tiles.keys().copied().collect();
+        for tile in tiles {
+            self.project
+                .tiles
+                .get_mut(&tile)
+                .expect("listed tile")
+                .set_tag_hidden(path.clone(), hidden);
+            self.touch(tile);
+        }
+        Ok(())
+    }
+
+    /// Gives one tag to selected nodes as one project undo step.
+    pub fn tag_nodes(
+        &mut self,
+        tile: TileKey,
+        nodes: &[NodeId],
+        name: &str,
+    ) -> Result<(), EditError> {
+        self.edit_node_tag(tile, nodes, name, true)
+    }
+
+    /// Takes one tag from selected nodes as one project undo step.
+    pub fn untag_nodes(
+        &mut self,
+        tile: TileKey,
+        nodes: &[NodeId],
+        name: &str,
+    ) -> Result<(), EditError> {
+        self.edit_node_tag(tile, nodes, name, false)
+    }
+
+    fn edit_node_tag(
+        &mut self,
+        tile: TileKey,
+        nodes: &[NodeId],
+        name: &str,
+        add: bool,
+    ) -> Result<(), EditError> {
+        self.check_nodes(tile, nodes)?;
+        let path = tag_path(name)?;
+        let doc = self.project.tile_mut(tile)?;
+        let mut made = 0;
+        for &node in nodes {
+            let has = doc.node_tags(node).contains(&path);
+            let result = if add {
+                doc.add_node_tag(node, path.clone())
+            } else {
+                doc.remove_node_tag(node, &path)
+            };
+            if let Err(e) = result {
+                for _ in 0..made {
+                    doc.undo().map_err(kernel_err)?;
+                }
+                self.redo.clear();
+                return Err(kernel_err(e));
+            }
+            if has != add {
+                made += 1;
+            }
+        }
+        if made > 0 {
+            self.record_steps(tile, made);
+        }
+        Ok(())
+    }
+
+    /// Renames a tag across every tile, one project undo step per changed tile.
+    pub fn rename_tag(&mut self, old: &str, new: &str) -> Result<(), EditError> {
+        if self.session().is_some() {
+            return Err(EditError::OutOfScope);
+        }
+        let old = tag_path(old)?;
+        let new = tag_path(new)?;
+        self.edit_project_tags(|doc| doc.rename_tag(&old, new.clone()))
+    }
+
+    /// Deletes a tag across every tile, one project undo step per changed tile.
+    pub fn delete_tag(&mut self, name: &str) -> Result<(), EditError> {
+        if self.session().is_some() {
+            return Err(EditError::OutOfScope);
+        }
+        let path = tag_path(name)?;
+        self.edit_project_tags(|doc| doc.delete_tag(&path))
+    }
+
+    fn edit_project_tags(
+        &mut self,
+        mut edit: impl FnMut(&mut Document) -> Result<kernel::DocChange, kernel::DocumentError>,
+    ) -> Result<(), EditError> {
+        let tiles: Vec<_> = self.project.tiles.keys().copied().collect();
+        let mut changed = Vec::new();
+        for tile in tiles {
+            let doc = self.project.tiles.get_mut(&tile).expect("listed tile");
+            let before = doc.save();
+            if let Err(e) = edit(doc) {
+                for tile in changed.into_iter().rev() {
+                    self.project
+                        .tiles
+                        .get_mut(&tile)
+                        .expect("changed tile")
+                        .undo()
+                        .map_err(kernel_err)?;
+                }
+                self.redo.clear();
+                return Err(kernel_err(e));
+            }
+            if doc.save() != before {
+                changed.push(tile);
+            }
+        }
+        for tile in changed {
+            self.record(tile);
+        }
+        Ok(())
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -925,6 +1096,26 @@ impl Scene {
 
     /// Records `steps` Hew steps on `key` as one project undo step.
     fn record_steps(&mut self, key: TileKey, steps: u32) {
+        let hidden: Vec<Vec<String>> = self
+            .project
+            .tiles
+            .values()
+            .flat_map(|doc| {
+                doc.tag_meta()
+                    .filter(|(_, hidden)| *hidden)
+                    .map(|(p, _)| p.to_vec())
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !hidden.is_empty() {
+            let doc = self.project.tiles.get_mut(&key).expect("edited tile");
+            for path in hidden {
+                if !doc.tag_hidden(&path) {
+                    doc.set_tag_hidden(path, true);
+                }
+            }
+        }
         self.undo.push((key, steps));
         self.redo.clear();
         self.touch(key);

@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use camera::Orbit;
 use eframe::{egui, egui_wgpu};
 use inference::{Axis, PickRay, SnapKind};
-use kernel::{Point3, Vec3};
+use kernel::{NodeId, Point3, Vec3};
 use wangungis_render::{DEPTH_FORMAT, OverlayLines, Renderer, TileMesh};
-use wangungis_scene::project::{Project, TileKey};
+use wangungis_scene::project::{Project, TileKey, node_visible};
 use wangungis_tools::tool::{Input, Preview, Tool};
 use wangungis_tools::vcb::Unit;
 use wangungis_tools::{Paint, Scene};
@@ -148,6 +148,11 @@ struct App {
     unit_file: Option<PathBuf>,
     /// What the user is typing for the tool.
     typed: String,
+    /// The project's tags, refreshed when something changed.
+    tag_rows: Vec<(String, bool)>,
+    /// New tag and per-row rename text in the Tags panel.
+    tag_name: String,
+    tag_renames: BTreeMap<String, String>,
     stats: BTreeMap<TileKey, TileStats>,
     source: Source,
     /// Differs from the file: edited, or split on open.
@@ -212,6 +217,9 @@ impl App {
             paint: Some(ready_paint(PAINTS[0])),
             unit_file: None,
             typed: String::new(),
+            tag_rows: Vec::new(),
+            tag_name: String::new(),
+            tag_renames: BTreeMap::new(),
             stats: BTreeMap::new(),
             source: Source::default(),
             unsaved: false,
@@ -254,6 +262,7 @@ impl App {
             self.upload(key);
         }
         self.scene.take_dirty();
+        self.tag_rows = self.scene.tags();
         self.orbit = Orbit::default();
     }
 
@@ -457,7 +466,11 @@ impl App {
                 self.stats.insert(
                     key,
                     TileStats {
-                        objects: doc.visible_object_ids().len(),
+                        objects: doc
+                            .visible_object_ids()
+                            .into_iter()
+                            .filter(|id| node_visible(doc, NodeId::Object(*id)))
+                            .count(),
                         triangles: mesh.triangle_count(),
                         bounds: mesh.bounds(),
                     },
@@ -471,6 +484,7 @@ impl App {
     fn sync_edits(&mut self) {
         let dirty = self.scene.take_dirty();
         if !dirty.is_empty() {
+            self.tag_rows = self.scene.tags();
             self.unsaved = true;
             self.autosave_stale = true;
             // Guides are in the overlay.
@@ -582,6 +596,116 @@ impl App {
         }
         self.tool.reset();
         self.sync_edits();
+    }
+
+    fn tag_picked(&mut self, name: &str) {
+        let name = name.to_owned();
+        self.on_picked(move |s, t, n| s.tag_nodes(t, n, &name));
+    }
+
+    fn untag_picked(&mut self, name: &str) {
+        let name = name.to_owned();
+        self.on_picked(move |s, t, n| s.untag_nodes(t, n, &name));
+    }
+
+    fn set_tag_visible(&mut self, name: &str, visible: bool) {
+        match self.scene.set_tag_hidden(name, !visible) {
+            Ok(()) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn rename_tag(&mut self, old: &str, new: &str) {
+        match self.scene.rename_tag(old, new) {
+            Ok(()) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn delete_tag(&mut self, name: &str) {
+        match self.scene.delete_tag(name) {
+            Ok(()) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn tags_panel(&mut self, ui: &mut egui::Ui) {
+        enum Action {
+            Visible(String, bool),
+            Give(String),
+            Take(String),
+            Rename(String, String),
+            Delete(String),
+        }
+
+        let mut action = None;
+        egui::CollapsingHeader::new("Tags")
+            .default_open(true)
+            .show(ui, |ui| {
+                let picked = self.tool.picked_nodes().is_some();
+                if !picked {
+                    ui.label("Pilih objek dulu dengan Pilih (Spasi).");
+                }
+                for (name, hidden) in self.tag_rows.clone() {
+                    ui.horizontal_wrapped(|ui| {
+                        let mut visible = !hidden;
+                        if ui.checkbox(&mut visible, "").changed() {
+                            action = Some(Action::Visible(name.clone(), visible));
+                        }
+                        ui.label(&name);
+                        if ui.add_enabled(picked, egui::Button::new("Beri")).clicked() {
+                            action = Some(Action::Give(name.clone()));
+                        }
+                        if ui.add_enabled(picked, egui::Button::new("Lepas")).clicked() {
+                            action = Some(Action::Take(name.clone()));
+                        }
+                        if ui.button("Hapus").clicked() {
+                            action = Some(Action::Delete(name.clone()));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let rename = self.tag_renames.entry(name.clone()).or_insert(name.clone());
+                        ui.add(egui::TextEdit::singleline(rename).desired_width(120.0));
+                        if ui.button("Ubah nama").clicked() {
+                            action = Some(Action::Rename(name.clone(), rename.clone()));
+                        }
+                    });
+                    ui.separator();
+                }
+                ui.label("Tag baru:");
+                ui.add(egui::TextEdit::singleline(&mut self.tag_name));
+                if ui
+                    .add_enabled(picked, egui::Button::new("Buat dan beri"))
+                    .clicked()
+                {
+                    action = Some(Action::Give(std::mem::take(&mut self.tag_name)));
+                }
+            });
+
+        match action {
+            Some(Action::Visible(name, visible)) => self.set_tag_visible(&name, visible),
+            Some(Action::Give(name)) => self.tag_picked(&name),
+            Some(Action::Take(name)) => self.untag_picked(&name),
+            Some(Action::Rename(old, new)) => {
+                self.rename_tag(&old, &new);
+                if self.error.is_none() {
+                    self.tag_renames.remove(&old);
+                }
+            }
+            Some(Action::Delete(name)) => {
+                self.delete_tag(&name);
+                if self.error.is_none() {
+                    self.tag_renames.remove(&name);
+                }
+            }
+            None => {}
+        }
     }
 
     /// Opens the one group or component that is picked.
@@ -1318,6 +1442,12 @@ impl App {
                 });
             });
         });
+        egui::Panel::right("tags")
+            .default_size(250.0)
+            .resizable(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.tags_panel(ui));
+            });
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
