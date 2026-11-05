@@ -1,8 +1,9 @@
 //! The value box: what a user types while a tool waits for a number.
 //!
 //! `5`, `2,5` or `2.5` (the comma is a decimal mark, as written in Indonesia),
-//! `5;4` or `5x4` for two dimensions, an optional unit `mm`, `cm` or `m`
-//! (default m) per value, and a sign for the opposite direction.
+//! `5;4` or `5x4` for two dimensions, an optional unit `mm`, `cm`, `m` or `ft`
+//! per value (without one, the display unit), and a sign for the opposite
+//! direction.
 //! After a copy: `x5`, `5x`, `*5` or `5*` for five copies, `/5` or `5/` for five
 //! copies spaced evenly up to the copy just made. `8s` for eight sides.
 //! `30d` or `30°` for an angle in degrees.
@@ -22,6 +23,53 @@ pub enum Vcb {
     Sides(u32),
     /// An angle, in degrees.
     Angle(f64),
+}
+
+/// The unit lengths are shown in, and bare numbers are read in. The model itself
+/// is always in meters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Unit {
+    #[default]
+    M,
+    Cm,
+    Mm,
+    Ft,
+}
+
+impl Unit {
+    pub const ALL: [Unit; 4] = [Unit::M, Unit::Cm, Unit::Mm, Unit::Ft];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Unit::M => "m",
+            Unit::Cm => "cm",
+            Unit::Mm => "mm",
+            Unit::Ft => "ft",
+        }
+    }
+
+    /// Meters in one of this unit.
+    pub fn meters(self) -> f64 {
+        match self {
+            Unit::M => 1.0,
+            Unit::Cm => 1e-2,
+            Unit::Mm => 1e-3,
+            Unit::Ft => 0.3048,
+        }
+    }
+
+    /// `meters` for reading. Precision comes with the unit: all four resolve
+    /// a millimeter or close to it (ft: 3 mm).
+    // ponytail: fixed decimals; a precision setting when someone needs one.
+    pub fn format(self, meters: f64) -> String {
+        let decimals = match self {
+            Unit::M => 3,
+            Unit::Cm => 1,
+            Unit::Mm => 0,
+            Unit::Ft => 2,
+        };
+        format!("{:.*} {}", decimals, meters / self.meters(), self.label())
+    }
 }
 
 /// More copies than this in one go is a typing error, not a model.
@@ -45,18 +93,20 @@ fn array(text: &str) -> Option<Vcb> {
     Some(Vcb::Divide(count(side(&['/'])?)?))
 }
 
-fn length(text: &str) -> Option<f64> {
+fn length(text: &str, bare: Unit) -> Option<f64> {
     let t = text.trim().to_ascii_lowercase();
-    let (number_text, scale) = if let Some(n) = t.strip_suffix("mm") {
-        (n, 1e-3)
+    let (number_text, unit) = if let Some(n) = t.strip_suffix("mm") {
+        (n, Unit::Mm)
     } else if let Some(n) = t.strip_suffix("cm") {
-        (n, 1e-2)
+        (n, Unit::Cm)
+    } else if let Some(n) = t.strip_suffix("ft") {
+        (n, Unit::Ft)
     } else if let Some(n) = t.strip_suffix('m') {
-        (n, 1.0)
+        (n, Unit::M)
     } else {
-        (t.as_str(), 1.0)
+        (t.as_str(), bare)
     };
-    Some(number(number_text)? * scale)
+    Some(number(number_text)? * unit.meters())
 }
 
 fn number(text: &str) -> Option<f64> {
@@ -72,8 +122,15 @@ fn number(text: &str) -> Option<f64> {
     v.is_finite().then_some(v)
 }
 
-/// `None` when the text is not one or two valid lengths.
+/// [`parse_in`] for values that are no lengths, such as a scale factor or
+/// degrees: a bare number stays that number.
 pub fn parse(text: &str) -> Option<Vcb> {
+    parse_in(text, Unit::M)
+}
+
+/// `None` when the text is not one or two valid lengths. A length without a
+/// unit is in `bare`.
+pub fn parse_in(text: &str, bare: Unit) -> Option<Vcb> {
     let lower = text.to_ascii_lowercase();
     if let Some(v) = array(&lower) {
         return Some(v);
@@ -86,8 +143,8 @@ pub fn parse(text: &str) -> Option<Vcb> {
     }
     let parts: Vec<&str> = lower.split([';', 'x']).collect();
     match parts[..] {
-        [a] => Some(Vcb::One(length(a)?)),
-        [a, b] => Some(Vcb::Two(length(a)?, length(b)?)),
+        [a] => Some(Vcb::One(length(a, bare)?)),
+        [a, b] => Some(Vcb::Two(length(a, bare)?, length(b, bare)?)),
         _ => None,
     }
 }
@@ -169,10 +226,42 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_number_is_in_the_display_unit() {
+        let near = |v: Option<Vcb>, want: f64| match v {
+            Some(Vcb::One(got)) => assert!((got - want).abs() < 1e-12, "{got} != {want}"),
+            other => panic!("{other:?}"),
+        };
+        near(parse_in("5000", Unit::Mm), 5.0);
+        near(parse_in("250", Unit::Cm), 2.5);
+        near(parse_in("10", Unit::Ft), 3.048);
+        near(parse_in("5", Unit::M), 5.0);
+        // A written unit overrides it.
+        near(parse_in("2m", Unit::Mm), 2.0);
+        near(parse_in("10ft", Unit::M), 3.048);
+        near(parse_in("2,5 FT", Unit::Mm), 0.762);
+        assert_eq!(parse_in("5000;2m", Unit::Mm), Some(Vcb::Two(5.0, 2.0)));
+        // What is no length does not scale.
+        assert_eq!(parse_in("30d", Unit::Mm), Some(Vcb::Angle(30.0)));
+        assert_eq!(parse_in("8s", Unit::Mm), Some(Vcb::Sides(8)));
+        assert_eq!(
+            parse_in("x5", Unit::Mm),
+            Some(Vcb::Copies(NonZeroU32::new(5).unwrap()))
+        );
+    }
+
+    #[test]
+    fn lengths_are_shown_in_the_unit() {
+        assert_eq!(Unit::M.format(2.5), "2.500 m");
+        assert_eq!(Unit::Cm.format(2.5), "250.0 cm");
+        assert_eq!(Unit::Mm.format(2.5), "2500 mm");
+        assert_eq!(Unit::Ft.format(3.048), "10.00 ft");
+    }
+
+    #[test]
     fn invalid_input() {
         for text in [
             "", " ", "abc", "5;", ";4", "1;2;3", "1x2x3", "1,2,3", "1.2.3", "inf", "nan", "1e3",
-            "m", "-", "5 km", "5m m", "--5",
+            "m", "-", "5 km", "5m m", "--5", "ft", "5 ftt",
         ] {
             assert_eq!(parse(text), None, "{text:?}");
         }
