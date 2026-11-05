@@ -439,3 +439,141 @@ fn navigation_never_reaches_the_tool() {
     d.key(egui::Key::Escape);
     assert!(d.app.typed.is_empty());
 }
+
+#[test]
+fn a_parked_pointer_follows_the_tool() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+
+    d.letter(K::L, "l");
+    d.click([0.0, 0.0, 0.0]);
+    d.hover([3.0, 4.0, 0.0]);
+
+    // Locking with the mouse still: the preview and a typed length both obey.
+    d.key(K::ArrowRight);
+    let (_, end) = d.app.tool.preview().lines[0];
+    assert!(end.y.abs() < 1e-3, "the preview left the X axis: {end:?}");
+    d.value("5");
+
+    // The chain goes on with the mouse still.
+    let (from, _) = d.app.tool.preview().lines[0];
+    close([from.x, from.y, from.z], [5.0, 0.0, 0.0]);
+    d.key(K::ArrowLeft);
+    d.value("4");
+    let (from, _) = d.app.tool.preview().lines[0];
+    close([from.x, from.y, from.z], [5.0, 4.0, 0.0]);
+}
+
+#[test]
+fn a_click_drops_the_value_being_typed() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    d.letter(egui::Key::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    d.frame(vec![egui::Event::Text("5".into())]);
+    d.click([4.0, 4.0, 0.0]);
+    assert!(!d.app.tool.busy(), "the click finished the rectangle");
+    assert!(d.app.typed.is_empty());
+    d.letter(egui::Key::L, "l");
+    assert!(d.app.tool.same_kind(&Tool::line(0.0)));
+}
+
+#[test]
+fn holding_still_while_navigating_goes_idle() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    let m = egui::Modifiers::ALT;
+    let from = d.pixel([0.0, 0.0, 0.0]);
+    d.hold(m);
+    d.frame(vec![egui::Event::PointerMoved(from)]);
+    d.frame(vec![egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: m,
+    }]);
+    d.frame(vec![egui::Event::PointerMoved(
+        from + egui::vec2(40.0, 0.0),
+    )]);
+    // Let what the move itself asked for finish, then nothing happens.
+    for _ in 0..5 {
+        d.frame(vec![]);
+    }
+    assert!(
+        !d.ctx.has_requested_repaint(),
+        "no input, yet the frame asked for another"
+    );
+}
+
+#[test]
+fn the_keyboard_and_the_path_box() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+
+    // Tab from the view does not walk into the box and take the tool keys.
+    d.key(K::Tab);
+    d.frame(vec![]);
+    d.letter(K::L, "l");
+    assert!(d.app.tool.same_kind(&Tool::line(0.0)));
+    assert!(d.app.path.is_empty());
+
+    // Esc that leaves the box does not also cancel the gesture.
+    d.letter(K::R, "r");
+    d.click([1.0, 1.0, 0.0]);
+    assert!(d.app.tool.busy());
+    let box_at = d.app.path_rect.center();
+    d.click_at(box_at);
+    d.frame(vec![egui::Event::Text("abc".into())]);
+    assert_eq!(d.app.path, "abc", "the box has the keyboard");
+    d.key(K::Escape);
+    assert!(d.app.tool.busy(), "the rectangle survives");
+    d.key(K::Escape);
+    assert!(!d.app.tool.busy(), "the next Esc is for the tool");
+
+    // Cmd+S works from the box.
+    let dir = std::env::temp_dir().join(format!("wangungis-box-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("dari-kotak.hew");
+    d.click_at(box_at);
+    d.frame(vec![egui::Event::Key {
+        key: K::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: COMMAND,
+    }]);
+    d.frame(vec![egui::Event::Text(file.to_string_lossy().into())]);
+    assert_eq!(d.app.path, file.to_string_lossy());
+    d.key_with(K::S, COMMAND);
+    assert_eq!(d.app.error, None);
+    assert!(file.exists(), "saved while the box had focus");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_split_label_counts_what_the_status_bar_counts() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    // An edit undone in a new tile leaves an empty document behind.
+    d.app.new_project();
+    let far = TileKey { i: 3, j: 0 };
+    let ground =
+        kernel::Plane::from_point_normal(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
+            .unwrap();
+    let c = far.center();
+    let (a, b) = (
+        Point3::new(c[0], c[1], 0.0),
+        Point3::new(c[0] + 5.0, c[1], 0.0),
+    );
+    d.app.scene.draw(Some(far), ground, &[(a, b)]).unwrap();
+    d.frame(vec![]);
+    d.app.undo();
+    d.frame(vec![]);
+    assert_eq!(d.app.stats.len(), 2, "the renderer still knows the tile");
+    assert_eq!(d.app.tile_count(), 1);
+}

@@ -25,7 +25,7 @@ Perilaku:
 - **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
-- **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
+- **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci. Mengubah kunci melupakan posisi kursor, jadi panjang yang diketik menunggu `Hover` berikutnya dan tidak memakai arah dari sebelum kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 
 VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan.

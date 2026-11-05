@@ -278,6 +278,26 @@ fn axis_lock_keeps_the_line_on_the_axis() {
     assert!(l.busy());
 }
 
+/// A length typed after a lock never follows the cursor from before the lock.
+#[test]
+fn axis_lock_forgets_the_cursor_from_before() {
+    let mut s = scene();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [10.0, 10.0, 0.0]);
+    hover(&mut l, &mut s, [20.0, 17.0, 0.0]);
+    l.handle(&mut s, Input::LockAxis(Axis::X)).unwrap();
+    assert!(typed(&mut l, &mut s, "5").is_err(), "no direction yet");
+    assert!(!s.can_undo());
+    hover(&mut l, &mut s, [20.0, 17.0, 0.0]);
+    typed(&mut l, &mut s, "5").unwrap();
+    let doc = s.project().tiles.values().next().unwrap();
+    let sk = doc.sketch(doc.sketch_ids()[0]).unwrap();
+    let e = sk.edges().values().next().unwrap();
+    let (a, b) = (sk.vertices()[e.from].position, sk.vertices()[e.to].position);
+    assert!((a.y - 10.0).abs() <= MM && (b.y - 10.0).abs() <= MM);
+    assert!(((b - a).length() - 5.0).abs() <= MM);
+}
+
 /// A later click snaps to an existing corner: the second rectangle shares it.
 #[test]
 fn clicks_snap_to_existing_corners() {
