@@ -1615,3 +1615,34 @@ proptest! {
         prop_assert!((span.length() - reach * off.to_radians().cos()).abs() <= MM);
     }
 }
+
+/// A turned component instance gives its edge's direction as shown, not as defined.
+#[test]
+fn a_line_runs_parallel_to_an_edge_of_a_turned_instance() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let (key, doc) = s.project().tiles.iter().next().unwrap();
+    let (key, nodes) = (*key, doc.top_level_nodes());
+    s.make_component(key, &nodes).unwrap();
+    let mut q = Tool::rotate(APERTURE);
+    click(&mut q, &mut s, [10.0, 10.0, 0.0]);
+    click(&mut q, &mut s, [15.0, 10.0, 0.0]);
+    typed(&mut q, &mut s, "30d").unwrap();
+
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let mut l = Tool::line(APERTURE);
+    click(&mut l, &mut s, [40.0, 30.0, 0.0]);
+    hover(&mut l, &mut s, [10.0 + 2.5 * cos, 10.0 + 2.5 * sin, 0.0]);
+    assert_eq!(snap_kind(&l), Some(SnapKind::Midpoint), "over the edge");
+    hover(
+        &mut l,
+        &mut s,
+        [40.0 + 10.0 * cos, 30.0 + 10.0 * sin + 0.1, 0.0],
+    );
+    assert_eq!(snap_kind(&l), Some(SnapKind::Parallel));
+    let dir = l.preview().snap.unwrap().snap.direction.unwrap();
+    assert!(
+        dir.cross(Vec3::new(cos, sin, 0.0)).length() <= 1e-9,
+        "{dir:?}"
+    );
+}

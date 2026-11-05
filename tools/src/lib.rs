@@ -1319,21 +1319,34 @@ impl Scene {
     /// drawn. `None` on a corner, a face or a guide.
     pub fn edge_direction(&self, hit: &Hit) -> Option<Vec3> {
         let doc = self.project.tiles.get(&hit.tile)?;
-        let (a, b) = if let Some((sketch, edge)) = hit.snap.sketch_source {
+        let span = if let Some((sketch, edge)) = hit.snap.sketch_source {
             let sk = doc.sketch(sketch)?;
             let e = sk.edges().get(edge)?;
-            (sk.vertices()[e.from].position, sk.vertices()[e.to].position)
+            sk.vertices()[e.to].position - sk.vertices()[e.from].position
         } else {
             let source = hit.snap.source?;
             let inference::ElementRef::Edge(edge) = source.element else {
                 return None;
             };
-            if source.instance.is_some() {
-                return None;
+            let (a, b) = doc.object(source.object)?.edge_endpoints(edge)?;
+            match source.instance {
+                None => b - a,
+                Some(inst) => {
+                    let pose = doc.instance_pose(inst)?;
+                    let def = doc.instance_def(inst)?;
+                    let placements = doc.expanded_def_placements(def);
+                    let mut placed = placements.iter().filter(|(m, _)| *m == source.object);
+                    let (_, local) = placed.next()?;
+                    // A leaf placed twice in its definition: the snap does not say
+                    // which placement, so the direction is not known.
+                    if placed.next().is_some() {
+                        return None;
+                    }
+                    local.then(&pose).apply_vector(b - a)
+                }
             }
-            doc.object(source.object)?.edge_endpoints(edge)?
         };
-        (b - a).normalized().ok()
+        span.normalized().ok()
     }
 
     /// Sweeps a region along the drawing connected to `path_edge`, into a solid.
