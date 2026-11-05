@@ -950,7 +950,24 @@ fn a_guide_is_seen_and_announced() {
         "{:?}",
         d.app.notice
     );
-    assert!(guide_pixels(&d) > 200, "{}", guide_pixels(&d));
+    let top_colors = || {
+        let (_, _, px) = d.pixels();
+        let mut seen = std::collections::HashMap::new();
+        for p in px.chunks(4) {
+            *seen.entry([p[0], p[1], p[2]]).or_insert(0usize) += 1;
+        }
+        let mut seen: Vec<_> = seen.into_iter().collect();
+        seen.sort_by_key(|c| std::cmp::Reverse(c.1));
+        seen.truncate(12);
+        seen
+    };
+    assert!(
+        guide_pixels(&d) > 200,
+        "{} px; lines {:?}; colors {:?}",
+        guide_pixels(&d),
+        d.app.scene.guide_lines(),
+        top_colors()
+    );
 }
 
 /// Uji asap step 19: a line straight out of a wall, by the arrow keys and by an

@@ -393,6 +393,31 @@ fn overlay_draws_on_top_in_its_color() {
     }
 }
 
+/// A long line, one end behind the eye: what reaches the screen is still drawn.
+#[test]
+fn overlay_line_past_the_eye_is_clipped_not_lost() {
+    let _serial = gpu_lock();
+    let Some(dq) = gpu() else { return };
+    let at = [0.0; 3];
+    let cam = camera(at);
+    let mut r = Renderer::new(&dq.0, FORMAT);
+    let dir = [8.5, 11.122, -5.5];
+    let along = |t: f64| std::array::from_fn(|k| cam.target[k] + [2.0, -1.5, 0.0][k] + dir[k] * t);
+    r.set_overlay(
+        &dq.0,
+        &[OverlayLines {
+            color: [1.0, 0.0, 0.0],
+            lines: vec![(along(-5.0), along(5.0))],
+        }],
+    );
+    let (px, _) = shoot(&dq, &r, &cam);
+    let reds = px
+        .chunks(4)
+        .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+        .count();
+    assert!(reds > 20, "line lost: {reds} red px");
+}
+
 fn user_hidden_box() -> Document {
     let mut doc = box_doc(0.0, 0.0);
     let node = doc.top_level_nodes()[0];
