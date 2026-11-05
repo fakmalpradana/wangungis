@@ -9,23 +9,36 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `pick_face(&PickRay) -> Option<FaceHit>`: face solid terdekat.
 - `draw(tile, plane, segments) -> Drawn`: menggambar segmen sebagai **satu** langkah undo lewat mesin drafting Hew (`Document::draft`), di tile `tile` atau tile milik titik pertama. Semua gambar pada bidang itu menyatu: bentuk di atas face solid membelah face (auto-split, #14), garis yang bertemu gambar lain tersambung dengannya. Tile dibuat bila belum ada. `Drawn { tile, sketch, closed }`: `closed` berarti ada region atau face baru.
 - `extrude(tile, sketch, region, distance)`, `push_pull(tile, source, distance)`.
+- `movable_at(&Hit) -> Option<Movable>`, `movable_lines(&Movable)`: yang diangkat Move, yaitu seluruh node puncak (objek, grup, instance) atau gambar tersambung pada sketch bebas.
+- `movable_center(&Movable)`: pusat batas benda, titik acuan Skala.
+- `transform(&Movable, &Transform)`, `copy(&Movable, &step, count)`, `respace_copy(&Movable, &step, count)`: transform dalam koordinat lokal proyek, satu langkah undo. Hasil tetap di tile asal; melewati 1,5 km dari pusat tile atau batas proyek ditolak sebelum dokumen berubah. Pengecualian: gambar yang disalin keluar bidangnya dicatat satu langkah per salinan.
+- `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
+- `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
+- `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
-Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, push_pull}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
-- Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`.
+Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
+- Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
 - `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).
 - `Scene::{face_shape, region_shape, region_count, outline}` memberi bidang dan batas untuk tool.
 
 Perilaku:
-- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang.
+- **Bidang gambar** ditentukan klik pertama: face atau region di bawah kursor (juga saat snap jatuh di tepi atau sudutnya), atau bidang horizontal melalui titik snap lain, atau tanah z = 0. Titik snap diproyeksikan persis ke bidang. Klik pertama di tepi atau sudut belum menentukan face mana yang dimaksud, jadi sebelum ada segmen, bidang mengikuti face di bawah kursor yang memuat titik itu.
 - **Line:** klik berantai pada bidang yang sama, dengan inference sumbu dari titik sebelumnya. Menutup loop mengakhiri rantai. Esc berhenti, segmen yang sudah jadi tetap ada. Satu segmen = satu langkah undo. Garis baru menyambung gambar lama di bidang yang sama. Gambar di dua tile tidak menyatu (ponytail: tile ditentukan klik pertama).
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
-- **Kunci sumbu:** hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
+- **Move:** klik benda, lalu klik tujuan atau ketik jarak searah kursor. `ToggleCopy` membuat langkah berikutnya menyalin, lalu kembali ke memindah (`copying()`). Tepat setelah menyalin, `x5` membuat lima salinan sejarak salinan pertama, dan `/5` membuat lima salinan yang mengisi jarak itu; angka baru menggantikan array sebelumnya, dan semuanya tetap satu langkah undo. Benda yang dipindah tidak bisa snap ke dirinya sendiri. Tanpa snap, titik bergerak di bidang horizontal melalui titik dasar, atau di sumbu terkunci.
+- **Circle, Polygon:** klik pusat, lalu klik atau ketik jari-jari. `8s` mengubah jumlah sisi kapan saja; lingkaran minimal 24, bawaan 48; poligon minimal 3, bawaan 6.
+- **Arc:** klik dua ujung, lalu klik atau ketik tinggi lengkung, ke sisi kursor.
+- **Offset:** klik region atau face, lalu klik atau ketik jarak, ke arah kursor; angka negatif membalik arah.
+- **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat. Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
+- **Scale:** klik benda, lalu gerakkan kursor menjauh atau mendekati pusatnya dan klik, atau ketik faktor. Selalu seragam, terhadap pusat benda. Faktor harus positif.
+- **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.
+- **Kunci sumbu:** untuk Line, hanya sumbu yang sebidang dengan gambar. Memanggil sumbu yang sama lagi melepas kunci.
 - Galat tidak mengubah status tool, jadi pengguna bisa mencoba lagi.
 
 VCB (`vcb::parse`): `5`, `2,5` atau `2.5` (koma adalah desimal), `5;4` atau `5x4`, satuan `mm`/`cm`/`m` (default m), tanda negatif untuk arah berlawanan.

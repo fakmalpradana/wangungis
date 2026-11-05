@@ -3,11 +3,12 @@
 //! boundaries, and refusals that must leave the project untouched.
 
 use inference::{ApertureMode, ElementRef, PickRay, SnapKind, SnapQuery, SnapWeights};
-use kernel::{Plane, Point3, SketchId, Vec3};
+use kernel::{Plane, Point3, SketchId, Transform, Vec3};
 use proptest::prelude::*;
+use std::num::NonZeroU32;
 use wangungis_scene::project::{Project, TileKey};
 use wangungis_scene::{KERNEL_FRAME_BOUND_M, ProjectOrigin};
-use wangungis_tools::{EditError, Scene};
+use wangungis_tools::{EditError, Erasable, Movable, Scene};
 
 const MM: f64 = 1e-3;
 const UTM49S: ProjectOrigin = ProjectOrigin {
@@ -874,4 +875,438 @@ proptest! {
         kernel_valid(&s, key);
         prop_assert_eq!(the_object(&s, key).1.faces().len(), 6);
     }
+}
+
+fn the_box(s: &mut Scene, x: f64, y: f64, z: f64) -> Movable {
+    let hit = s
+        .snap(&query([x, y, z + 50.0], [x, y, z]))
+        .expect("something below");
+    s.movable_at(&hit).expect("movable")
+}
+
+const NOUGHT: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+
+/// Moves bake into the geometry and undo as one step; a door moves along.
+#[test]
+fn move_translates_a_whole_solid() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    s.transform(&m, &Transform::translation(Vec3::new(10.0, -2.0, 1.0)))
+        .unwrap();
+    let (n, b) = solids(s.project());
+    let (lo, hi) = b.unwrap();
+    assert_eq!(n, 1);
+    for (got, want) in [lo, hi]
+        .iter()
+        .flatten()
+        .zip([10.0, -2.0, 1.0, 15.0, 2.0, 4.0])
+    {
+        assert!((got - want).abs() < MM, "{lo:?} {hi:?}");
+    }
+    s.undo().unwrap();
+    let (lo, _) = solids(s.project()).1.unwrap();
+    assert!(lo[0].abs() < MM);
+}
+
+/// The v0.1 exit task, on the layer below the UI.
+#[test]
+fn array_of_ten_is_one_step_and_saves_identically() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    let step = Transform::translation(Vec3::new(7.0, 0.0, 0.0));
+
+    // The first copy, then the count: still one undo step.
+    s.copy(&m, &step, NonZeroU32::MIN).unwrap();
+    assert_eq!(solids(s.project()).0, 2);
+    s.respace_copy(&m, &step, NonZeroU32::new(10).unwrap())
+        .unwrap();
+    let (n, b) = solids(s.project());
+    assert_eq!(n, 11, "the source and ten copies");
+    let (_, hi) = b.unwrap();
+    assert!((hi[0] - 75.0).abs() < MM, "{hi:?}");
+
+    let bytes = s.project().save();
+    let reopened = Project::open(&bytes).unwrap();
+    assert_eq!(solids(&reopened).0, 11);
+    assert_eq!(reopened.save(), bytes, "save, load, save is byte-identical");
+
+    s.undo().unwrap();
+    assert_eq!(solids(s.project()).0, 1, "one undo removes the whole array");
+    s.redo().unwrap();
+    assert_eq!(solids(s.project()).0, 11);
+}
+
+#[test]
+fn moves_and_arrays_past_the_tile_are_refused_whole() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    let before = s.project().save();
+    let far = Transform::translation(Vec3::new(KERNEL_FRAME_BOUND_M, 0.0, 0.0));
+    assert!(matches!(
+        s.transform(&m, &far),
+        Err(EditError::OutOfTile { .. })
+    ));
+    assert!(matches!(
+        s.copy(&m, &far, NonZeroU32::MIN),
+        Err(EditError::OutOfTile { .. })
+    ));
+    // The last copy would be the first past the bound.
+    let step = Transform::translation(Vec3::new(200.0, 0.0, 0.0));
+    assert!(matches!(
+        s.copy(&m, &step, NonZeroU32::new(9).unwrap()),
+        Err(EditError::OutOfTile { .. })
+    ));
+    assert_eq!(s.project().save(), before);
+
+    // A refused respacing keeps the first copy.
+    s.copy(&m, &step, NonZeroU32::MIN).unwrap();
+    assert!(
+        s.respace_copy(&m, &step, NonZeroU32::new(9).unwrap())
+            .is_err()
+    );
+    assert_eq!(solids(s.project()).0, 2);
+    assert!(s.can_undo() && !s.can_redo());
+}
+
+/// Moving past a tile's edge keeps the solid in its tile, and it still saves
+/// and reopens in place.
+#[test]
+fn moving_over_a_tile_border_keeps_the_geometry_right() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    s.transform(&m, &Transform::translation(Vec3::new(600.0, 0.0, 0.0)))
+        .unwrap();
+    let (_, hi) = solids(s.project()).1.unwrap();
+    assert!((hi[0] - 605.0).abs() < MM);
+    let reopened = Project::open(&s.project().save()).unwrap();
+    let (_, hi2) = solids(&reopened).1.unwrap();
+    assert!((hi2[0] - 605.0).abs() < MM);
+}
+
+/// Drawing moves as a connected piece; copies on its plane join it as one step.
+#[test]
+fn drawing_moves_and_copies_as_an_island() {
+    let mut s = scene();
+    let (key, sk) = draw_rect(&mut s, 0.0, 0.0, 2.0, 2.0);
+    draw_rect(&mut s, 50.0, 0.0, 2.0, 2.0);
+    let hit = s
+        .snap(&query([1.0, 1.0, 50.0], [1.0, 1.0, 0.0]))
+        .expect("region");
+    let m = s.movable_at(&hit).expect("island");
+    assert!(matches!(m, Movable::Island { .. }));
+    assert_eq!(s.movable_lines(&m).len(), 4);
+
+    let undo_to = |s: &mut Scene| s.undo().unwrap();
+    s.transform(&m, &Transform::translation(Vec3::new(10.0, 0.0, 0.0)))
+        .unwrap();
+    let doc = &s.project().tiles[&key];
+    let at = |doc: &kernel::Document, x: f64| {
+        doc.sketch_ids()
+            .iter()
+            .filter_map(|i| doc.sketch(*i))
+            .flat_map(|k| {
+                k.vertices()
+                    .values()
+                    .map(|v| v.position.x)
+                    .collect::<Vec<_>>()
+            })
+            .any(|v| (v - x).abs() < MM)
+    };
+    assert!(at(doc, 12.0) && at(doc, 50.0));
+    undo_to(&mut s);
+
+    let edges_before = sketch_edges(s.project());
+    s.copy(
+        &m,
+        &Transform::translation(Vec3::new(5.0, 0.0, 0.0)),
+        NonZeroU32::new(3).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sketch_edges(s.project()), edges_before + 12);
+    undo_to(&mut s);
+    assert_eq!(
+        sketch_edges(s.project()),
+        edges_before,
+        "the array is one step"
+    );
+    let _ = sk;
+
+    // Up off its plane: a separate drawing, and the source stays.
+    s.copy(
+        &m,
+        &Transform::translation(Vec3::new(0.0, 0.0, 3.0)),
+        NonZeroU32::MIN,
+    )
+    .unwrap();
+    assert_eq!(sketch_edges(s.project()), edges_before + 4);
+    undo_to(&mut s);
+    s.transform(&m, &Transform::translation(Vec3::new(0.0, 0.0, 3.0)))
+        .unwrap();
+    assert_eq!(sketch_edges(s.project()), edges_before);
+    undo_to(&mut s);
+    assert_eq!(sketch_edges(s.project()), edges_before);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    /// Random displacements and counts: every solid stays valid and in place,
+    /// wherever the source sits, and undo restores the file byte for byte.
+    #[test]
+    fn arrays_keep_every_solid_valid(
+        x in -400.0f64..400.0, y in -400.0f64..400.0,
+        dx in -20.0f64..20.0, dy in 6.0f64..20.0, dz in -3.0f64..3.0, n in 1u32..12,
+    ) {
+        let mut s = scene();
+        let key = add_box(&mut s, x, y, 5.0, 4.0, 3.0);
+        let before = s.project().save();
+        let m = the_box(&mut s, x + 2.0, y + 2.0, 3.0);
+        let step = Transform::translation(Vec3::new(dx, dy, dz));
+        s.copy(&m, &step, NonZeroU32::new(n).unwrap()).unwrap();
+        kernel_valid(&s, key);
+        let (count, b) = solids(s.project());
+        prop_assert_eq!(count, n as usize + 1);
+        let (_, hi) = b.unwrap();
+        let top = 3.0 + (dz * f64::from(n)).max(0.0);
+        prop_assert!((hi[2] - top).abs() < MM, "{:?} vs {}", hi, top);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &before);
+        s.transform(&m, &step).unwrap();
+        kernel_valid(&s, key);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &before);
+    }
+}
+
+#[test]
+fn a_stale_pick_is_refused() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let m = the_box(&mut s, 2.0, 2.0, 3.0);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert!(
+        s.transform(&m, &Transform::translation(NOUGHT)).is_err(),
+        "the solid is gone"
+    );
+}
+
+fn erasable(s: &mut Scene, from: [f64; 3], at: [f64; 3]) -> Erasable {
+    let hit = s.snap(&query(from, at)).expect("a snap");
+    s.erasable_at(&hit)
+        .unwrap_or_else(|| panic!("nothing to erase at {hit:?}"))
+}
+
+/// Erasing the line that divides a face merges it back; a real edge takes the
+/// whole solid. Each is one undo step.
+#[test]
+fn eraser_removes_lines_and_whole_solids() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    // A line right across the top divides it.
+    let (a, b) = (Point3::new(2.0, 0.0, 3.0), Point3::new(2.0, 4.0, 3.0));
+    s.draw(Some(key), top_plane(3.0), &[(a, b)]).unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 7);
+
+    let e = erasable(&mut s, [2.0, 2.0, 40.0], [2.0, 2.0, 3.0]);
+    assert!(matches!(e, Erasable::Line { .. }), "{e:?}");
+    s.erase(&e).unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 6, "the faces merged");
+    kernel_valid(&s, key);
+    s.undo().unwrap();
+    assert_eq!(the_object(&s, key).1.faces().len(), 7);
+    s.redo().unwrap();
+
+    // A real edge of the box: the box goes, and comes back on undo.
+    let e = erasable(&mut s, [2.0, -30.0, 30.0], [2.5, 0.0, 3.0]);
+    assert!(matches!(e, Erasable::Node { .. }), "{e:?}");
+    assert_eq!(s.erasable_lines(&e).len(), 12);
+    s.erase(&e).unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+    s.undo().unwrap();
+    assert_eq!(solids(s.project()).0, 1);
+}
+
+/// A drawn line goes alone, opening the loop it closed.
+#[test]
+fn eraser_opens_a_drawn_loop() {
+    let mut s = scene();
+    let (key, sk) = draw_rect(&mut s, 0.0, 0.0, 5.0, 4.0);
+    assert_eq!(regions(&s, key, sk).len(), 1);
+    let e = erasable(&mut s, [2.5, -20.0, 30.0], [2.5, 0.0, 0.0]);
+    s.erase(&e).unwrap();
+    assert_eq!(sketch_edges(s.project()), 3);
+    let live = s.project().tiles[&key].sketch_ids()[0];
+    assert_eq!(regions(&s, key, live).len(), 0);
+    s.undo().unwrap();
+    assert_eq!(sketch_edges(s.project()), 4);
+}
+
+/// A face holds no edge to erase; a click on it does nothing.
+#[test]
+fn eraser_ignores_faces() {
+    let mut s = scene();
+    add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    let hit = s.snap(&query([2.5, 2.0, 40.0], [2.5, 2.0, 3.0])).unwrap();
+    assert_eq!(hit.snap.kind, SnapKind::OnFace);
+    assert_eq!(s.erasable_at(&hit), None);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    /// A shape drawn on a face and erased line by line leaves a valid solid, and
+    /// undoing it all restores the file.
+    #[test]
+    fn erasing_drawing_keeps_the_solid_valid(
+        x in 0.5f64..2.5, y in 0.5f64..1.5, w in 1.5f64..2.5, d in 1.0f64..2.0,
+    ) {
+        let mut s = scene();
+        let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+        s.draw(Some(key), top_plane(3.0), &ring_at(3.0, x, y, w, d)).unwrap();
+        let drawn = s.project().save();
+        let e = erasable(&mut s, [x + w / 2.0, y - 20.0, 30.0], [x + w / 2.0, y, 3.0]);
+        s.erase(&e).unwrap();
+        kernel_valid(&s, key);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &drawn);
+    }
+}
+
+/// Turn and scale about a far pivot: the tile frame must not leak into either.
+#[test]
+fn transforms_are_project_local_in_any_tile() {
+    let mut s = scene();
+    let key = add_box(&mut s, 2_000.0, 3_000.0, 5.0, 4.0, 3.0);
+    assert_ne!(key, TileKey::ORIGIN);
+    let m = the_box(&mut s, 2_002.0, 3_002.0, 3.0);
+
+    // A quarter turn about the box's own corner.
+    let to = Vec3::new(2_000.0, 3_000.0, 0.0);
+    let spin = Transform::translation(-to)
+        .then(&Transform::rotation(Vec3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2).unwrap())
+        .then(&Transform::translation(to));
+    s.transform(&m, &spin).unwrap();
+    let (lo, hi) = solids(s.project()).1.unwrap();
+    for (got, want) in [lo, hi]
+        .iter()
+        .flatten()
+        .zip([1_996.0, 3_000.0, 0.0, 2_000.0, 3_005.0, 3.0])
+    {
+        assert!((got - want).abs() < MM, "{lo:?} {hi:?}");
+    }
+    kernel_valid(&s, key);
+    s.undo().unwrap();
+
+    // Double about the same corner.
+    let grow = Transform::translation(-to)
+        .then(&Transform::uniform_scale(2.0))
+        .then(&Transform::translation(to));
+    s.transform(&m, &grow).unwrap();
+    let (lo, hi) = solids(s.project()).1.unwrap();
+    for (got, want) in [lo, hi]
+        .iter()
+        .flatten()
+        .zip([2_000.0, 3_000.0, 0.0, 2_010.0, 3_008.0, 6.0])
+    {
+        assert!((got - want).abs() < MM, "{lo:?} {hi:?}");
+    }
+    kernel_valid(&s, key);
+    assert_eq!(s.movable_center(&m).map(|c| c.x.round()), Some(2_005.0));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    /// Radial arrays and scales keep solids valid and undo to the same file.
+    #[test]
+    fn turning_and_scaling_keep_solids_valid(
+        x in -300.0f64..300.0, y in -300.0f64..300.0,
+        angle in 0.05f64..3.0, n in 1u32..8, factor in 0.2f64..3.0,
+    ) {
+        let mut s = scene();
+        let key = add_box(&mut s, x, y, 5.0, 4.0, 3.0);
+        let before = s.project().save();
+        let m = the_box(&mut s, x + 2.0, y + 2.0, 3.0);
+        let to = Vec3::new(x, y, 0.0);
+        let spin = Transform::translation(-to)
+            .then(&Transform::rotation(Vec3::new(0.0, 0.0, 1.0), angle).unwrap())
+            .then(&Transform::translation(to));
+        s.copy(&m, &spin, NonZeroU32::new(n).unwrap()).unwrap();
+        kernel_valid(&s, key);
+        prop_assert_eq!(solids(s.project()).0, n as usize + 1);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &before);
+
+        let grow = Transform::translation(-to)
+            .then(&Transform::uniform_scale(factor))
+            .then(&Transform::translation(to));
+        s.transform(&m, &grow).unwrap();
+        kernel_valid(&s, key);
+        let (lo, hi) = solids(s.project()).1.unwrap();
+        prop_assert!((hi[2] - lo[2] - 3.0 * factor).abs() < MM);
+        s.undo().unwrap();
+        prop_assert_eq!(&s.project().save(), &before);
+    }
+}
+
+/// A real edge on a face that carries drawing is still a real edge.
+#[test]
+fn a_boundary_edge_of_a_drawn_face_takes_the_solid() {
+    let mut s = scene();
+    let key = add_box(&mut s, 0.0, 0.0, 5.0, 4.0, 3.0);
+    s.draw(Some(key), top_plane(3.0), &ring_at(3.0, 1.0, 1.0, 2.0, 2.0))
+        .unwrap();
+    let e = erasable(&mut s, [4.0, -30.0, 30.0], [4.0, 0.0, 3.0]);
+    assert!(matches!(e, Erasable::Node { .. }), "{e:?}");
+    s.erase(&e).unwrap();
+    assert_eq!(solids(s.project()).0, 0);
+}
+
+/// Copying drawing off its plane is one project step, whatever the count, and
+/// respacing it twice leaves only the last array.
+#[test]
+fn off_plane_arrays_are_one_step_and_respace_cleanly() {
+    let mut s = scene();
+    draw_rect(&mut s, 0.0, 0.0, 2.0, 2.0);
+    let base = sketch_edges(s.project());
+    let hit = s.snap(&query([1.0, 1.0, 50.0], [1.0, 1.0, 0.0])).unwrap();
+    let m = s.movable_at(&hit).unwrap();
+    let up = Transform::translation(Vec3::new(0.0, 0.0, 3.0));
+
+    s.copy(&m, &up, NonZeroU32::MIN).unwrap();
+    s.respace_copy(&m, &up, NonZeroU32::new(3).unwrap())
+        .unwrap();
+    assert_eq!(sketch_edges(s.project()), base + 12);
+    s.respace_copy(&m, &up, NonZeroU32::new(2).unwrap())
+        .unwrap();
+    assert_eq!(
+        sketch_edges(s.project()),
+        base + 8,
+        "only the last array stays"
+    );
+    s.undo().unwrap();
+    assert_eq!(sketch_edges(s.project()), base, "one step");
+    s.redo().unwrap();
+    assert_eq!(sketch_edges(s.project()), base + 8);
+    s.undo().unwrap();
+    assert_eq!(s.undo().unwrap(), Some(TileKey::ORIGIN));
+    assert_eq!(sketch_edges(s.project()), 0);
+}
+
+/// A copy lying exactly on existing drawing changes nothing, so it is no step:
+/// the project's undo stack must not drift from the tile's.
+#[test]
+fn a_copy_onto_itself_is_no_step() {
+    let mut s = scene();
+    draw_rect(&mut s, 0.0, 0.0, 2.0, 2.0);
+    draw_rect(&mut s, 5.0, 0.0, 2.0, 2.0);
+    let hit = s.snap(&query([1.0, 1.0, 50.0], [1.0, 1.0, 0.0])).unwrap();
+    let m = s.movable_at(&hit).unwrap();
+    let over = Transform::translation(Vec3::new(5.0, 0.0, 0.0));
+    s.copy(&m, &over, NonZeroU32::MIN).unwrap();
+    assert!(s.undo().unwrap().is_some());
+    assert!(s.undo().unwrap().is_some());
+    assert_eq!(s.undo().unwrap(), None, "two drawings, two steps");
 }

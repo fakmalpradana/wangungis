@@ -1,4 +1,5 @@
-//! The smoke checklist (`docs/user/uji-asap.md`) played against the real `App`:
+//! The smoke checklist (`docs/user/uji-asap.md`) and the v0.1 exit task played
+//! against the real `App`:
 //! raw egui events in, real renderer on an offscreen GPU, no window. This is
 //! what stands in for clicking through the app, which CI cannot do. Buttons are
 //! called directly: finding them needs layout positions, and they only call
@@ -69,7 +70,10 @@ impl Driver {
             app: App::with_render_state(render_state()?, None),
             time: 0.0,
         };
-        d.frame(vec![]);
+        // Panels take their size from the frame before: let the layout settle.
+        for _ in 0..3 {
+            d.frame(vec![]);
+        }
         Some(d)
     }
 
@@ -251,6 +255,13 @@ fn close(got: [f64; 3], want: [f64; 3]) {
     }
 }
 
+/// The model's low corner is where it was clicked, on the ground. In the default
+/// view (2, 2, 0) lies right over the Z axis, which must not catch the click.
+fn on_the_ground(d: &Driver, at: [f64; 2]) {
+    let (lo, _) = d.app.bounds().expect("something is drawn");
+    close(lo, [at[0], at[1], 0.0]);
+}
+
 #[test]
 fn smoke_checklist_in_the_real_app() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -263,7 +274,7 @@ fn smoke_checklist_in_the_real_app() {
 
     // Steps 2-3: Rectangle, first corner, typed size.
     d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
+    d.click([2.0, 2.0, 0.0]);
     assert!(d.app.tool.busy(), "the first click starts the rectangle");
     d.hover([3.0, 3.0, 0.0]);
     assert!(!d.app.tool.preview().lines.is_empty(), "preview follows");
@@ -286,6 +297,7 @@ fn smoke_checklist_in_the_real_app() {
     d.value("3");
     assert_eq!(d.counts(), (1, 12));
     close(d.extents(), [5.0, 4.0, 3.0]);
+    on_the_ground(&d, [2.0, 2.0]);
     assert!(d.model_pixels() > 1000, "the box shows in the view");
     d.dump("5-box");
 
@@ -438,4 +450,264 @@ fn navigation_never_reaches_the_tool() {
     assert_eq!(d.app.typed, "5");
     d.key(egui::Key::Escape);
     assert!(d.app.typed.is_empty());
+}
+
+/// The v0.1 exit task, start to finish through the real input path: a 5 x 4 x 3 m
+/// box with a door, copied ten times in an array, saved and reopened.
+#[test]
+fn box_with_a_door_in_an_array_of_ten() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+
+    d.letter(K::R, "r");
+    d.click([2.0, 2.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3");
+    assert_eq!(d.counts(), (1, 12));
+    close(d.extents(), [5.0, 4.0, 3.0]);
+    on_the_ground(&d, [2.0, 2.0]);
+
+    // The door. The cursor is on the wall just above its bottom edge, which
+    // the corner of the rectangle snaps to.
+    d.letter(K::R, "r");
+    d.click([3.0, 2.0, 0.03]);
+    assert!(d.app.tool.busy());
+    d.hover([3.6, 2.0, 1.0]);
+    d.value("1;2");
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.app.scene.project().occupied().count(), 1);
+    let object = |d: &Driver| {
+        let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
+        doc.object(doc.visible_object_ids()[0])
+            .unwrap()
+            .faces()
+            .len()
+    };
+    assert_eq!(object(&d), 7, "the wall was split");
+    d.dump("exit-1-door-drawn");
+
+    d.letter(K::P, "p");
+    d.click([3.5, 2.0, 1.0]);
+    assert!(d.app.tool.busy(), "the door face is picked");
+    d.value("-4");
+    assert_eq!(
+        object(&d),
+        10,
+        "an inverted U: the door opens right through"
+    );
+    d.dump("exit-2-door-open");
+    let solid = d.app.stats.values().map(|s| s.triangles).sum::<usize>();
+    assert!(solid > 12, "the box gained an opening: {solid} triangles");
+
+    // Move, copy, along X, 7 m on, then ten copies.
+    d.letter(K::M, "m");
+    d.click([3.5, 3.0, 3.0]);
+    assert!(d.app.tool.busy());
+    d.letter(K::C, "c");
+    assert!(d.app.tool.copying());
+    d.key(K::ArrowRight);
+    d.hover([12.0, 3.0, 3.0]);
+    d.value("7");
+    assert_eq!(d.counts().0, 2);
+    d.value("x10");
+    assert_eq!(d.counts().0, 11, "the source and ten copies");
+    close(d.extents(), [75.0, 4.0, 3.0]);
+    d.app.fit_pending = true;
+    d.frame(vec![]);
+    d.frame(vec![]);
+    d.dump("exit-3-array");
+
+    // One undo removes the array, one redo brings it back.
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.counts().0, 1);
+    d.key_with(K::Z, COMMAND | egui::Modifiers::SHIFT);
+    assert_eq!(d.counts().0, 11);
+
+    // Save, reopen, save again: byte-identical.
+    let dir = std::env::temp_dir().join(format!("wangungis-exit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("kota.hew");
+    d.app.path = file.to_string_lossy().into_owned();
+    d.key_with(K::S, COMMAND);
+    assert_eq!(d.app.error, None);
+    let saved = std::fs::read(&file).unwrap();
+    let before = d.counts();
+    d.app.new_project();
+    d.frame(vec![]);
+    d.app.path = file.to_string_lossy().into_owned();
+    d.app.open();
+    d.frame(vec![]);
+    assert_eq!(d.counts(), before);
+    close(d.extents(), [75.0, 4.0, 3.0]);
+    d.key_with(K::S, COMMAND);
+    assert_eq!(std::fs::read(&file).unwrap(), saved, "byte-identical");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A bare tap of Ctrl flips copying like the C key; a chord with it does not.
+#[test]
+fn a_ctrl_tap_toggles_copying_in_move() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    d.letter(egui::Key::M, "m");
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![]);
+    assert!(!d.app.tool.copying(), "nothing until it is released");
+    d.hold(egui::Modifiers::NONE);
+    d.frame(vec![]);
+    assert!(d.app.tool.copying(), "a tap copies");
+    d.hold(egui::Modifiers::CTRL);
+    d.hold(egui::Modifiers::NONE);
+    d.frame(vec![]);
+    assert!(!d.app.tool.copying(), "a second tap goes back");
+
+    // Ctrl+S on the way does not count as a tap.
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![egui::Event::Key {
+        key: egui::Key::S,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::CTRL,
+    }]);
+    d.hold(egui::Modifiers::NONE);
+    d.frame(vec![]);
+    assert!(!d.app.tool.copying());
+}
+
+/// A box drawn through the real input path.
+fn draw_a_box(d: &mut Driver) {
+    use egui::Key as K;
+    d.letter(K::R, "r");
+    d.click([2.0, 2.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    d.value("5;4");
+    d.letter(K::P, "p");
+    d.click([3.5, 3.0, 0.0]);
+    d.value("3");
+    assert_eq!(d.counts(), (1, 12));
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("wangungis-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn autosave_survives_a_crash_and_goes_after_a_save() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let dir = temp_dir("autosave");
+    let auto = dir.join("data").join("autosave.bin");
+    d.app.autosave = Some(auto.clone());
+
+    draw_a_box(&mut d);
+    d.frame(vec![]);
+    assert!(!auto.exists(), "not yet due");
+    // Not in the middle of a gesture.
+    d.letter(egui::Key::R, "r");
+    d.click([20.0, 20.0, 0.0]);
+    assert!(d.app.tool.busy());
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(!auto.exists(), "the tool is busy");
+    d.key(egui::Key::Escape);
+    d.frame(vec![]);
+    assert!(auto.exists(), "due, and the tool is idle");
+    let opened = Project::open(&std::fs::read(&auto).unwrap()).unwrap();
+    assert_eq!(opened.occupied().count(), 1);
+
+    // No change since: no rewrite.
+    std::fs::remove_file(&auto).unwrap();
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(!auto.exists());
+
+    // An edit makes it stale again, then the "crash": a new session sees it.
+    d.key_with(egui::Key::Z, COMMAND);
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+    assert!(auto.exists());
+    d.key_with(egui::Key::Z, COMMAND | egui::Modifiers::SHIFT);
+    d.time += AUTOSAVE_S;
+    d.frame(vec![]);
+
+    let mut next = Driver::start().expect("a GPU, as before");
+    next.app.autosave = Some(auto.clone());
+    next.app.recovery = true;
+    // While the question stands, the tools get nothing.
+    next.letter(egui::Key::R, "r");
+    assert!(next.app.tool.same_kind(&Tool::select(0.0)));
+    next.app.recover();
+    next.frame(vec![]);
+    assert_eq!(next.counts(), (1, 12), "the box is back");
+    assert!(next.app.unsaved && next.app.source.path.is_none());
+    assert!(!next.app.modal());
+
+    // Saving makes the autosave pointless.
+    next.app.path = dir.join("uji.hew").to_string_lossy().into_owned();
+    next.key_with(egui::Key::S, COMMAND);
+    assert_eq!(next.app.error, None);
+    assert!(!auto.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn leaving_with_changes_asks_first() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+
+    // Nothing to lose: no question.
+    d.app.leave(Leaving::New);
+    assert_eq!(d.app.leaving, None);
+
+    draw_a_box(&mut d);
+    d.app.leave(Leaving::New);
+    assert_eq!(d.app.leaving, Some(Leaving::New));
+    d.frame(vec![]);
+    assert_eq!(d.counts(), (1, 12), "nothing happens before the answer");
+    d.app.leaving = None;
+
+    // Closing the window: refused until answered.
+    let close = |d: &mut Driver| {
+        d.time += 0.05;
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            time: Some(d.time),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let app = &mut d.app;
+        let mut output = d.ctx.run_ui(input, |ui| app.shell(ui));
+        output.textures_delta.clear();
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .clone()
+    };
+    let cmds = close(&mut d);
+    assert!(
+        cmds.contains(&egui::ViewportCommand::CancelClose),
+        "{cmds:?}"
+    );
+    assert_eq!(d.app.leaving, Some(Leaving::Close));
+    assert!(!d.app.closing);
+
+    // Discarding lets it go.
+    d.app.unsaved = false;
+    d.app.do_leave(Leaving::Close);
+    assert!(d.app.closing);
+    let cmds = close(&mut d);
+    assert!(cmds.contains(&egui::ViewportCommand::Close), "{cmds:?}");
+    assert!(!cmds.contains(&egui::ViewportCommand::CancelClose));
 }
