@@ -5,7 +5,7 @@
 use inference::{
     ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
-use kernel::{Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
+use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
@@ -29,6 +29,9 @@ const MIN_ARC_SIDES: usize = 4;
 pub enum Input {
     Hover(PickRay),
     Click(PickRay),
+    /// Shift + click: Select adds to or takes from what is picked. Any other
+    /// tool takes it as a plain click.
+    ClickAdd(PickRay),
     /// Text from the value box, on Enter.
     Typed(String),
     /// Toggles a lock to this axis.
@@ -74,6 +77,8 @@ enum State {
     Select {
         selected: Option<Target>,
         outline: Vec<(Point3, Point3)>,
+        /// Whole things picked, for grouping and deleting.
+        nodes: Vec<(TileKey, NodeId)>,
     },
     Line {
         chain: Option<Chain>,
@@ -555,6 +560,7 @@ impl Tool {
             State::Select {
                 selected: None,
                 outline: Vec::new(),
+                nodes: Vec::new(),
             },
             aperture,
         )
@@ -709,7 +715,9 @@ impl Tool {
     /// True while a gesture is under way, so Esc means "cancel it".
     pub fn busy(&self) -> bool {
         match &self.state {
-            State::Select { selected, .. } => selected.is_some(),
+            State::Select {
+                selected, nodes, ..
+            } => selected.is_some() || !nodes.is_empty(),
             State::Line { chain } => chain.is_some(),
             State::Rectangle { first, .. } => first.is_some(),
             State::PushPull { armed, .. } => armed.is_some(),
@@ -745,7 +753,22 @@ impl Tool {
         };
     }
 
+    /// The whole things Select has picked: top-level nodes, all in one tile.
+    pub fn picked_nodes(&self) -> Option<(TileKey, Vec<NodeId>)> {
+        let State::Select { nodes, .. } = &self.state else {
+            return None;
+        };
+        let tile = nodes.first()?.0;
+        Some((tile, nodes.iter().map(|n| n.1).collect()))
+    }
+
     pub fn handle(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let input = match input {
+            Input::ClickAdd(ray) if !matches!(self.state, State::Select { .. }) => {
+                Input::Click(ray)
+            }
+            other => other,
+        };
         if input == Input::Cancel {
             self.reset();
             return Ok(());
@@ -773,30 +796,73 @@ impl Tool {
     }
 
     fn handle_select(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
-        match input {
-            Input::Hover(ray) => self.preview.snap = scene.snap(&pick_query(ray, self.aperture)),
-            Input::Click(ray) => {
-                let hit = scene.snap(&pick_query(ray, self.aperture));
-                let picked = hit.and_then(|h| match (h.snap.source, h.snap.sketch_region_source) {
-                    (Some(source), _) => Some(Target::Solid {
-                        tile: h.tile,
-                        source,
-                    }),
-                    (None, Some((sketch, region))) => Some(Target::Region {
-                        tile: h.tile,
-                        sketch,
-                        region,
-                    }),
-                    _ => None,
-                });
-                let lines = picked.map_or_else(Vec::new, |t| scene.outline(t));
-                if let State::Select { selected, outline } = &mut self.state {
-                    *selected = picked;
-                    *outline = lines;
-                }
+        let aperture = self.aperture;
+        let (ray, adding) = match input {
+            Input::Hover(ray) => {
+                self.preview.snap = scene.snap(&pick_query(ray, aperture));
+                return Ok(());
             }
-            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::Click(ray) => (ray, false),
+            Input::ClickAdd(ray) => (ray, true),
+            _ => return Ok(()),
+        };
+        let hit = scene.snap(&pick_query(ray, aperture));
+        let picked = hit.and_then(|h| match (h.snap.source, h.snap.sketch_region_source) {
+            (Some(source), _) => Some(Target::Solid {
+                tile: h.tile,
+                source,
+            }),
+            (None, Some((sketch, region))) => Some(Target::Region {
+                tile: h.tile,
+                sketch,
+                region,
+            }),
+            _ => None,
+        });
+        let node = hit
+            .and_then(|h| scene.movable_at(&h))
+            .and_then(|m| match m {
+                Movable::Node { tile, node } => Some((tile, node)),
+                Movable::Island { .. } => None,
+            });
+        let State::Select {
+            selected,
+            outline,
+            nodes,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        if !adding {
+            nodes.clear();
         }
+        if let Some(n) = node {
+            // Shift on what is picked takes it back. A pick in another tile starts
+            // over: Hew groups within one document.
+            if nodes.first().is_some_and(|f| f.0 != n.0) {
+                nodes.clear();
+            }
+            if let Some(at) = nodes.iter().position(|x| *x == n) {
+                nodes.remove(at);
+            } else {
+                nodes.push(n);
+            }
+        }
+        *selected = picked;
+        // One pick shows the face or edge under the click; several show themselves.
+        *outline = if nodes.len() > 1 {
+            nodes
+                .iter()
+                .flat_map(|(tile, node)| {
+                    scene.movable_lines(&Movable::Node {
+                        tile: *tile,
+                        node: *node,
+                    })
+                })
+                .collect()
+        } else {
+            picked.map_or_else(Vec::new, |t| scene.outline(t))
+        };
         Ok(())
     }
 
@@ -873,7 +939,7 @@ impl Tool {
                     Some(axis)
                 };
             }
-            Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -941,7 +1007,7 @@ impl Tool {
                     *cursor = None;
                 }
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1066,7 +1132,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::Cancel => {}
+            Input::ClickAdd(_) | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1139,7 +1205,7 @@ impl Tool {
                 scene.transform(&s.what, &scaling_about(s.center, factor))?;
                 *scaling = None;
             }
-            Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::ToggleCopy | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1193,7 +1259,7 @@ impl Tool {
                     ));
                 }
             },
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(r), Some((c, plane, tile))) = (radius, *center)
             && r >= MIN_LEN
@@ -1255,7 +1321,7 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 sagitta = Some(s * side);
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(s), Some((a, plane, tile)), Some(b)) = (sagitta, *start, *end)
             && let Some((points, center)) = arc_points(a, b, s, &plane)
@@ -1325,7 +1391,7 @@ impl Tool {
                     .map_or(1.0, |_| -1.0);
                 distance = Some(d * side);
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         if let (Some(d), Some(a)) = (distance, armed.as_ref())
             && d.abs() >= MIN_LEN
@@ -1364,7 +1430,11 @@ impl Tool {
                     hover.clear();
                 }
             }
-            Input::Typed(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::Typed(_)
+            | Input::ClickAdd(_)
+            | Input::LockAxis(_)
+            | Input::Cancel
+            | Input::ToggleCopy => {}
         }
         Ok(())
     }
@@ -1457,7 +1527,7 @@ impl Tool {
                 }
             }
             Input::ToggleCopy => *copy = !*copy,
-            Input::Cancel => {}
+            Input::ClickAdd(_) | Input::Cancel => {}
         }
         Ok(())
     }
@@ -1525,7 +1595,7 @@ impl Tool {
                 Self::commit_push_pull(scene, a.target, d)?;
                 *armed = None;
             }
-            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
         }
         Ok(())
     }

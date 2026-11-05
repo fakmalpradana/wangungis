@@ -430,6 +430,34 @@ impl App {
         self.last_pointer = None;
     }
 
+    /// Runs `edit` on what Select holds, then starts the tool over: the ids it
+    /// held may be gone.
+    fn on_picked(
+        &mut self,
+        edit: impl FnOnce(
+            &mut Scene,
+            TileKey,
+            &[kernel::NodeId],
+        ) -> Result<(), wangungis_tools::EditError>,
+    ) {
+        let Some((tile, nodes)) = self.tool.picked_nodes() else {
+            self.error = Some("Pilih objek dulu dengan Pilih (Spasi).".into());
+            return;
+        };
+        match edit(&mut self.scene, tile, &nodes) {
+            Ok(()) => self.error = None,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.tool.reset();
+        self.sync_edits();
+    }
+
+    fn delete_picked(&mut self) {
+        if self.tool.picked_nodes().is_some() {
+            self.on_picked(|s, t, n| s.delete_nodes(t, n));
+        }
+    }
+
     fn undo(&mut self) {
         self.history(|s| s.undo());
     }
@@ -473,11 +501,15 @@ impl App {
                     e,
                     egui::Event::Key { pressed: true, .. }
                         | egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
                 )
             });
             (i.modifiers.ctrl, pressed)
         });
-        self.ctrl_chord |= ctrl && chord;
+        // Held last frame counts: Ctrl can go up in the frame the key goes down.
+        self.ctrl_chord |= (ctrl || self.ctrl_held) && chord;
         let tapped = self.ctrl_held && !ctrl && !self.ctrl_chord;
         if !ctrl {
             self.ctrl_chord = false;
@@ -538,9 +570,10 @@ impl App {
                 self.error = None;
                 self.feed(Input::Typed(text));
             }
-            K::Backspace => {
+            K::Backspace if !self.typed.is_empty() => {
                 self.typed.pop();
             }
+            K::Delete | K::Backspace => self.delete_picked(),
             K::Escape => {
                 self.typed.clear();
                 self.error = None;
@@ -923,6 +956,16 @@ impl App {
                 {
                     self.redo();
                 }
+                if ui.button("Grup").clicked() {
+                    self.on_picked(|s, t, n| s.group(t, n));
+                }
+                if ui.button("Komponen").clicked() {
+                    self.on_picked(|s, t, n| s.make_component(t, n));
+                }
+                if ui.button("Pecah").clicked() {
+                    self.on_picked(|s, t, n| n.iter().try_for_each(|node| s.dissolve(t, *node)));
+                }
+                ui.separator();
                 if ui.button("Zoom extents").clicked() {
                     self.fit_pending = true;
                 }
@@ -1141,7 +1184,13 @@ impl App {
             && let Some(p) = resp.interact_pointer_pos()
         {
             self.error = None;
-            self.feed(Input::Click(ray_at(&self.orbit, p)));
+            let ray = ray_at(&self.orbit, p);
+            let shift = resp.ctx.input(|i| i.modifiers.shift);
+            self.feed(if shift {
+                Input::ClickAdd(ray)
+            } else {
+                Input::Click(ray)
+            });
             fed = true;
         }
         fed

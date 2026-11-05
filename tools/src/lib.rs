@@ -1186,6 +1186,54 @@ impl Scene {
         made
     }
 
+    /// Groups `nodes`, top-level nodes of one tile, as one undo step.
+    pub fn group(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.project
+            .tile_mut(tile)?
+            .group_nodes(nodes)
+            .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Turns `nodes`, top-level nodes of one tile, into one instance of a new
+    /// component, as one undo step.
+    pub fn make_component(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.project
+            .tile_mut(tile)?
+            .make_component(nodes)
+            .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Dissolves a group or explodes a component instance back into what it
+    /// holds, as one undo step. A plain object has nothing to dissolve.
+    pub fn dissolve(&mut self, tile: TileKey, node: NodeId) -> Result<(), EditError> {
+        let doc = self.project.tile_mut(tile)?;
+        match node {
+            NodeId::Group(g) => {
+                doc.ungroup(g).map_err(kernel_err)?;
+            }
+            NodeId::Instance(i) => {
+                doc.explode_instance(i).map_err(kernel_err)?;
+            }
+            NodeId::Object(_) => return Err(EditError::Unsupported("objek ini bukan grup")),
+        }
+        self.record(tile);
+        Ok(())
+    }
+
+    /// Deletes top-level `nodes` of one tile, as one undo step.
+    pub fn delete_nodes(&mut self, tile: TileKey, nodes: &[NodeId]) -> Result<(), EditError> {
+        self.project
+            .tile_mut(tile)?
+            .delete_selection(nodes)
+            .map_err(kernel_err)?;
+        self.record(tile);
+        Ok(())
+    }
+
     /// Undoes the op just applied when it pushed the tile past the kernel
     /// frame bound.
     fn guard_reach(&mut self, key: TileKey) -> Result<(), EditError> {

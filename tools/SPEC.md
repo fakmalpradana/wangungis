@@ -15,12 +15,13 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
 - `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
 - `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
+- `group`, `make_component`, `dissolve`, `delete_nodes`: pada node puncak dalam satu tile, masing-masing satu langkah undo. Move, Rotate, Scale, dan Eraser pada anggota bekerja pada seluruh grup atau instance.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
 Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
-- Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`.
+- Input: `Hover(ray)`, `Click(ray)`, `ClickAdd(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`. `picked_nodes()`: node yang dipilih Select.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
 - `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).

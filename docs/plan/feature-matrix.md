@@ -15,36 +15,36 @@ Legenda:
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Half-edge mesh + validator invariant | – | ✓ | M | XL | F0 | — | U P | T | belum |
-| 2 | Line tool | ✓ | ✓ | M | M | 0.1 | — | U E | T | selesai |
-| 3 | Rectangle (+ rotated) | ✓ | ✓ | M | S | 0.1 | — | U E | T | selesai |
-| 4 | Circle / Polygon | ✓ | ✓ | M | S | 0.1 | — | U E | T | selesai |
-| 5 | Arc (2-point, 3-point, pie) | ✓ | ✓ | M | M | 0.1 | — | U E | T | selesai (2 titik + tinggi) |
-| 6 | Push/Pull (+ live preview) | ✓ | ✓ | M | XL | F0/0.1 | — | U P E | T | selesai (pratinjau garis tepi) |
+| 2 | Line tool | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
+| 3 | Rectangle (+ rotated) | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
+| 4 | Circle / Polygon | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
+| 5 | Arc (2-point, 3-point, pie) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
+| 6 | Push/Pull (+ live preview) | ✓ | ✓ | M | XL | F0/0.1 | — | U P E | T | parsial |
 | 7 | Push/Pull dengan Ctrl (buat face baru) | ✓ | ? | S | L | 0.1 | — | U P | T | belum |
 | 8 | Follow Me | ✓ | ✓ | C | L | 0.1 | — | U P | T | belum |
-| 9 | Offset | ✓ | ✓ | S | M | 0.1 | i_overlay/Clipper2 | U P | T+R | selesai |
-| 10 | Move (+ copy, array) | ✓ | ✓ | M | M | 0.1 | — | U E | T | selesai |
-| 11 | Rotate (+ copy, radial array) | ✓ | P | M | M | 0.1 | — | U E | T | selesai |
-| 12 | Scale (+ uniform, dari tengah) | ✓ | ✓ | M | M | 0.1 | — | U | T | selesai (seragam) |
-| 13 | Eraser (+ hide/soften) | ✓ | ? | M | S | 0.1 | — | U P | T | selesai (tepi; hide/soften belum) |
-| 14 | Auto-split face saat garis memotong face | ✓ | – | M | L | 0.1 | robust | U P | T | selesai |
+| 9 | Offset | ✓ | ✓ | S | M | 0.1 | i_overlay/Clipper2 | U P | T+R | parsial |
+| 10 | Move (+ copy, array) | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
+| 11 | Rotate (+ copy, radial array) | ✓ | P | M | M | 0.1 | — | U E | T | parsial |
+| 12 | Scale (+ uniform, dari tengah) | ✓ | ✓ | M | M | 0.1 | — | U | T | parsial |
+| 13 | Eraser (+ hide/soften) | ✓ | ? | M | S | 0.1 | — | U P | T | parsial |
+| 14 | Auto-split face saat garis memotong face | ✓ | – | M | L | 0.1 | robust | U P | T | parsial |
 | 15 | Intersect Faces | ✓ | P | S | XL | 0.3 | Manifold | U P | T+R | belum |
 | 16 | Boolean solid (union/subtract/intersect) | ✓ | ✓ | S | L | 0.3 | Manifold | U P V | R | belum |
-| 17 | Undo/redo semua operasi | ✓ | ✓ | M | L | F0/0.1 | — | U P E | T | selesai |
+| 17 | Undo/redo semua operasi | ✓ | ✓ | M | L | F0/0.1 | — | U P E | T | parsial |
 | 18 | Mirror / flip | ✓ | – | C | S | 0.5 | — | U | T | belum |
 
 ## Inference dan input
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 19 | Ray picking + BVH | ✓ | ✓ | M | M | F0 | bvh crate (cek ADR) | U B | T+R | selesai |
-| 20 | Snap endpoint / midpoint | ✓ | ✓ | M | M | F0 | — | U | T | selesai |
-| 21 | Snap on-edge / on-face / center | ✓ | ✓ | M | M | 0.1 | — | U | T | selesai |
-| 22 | Inference sumbu (merah/hijau/biru) | ✓ | ✓ | M | M | F0 | — | U | T | selesai |
-| 23 | Kunci sumbu (Shift, tombol panah) | ✓ | ✓ | M | S | 0.1 | — | U E | T | selesai (panah) |
+| 19 | Ray picking + BVH | ✓ | ✓ | M | M | F0 | bvh crate (cek ADR) | U B | T+R | parsial |
+| 20 | Snap endpoint / midpoint | ✓ | ✓ | M | M | F0 | — | U | T | parsial |
+| 21 | Snap on-edge / on-face / center | ✓ | ✓ | M | M | 0.1 | — | U | T | parsial |
+| 22 | Inference sumbu (merah/hijau/biru) | ✓ | ✓ | M | M | F0 | — | U | T | parsial |
+| 23 | Kunci sumbu (Shift, tombol panah) | ✓ | ✓ | M | S | 0.1 | — | U E | T | parsial |
 | 24 | Inference paralel / tegak lurus (magenta) | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
 | 25 | Prioritas snapping + tooltip | ✓ | ✓ | M | M | 0.1 | — | U | T | belum |
-| 26 | VCB: panjang, jarak, sudut, jumlah array | ✓ | ✓ | M | M | 0.1 | — | U E | T | selesai |
+| 26 | VCB: panjang, jarak, sudut, jumlah array | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 | 27 | Unit dan presisi tampilan (m, mm, ft) | ✓ | ✓ | M | S | 0.1 | — | U | T | belum |
 | 28 | Tape Measure + guide line/point | ✓ | ✓ | S | M | 0.1 | — | U | T | belum |
 | 29 | Protractor | ✓ | ? | C | S | 0.5 | — | U | T | belum |
@@ -54,10 +54,10 @@ Legenda:
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 31 | Orbit / pan / zoom (mouse tengah, scroll) | ✓ | ✓ | M | M | F0 | — | E | T | selesai |
-| 32 | Zoom extents / zoom window | ✓ | ✓ | M | S | 0.1 | — | U | T | selesai (zoom extents) |
-| 33 | Proyeksi perspektif / paralel, view standar | ✓ | ✓ | M | S | 0.1 | — | G | T | sebagian (view standar; paralel belum) |
-| 34 | Edge rendering gaya CAD (profil, garis) | ✓ | ✓ | M | L | F0/0.1 | wgpu/three.js | G | T+R | selesai |
+| 31 | Orbit / pan / zoom (mouse tengah, scroll) | ✓ | ✓ | M | M | F0 | — | E | T | parsial |
+| 32 | Zoom extents / zoom window | ✓ | ✓ | M | S | 0.1 | — | U | T | parsial |
+| 33 | Proyeksi perspektif / paralel, view standar | ✓ | ✓ | M | S | 0.1 | — | G | T | parsial |
+| 34 | Edge rendering gaya CAD (profil, garis) | ✓ | ✓ | M | L | F0/0.1 | wgpu/three.js | G | T+R | parsial |
 | 35 | Face style (shaded, textured, X-ray, wireframe) | ✓ | ? | S | M | 0.5 | — | G | T | belum |
 | 36 | Rendering RTC untuk koordinat besar | – | – | M | M | F0 | — | G P | T | belum |
 | 37 | Culling + LOD rendering + instancing | P | ? | M | L | 0.2 | — | B | T | belum |
@@ -136,14 +136,14 @@ Legenda:
 
 | # | Fitur | SU | Hew | Prio | Kompl | Rilis | Library | Test | Jenis | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 83 | Save/load format native berversi | ✓ | ✓ | M | M | 0.1 | serde, zip | U P E | T+R | selesai |
+| 83 | Save/load format native berversi | ✓ | ✓ | M | M | 0.1 | serde, zip | U P E | T+R | parsial |
 | 84 | Ekspor CityJSON 2.0 | – | – | M | M | 0.2 | serde, cjval | U V | T+R | belum |
 | 85 | Impor CityJSON + round-trip tanpa kehilangan | – | – | M | M | 0.2 | serde_json (+ cjseq untuk CityJSONSeq) | U V | T+R | belum |
 | 86 | Ekspor CityGML 2.0 | P | – | M | M | 0.3 | citygml-tools (konversi; Java 17+) | U V | R | belum |
 | 87 | Ekspor CityGML 3.0 | – | – | C | M | 0.3 | citygml-tools | U V | R | belum |
 | 88 | Ekspor 3D Tiles 1.1 | – | – | S | M | 0.3 | tyler | U | R | belum |
-| 89 | glTF/GLB impor-ekspor | P | ✓ | M | S | 0.1 | gltf crate | U | R | sebagian (ekspor) |
-| 90 | OBJ/STL ekspor | ✓ | P (STL saja) | S | S | 0.1 | — | U | R | selesai |
+| 89 | glTF/GLB impor-ekspor | P | ✓ | M | S | 0.1 | gltf crate | U | R | parsial |
+| 90 | OBJ/STL ekspor | ✓ | P (STL saja) | S | S | 0.1 | — | U | R | parsial |
 | 91 | DXF impor (footprint dari CAD) | ✓ | – | S | M | 0.2 | dxf crate | U | R | belum |
 | 92 | IFC ekspor dasar | ✓ | – | C | L | 0.5 | IfcOpenShell (Python) | U V | R | belum |
 | 93 | USD/USDZ ekspor | P | ✓ | W | M | — | — | — | R | belum |
@@ -163,7 +163,7 @@ Legenda:
 | 97 | Shortcut yang bisa diubah (preset gaya SketchUp) | ✓ | ✓ | M | S | 0.1 | — | U | T | belum |
 | 98 | Tema terang/gelap | P | ? | C | S | 0.5 | — | G | T | belum |
 | 99 | Multi-bahasa (Inggris, Indonesia) | ✓ | ? | S | M | 0.5 | fluent crate (asumsi) | U | R | belum |
-| 100 | Autosave + crash recovery | ✓ | ✓ | M | M | 0.1 | — | U E | T | selesai |
+| 100 | Autosave + crash recovery | ✓ | ✓ | M | M | 0.1 | — | U E | T | parsial |
 
 Total: 100 fitur. Must = 56, Should = 26, Could = 16, Won't = 2. Hitung ulang setiap tabel berubah:
 

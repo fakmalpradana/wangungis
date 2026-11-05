@@ -577,6 +577,26 @@ fn a_ctrl_tap_toggles_copying_in_move() {
     d.hold(egui::Modifiers::NONE);
     d.frame(vec![]);
     assert!(!d.app.tool.copying());
+
+    // Ctrl+C reaches egui as Copy, not as a key. And Ctrl may go up in the same
+    // frame as the key goes down.
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![egui::Event::Copy]);
+    d.hold(egui::Modifiers::NONE);
+    assert!(!d.app.tool.copying());
+    d.hold(egui::Modifiers::CTRL);
+    d.frame(vec![
+        egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        },
+    ]);
+    d.frame(vec![]);
+    assert!(!d.app.tool.copying());
 }
 
 /// A box drawn through the real input path.
@@ -710,4 +730,46 @@ fn leaving_with_changes_asks_first() {
     let cmds = close(&mut d);
     assert!(cmds.contains(&egui::ViewportCommand::Close), "{cmds:?}");
     assert!(!cmds.contains(&egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn select_delete_and_group_through_the_app() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    use egui::Key as K;
+    draw_a_box(&mut d);
+    // A second box, by copying.
+    d.letter(K::M, "m");
+    d.click([4.5, 4.0, 3.0]);
+    d.letter(K::C, "c");
+    d.key(K::ArrowRight);
+    d.hover([10.0, 4.0, 3.0]);
+    d.value("7");
+    assert_eq!(d.counts().0, 2);
+
+    // Space, click, Shift + click: both picked.
+    d.key(K::Space);
+    d.click([4.5, 4.0, 3.0]);
+    d.hold(egui::Modifiers::SHIFT);
+    d.click([11.5, 4.0, 3.0]);
+    d.hold(egui::Modifiers::NONE);
+    assert_eq!(d.app.tool.picked_nodes().unwrap().1.len(), 2);
+
+    d.app.on_picked(|s, t, n| s.group(t, n));
+    assert_eq!(d.app.error, None);
+    assert_eq!(d.counts().0, 2, "two solids in one group");
+
+    // The group goes with one Delete, and comes back.
+    d.click([4.5, 4.0, 3.0]);
+    d.key(K::Delete);
+    assert_eq!(d.counts(), (0, 0));
+    d.key_with(K::Z, COMMAND);
+    assert_eq!(d.counts().0, 2);
+
+    // With a value typed, Backspace edits it instead of deleting.
+    d.click([4.5, 4.0, 3.0]);
+    d.frame(vec![egui::Event::Text("5".into())]);
+    d.key(K::Backspace);
+    assert!(d.app.typed.is_empty());
+    assert_eq!(d.counts().0, 2);
 }

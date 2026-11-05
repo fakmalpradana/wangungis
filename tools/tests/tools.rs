@@ -873,3 +873,45 @@ fn typed_move_keeps_to_a_late_lock() {
     typed(&mut m, &mut s, "2").unwrap();
     assert_box(&s, [12.0, 10.0, 0.0], [17.0, 14.0, 3.0]);
 }
+
+/// Shift adds to what Select holds and takes back what it already holds.
+#[test]
+fn shift_click_builds_a_selection() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let mut r = Tool::rectangle(APERTURE);
+    click(&mut r, &mut s, [30.0, 10.0, 0.0]);
+    hover(&mut r, &mut s, [32.0, 12.0, 0.0]);
+    typed(&mut r, &mut s, "5;4").unwrap();
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [32.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+
+    let mut t = Tool::select(APERTURE);
+    assert_eq!(t.picked_nodes(), None);
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1);
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    let (tile, both) = t.picked_nodes().unwrap();
+    assert_eq!(both.len(), 2);
+    assert!(t.preview().lines.len() >= 24, "both are outlined");
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1, "shift takes it back");
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+    // A plain click starts over.
+    click(&mut t, &mut s, [12.5, 12.0, 3.0]);
+    assert_eq!(t.picked_nodes().unwrap().1.len(), 1);
+    t.handle(&mut s, Input::ClickAdd(ray([32.5, 12.0, 3.0])))
+        .unwrap();
+
+    s.group(tile, &both).unwrap();
+    assert_eq!(s.project().tiles[&tile].top_level_nodes().len(), 1);
+    // Other tools take shift-click as a click.
+    let mut m = Tool::move_tool(APERTURE);
+    m.handle(&mut s, Input::ClickAdd(ray([12.5, 12.0, 3.0])))
+        .unwrap();
+    assert!(m.busy());
+}
