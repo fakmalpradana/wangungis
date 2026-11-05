@@ -70,7 +70,10 @@ impl Driver {
             app: App::with_render_state(render_state()?, None),
             time: 0.0,
         };
-        d.frame(vec![]);
+        // Panels take their size from the frame before: let the layout settle.
+        for _ in 0..3 {
+            d.frame(vec![]);
+        }
         Some(d)
     }
 
@@ -253,7 +256,7 @@ fn close(got: [f64; 3], want: [f64; 3]) {
 }
 
 /// The model's low corner is where it was clicked, on the ground. In the default
-/// view (1, 1, 0) lies right over the Z axis, which must not catch the click.
+/// view (2, 2, 0) lies right over the Z axis, which must not catch the click.
 fn on_the_ground(d: &Driver, at: [f64; 2]) {
     let (lo, _) = d.app.bounds().expect("something is drawn");
     close(lo, [at[0], at[1], 0.0]);
@@ -271,7 +274,7 @@ fn smoke_checklist_in_the_real_app() {
 
     // Steps 2-3: Rectangle, first corner, typed size.
     d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
+    d.click([2.0, 2.0, 0.0]);
     assert!(d.app.tool.busy(), "the first click starts the rectangle");
     d.hover([3.0, 3.0, 0.0]);
     assert!(!d.app.tool.preview().lines.is_empty(), "preview follows");
@@ -294,7 +297,7 @@ fn smoke_checklist_in_the_real_app() {
     d.value("3");
     assert_eq!(d.counts(), (1, 12));
     close(d.extents(), [5.0, 4.0, 3.0]);
-    on_the_ground(&d, [1.0, 1.0]);
+    on_the_ground(&d, [2.0, 2.0]);
     assert!(d.model_pixels() > 1000, "the box shows in the view");
     d.dump("5-box");
 
@@ -458,7 +461,7 @@ fn box_with_a_door_in_an_array_of_ten() {
     use egui::Key as K;
 
     d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
+    d.click([2.0, 2.0, 0.0]);
     d.hover([3.0, 3.0, 0.0]);
     d.value("5;4");
     d.letter(K::P, "p");
@@ -466,14 +469,14 @@ fn box_with_a_door_in_an_array_of_ten() {
     d.value("3");
     assert_eq!(d.counts(), (1, 12));
     close(d.extents(), [5.0, 4.0, 3.0]);
-    on_the_ground(&d, [1.0, 1.0]);
+    on_the_ground(&d, [2.0, 2.0]);
 
     // The door. The cursor is on the wall just above its bottom edge, which
-    // the corner of the rectangle snaps to: the edge's midpoint, x = 3.5.
+    // the corner of the rectangle snaps to.
     d.letter(K::R, "r");
-    d.click([3.0, 1.0, 0.03]);
+    d.click([3.0, 2.0, 0.03]);
     assert!(d.app.tool.busy());
-    d.hover([3.6, 1.0, 1.0]);
+    d.hover([3.6, 2.0, 1.0]);
     d.value("1;2");
     assert_eq!(d.app.error, None);
     assert_eq!(d.app.scene.project().occupied().count(), 1);
@@ -488,7 +491,7 @@ fn box_with_a_door_in_an_array_of_ten() {
     d.dump("exit-1-door-drawn");
 
     d.letter(K::P, "p");
-    d.click([4.0, 1.0, 1.0]);
+    d.click([3.5, 2.0, 1.0]);
     assert!(d.app.tool.busy(), "the door face is picked");
     d.value("-4");
     assert_eq!(
@@ -567,7 +570,7 @@ fn eraser_takes_a_line_then_the_box() {
     let Some(mut d) = Driver::start() else { return };
     use egui::Key as K;
     d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
+    d.click([2.0, 2.0, 0.0]);
     d.hover([3.0, 3.0, 0.0]);
     d.value("5;4");
     d.letter(K::P, "p");
@@ -576,8 +579,8 @@ fn eraser_takes_a_line_then_the_box() {
 
     // A line across the top, then erase it.
     d.letter(K::L, "l");
-    d.click([3.5, 1.0, 3.0]);
-    d.click([3.5, 5.0, 3.0]);
+    d.click([4.5, 2.0, 3.0]);
+    d.click([4.5, 6.0, 3.0]);
     d.key(K::Escape);
     let faces = |d: &Driver| {
         let doc = &d.app.scene.project().tiles[&TileKey::ORIGIN];
@@ -587,14 +590,14 @@ fn eraser_takes_a_line_then_the_box() {
     };
     assert_eq!(faces(&d), 7);
     d.letter(K::E, "e");
-    d.hover([3.5, 2.0, 3.0]);
+    d.hover([4.5, 4.0, 3.0]);
     assert!(!d.app.tool.preview().lines.is_empty(), "the line lights up");
-    d.click([3.5, 2.0, 3.0]);
+    d.click([4.5, 4.0, 3.0]);
     assert_eq!(d.app.error, None);
     assert_eq!(faces(&d), 6, "the top is whole again");
 
     // A real edge takes the box.
-    d.click([3.5, 1.0, 3.0]);
+    d.click([3.5, 2.0, 3.0]);
     assert_eq!(d.counts(), (0, 0));
     d.key_with(K::Z, COMMAND);
     assert_eq!(d.counts(), (1, 12));
@@ -604,7 +607,7 @@ fn eraser_takes_a_line_then_the_box() {
 fn draw_a_box(d: &mut Driver) {
     use egui::Key as K;
     d.letter(K::R, "r");
-    d.click([1.0, 1.0, 0.0]);
+    d.click([2.0, 2.0, 0.0]);
     d.hover([3.0, 3.0, 0.0]);
     d.value("5;4");
     d.letter(K::P, "p");

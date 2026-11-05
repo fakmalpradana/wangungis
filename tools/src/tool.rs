@@ -5,7 +5,7 @@
 use inference::{
     ApertureMode, Axis, ElementRef, PickRay, SnapKind, SnapLock, SnapQuery, SnapSource, SnapWeights,
 };
-use kernel::{Plane, Point3, SketchId, SketchRegionId, Transform, Vec3};
+use kernel::{Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
 use wangungis_scene::project::TileKey;
 
@@ -21,6 +21,9 @@ const ON_PLANE: f64 = 1e-6;
 const NARROW: f64 = 1e-6;
 /// The smallest scale factor: smaller collapses geometry below kernel tolerance.
 const MIN_SCALE: f64 = 1e-3;
+/// Facets of an arc per full turn, and at least this many on any arc.
+const ARC_SIDES_PER_TURN: f64 = 48.0;
+const MIN_ARC_SIDES: usize = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -105,6 +108,22 @@ enum State {
     },
     Erase {
         /// What a click would remove.
+        hover: Vec<(Point3, Point3)>,
+    },
+    Round {
+        kind: SketchCurveKind,
+        sides: u32,
+        center: Option<(Point3, Plane, TileKey)>,
+        cursor: Option<Point3>,
+    },
+    Arc {
+        start: Option<(Point3, Plane, TileKey)>,
+        end: Option<Point3>,
+        cursor: Option<Point3>,
+    },
+    Offset {
+        armed: Option<Armed>,
+        cursor: Option<Point3>,
         hover: Vec<(Point3, Point3)>,
     },
 }
@@ -357,6 +376,95 @@ fn direction_in_plane_point(ray: &PickRay, center: Point3) -> Option<Point3> {
     ray_on_plane(ray, &Plane::from_point_normal(center, normal).ok()?)
 }
 
+/// `sides` points around `center` on `plane`, the first towards `toward`.
+fn round_points(
+    center: Point3,
+    plane: &Plane,
+    radius: f64,
+    sides: u32,
+    toward: Option<Point3>,
+) -> Vec<Point3> {
+    let (u, v) = plane_axes(plane);
+    let (cx, cy) = toward.map_or((1.0, 0.0), |p| ((p - center).dot(u), (p - center).dot(v)));
+    let start = if cx == 0.0 && cy == 0.0 {
+        0.0
+    } else {
+        cy.atan2(cx)
+    };
+    (0..sides)
+        .map(|k| {
+            let a = start + std::f64::consts::TAU * f64::from(k) / f64::from(sides);
+            on_plane(
+                center + u * (radius * a.cos()) + v * (radius * a.sin()),
+                plane,
+            )
+        })
+        .collect()
+}
+
+/// An arc from `a` to `b` through the point `sagitta` off the chord's middle, on
+/// the side of `plane.normal() x (b - a)`: its points and center.
+fn arc_points(a: Point3, b: Point3, sagitta: f64, plane: &Plane) -> Option<(Vec<Point3>, Point3)> {
+    let chord = b - a;
+    let half = chord.length() / 2.0;
+    if half < MIN_LEN || sagitta.abs() < MIN_LEN {
+        return None;
+    }
+    let side = plane.normal().cross(chord).normalized().ok()?;
+    let apex = a + chord * 0.5 + side * sagitta;
+    let radius = (half * half + sagitta * sagitta) / (2.0 * sagitta.abs());
+    let center = apex - side * (sagitta.signum() * radius);
+    // The inscribed angle at the apex is half the central angle on each side.
+    let sweep = 4.0 * sagitta.abs().atan2(half);
+    // Even, so the apex is a vertex and can be snapped to.
+    let half_turns = sweep / std::f64::consts::TAU * ARC_SIDES_PER_TURN / 2.0;
+    let n = ((half_turns - 1e-9).ceil() as usize * 2).max(MIN_ARC_SIDES);
+    let from = a - center;
+    let across = plane.normal().cross(from);
+    // Which way round passes the apex.
+    let turn = if (apex - center).dot(across) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let mut points: Vec<Point3> = (0..=n)
+        .map(|k| {
+            let t = sweep * k as f64 / n as f64;
+            on_plane(center + from * t.cos() + across * (turn * t.sin()), plane)
+        })
+        .collect();
+    points[0] = a;
+    *points.last_mut()? = b;
+    Some((points, center))
+}
+
+/// Whether `p` lies inside the ring, in the plane's axes.
+fn inside_ring(p: Point3, ring: &[Point3], plane: &Plane) -> bool {
+    let (u, v) = plane_axes(plane);
+    let at = |q: Point3| ((q - p).dot(u), (q - p).dot(v));
+    let mut inside = false;
+    for k in 0..ring.len() {
+        let (x0, y0) = at(ring[k]);
+        let (x1, y1) = at(ring[(k + 1) % ring.len()]);
+        if (y0 > 0.0) != (y1 > 0.0) && x0 + (0.0 - y0) * (x1 - x0) / (y1 - y0) > 0.0 {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// How far `p` is from the ring's edges.
+fn ring_distance(p: Point3, ring: &[Point3]) -> f64 {
+    (0..ring.len())
+        .map(|k| {
+            let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.dot(ab).max(1e-18)).clamp(0.0, 1.0);
+            (a + ab * t - p).length()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// A rotation of `angle` (rad) about the line through `center` along `axis`.
 fn rotation_about(center: Point3, axis: Vec3, angle: f64) -> Result<Transform, EditError> {
     let to = center - Point3::ORIGIN;
@@ -498,6 +606,58 @@ impl Tool {
         )
     }
 
+    pub fn circle(aperture: f64) -> Self {
+        Self::with(
+            State::Round {
+                kind: SketchCurveKind::Circle,
+                sides: 48,
+                center: None,
+                cursor: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn polygon(aperture: f64) -> Self {
+        Self::with(
+            State::Round {
+                kind: SketchCurveKind::Polygon,
+                sides: 6,
+                center: None,
+                cursor: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn arc(aperture: f64) -> Self {
+        Self::with(
+            State::Arc {
+                start: None,
+                end: None,
+                cursor: None,
+            },
+            aperture,
+        )
+    }
+
+    pub fn offset(aperture: f64) -> Self {
+        Self::with(
+            State::Offset {
+                armed: None,
+                cursor: None,
+                hover: Vec::new(),
+            },
+            aperture,
+        )
+    }
+
+    /// Whether a copying toggle means anything to this tool, so C can mean
+    /// Circle everywhere else.
+    pub fn can_copy(&self) -> bool {
+        matches!(self.state, State::Move { .. } | State::Rotate { .. })
+    }
+
     pub fn eraser(aperture: f64) -> Self {
         Self::with(State::Erase { hover: Vec::new() }, aperture)
     }
@@ -512,7 +672,10 @@ impl Tool {
 
     /// Whether `other` is the same tool, whatever state each is in.
     pub fn same_kind(&self, other: &Tool) -> bool {
-        std::mem::discriminant(&self.state) == std::mem::discriminant(&other.state)
+        match (&self.state, &other.state) {
+            (State::Round { kind: a, .. }, State::Round { kind: b, .. }) => a == b,
+            (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
     }
 
     pub fn set_aperture(&mut self, aperture: f64) {
@@ -542,6 +705,9 @@ impl Tool {
             State::Rotate { turning, .. } => turning.is_some(),
             State::Scale { scaling, .. } => scaling.is_some(),
             State::Erase { .. } => false,
+            State::Round { center, .. } => center.is_some(),
+            State::Arc { start, .. } => start.is_some(),
+            State::Offset { armed, .. } => armed.is_some(),
         }
     }
 
@@ -557,6 +723,13 @@ impl Tool {
             State::Rotate { .. } => Self::rotate(aperture),
             State::Scale { .. } => Self::scale(aperture),
             State::Erase { .. } => Self::eraser(aperture),
+            State::Round {
+                kind: SketchCurveKind::Polygon,
+                ..
+            } => Self::polygon(aperture),
+            State::Round { .. } => Self::circle(aperture),
+            State::Arc { .. } => Self::arc(aperture),
+            State::Offset { .. } => Self::offset(aperture),
         };
     }
 
@@ -575,6 +748,9 @@ impl Tool {
             State::Rotate { .. } => self.handle_rotate(scene, input),
             State::Scale { .. } => self.handle_scale(scene, input),
             State::Erase { .. } => self.handle_erase(scene, input),
+            State::Round { .. } => self.handle_round(scene, input),
+            State::Arc { .. } => self.handle_arc(scene, input),
+            State::Offset { .. } => self.handle_offset(scene, input),
         }?;
         if !hovering {
             // A click or typed value ends what the marker described.
@@ -930,6 +1106,204 @@ impl Tool {
         Ok(())
     }
 
+    fn handle_round(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Round {
+            kind,
+            sides,
+            center,
+            cursor,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        let lowest = if *kind == SketchCurveKind::Circle {
+            kernel::MIN_CIRCLE_SEGMENTS as u32
+        } else {
+            3
+        };
+        let mut radius = None;
+        match input {
+            Input::Hover(ray) => match center {
+                Some((c, plane, _)) => {
+                    let next = next_point(scene, ray, Some(*c), plane, None, aperture);
+                    *cursor = next.map(|n| n.0);
+                    self.preview.snap = next.and_then(|n| n.1);
+                }
+                None => self.preview.snap = start_snap(scene, ray, aperture),
+            },
+            Input::Click(ray) => match center {
+                None => *center = first_point(scene, ray, aperture),
+                Some((c, plane, _)) => {
+                    if let Some((p, _)) = next_point(scene, ray, Some(*c), plane, None, aperture) {
+                        *cursor = Some(p);
+                        radius = Some((p - *c).length());
+                    }
+                }
+            },
+            Input::Typed(text) => match vcb::parse(&text) {
+                Some(Vcb::Sides(n)) => {
+                    if !(lowest..=kernel::MAX_CIRCLE_SEGMENTS as u32).contains(&n) {
+                        return Err(needs("jumlah sisi di luar batas (lingkaran minimal 24)"));
+                    }
+                    *sides = n;
+                }
+                Some(Vcb::One(r)) if center.is_some() && r > 0.0 => radius = Some(r),
+                _ => {
+                    return Err(needs(
+                        "klik pusat, lalu ketik jari-jari, atau 8s untuk sisi",
+                    ));
+                }
+            },
+            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        if let (Some(r), Some((c, plane, tile))) = (radius, *center)
+            && r >= MIN_LEN
+        {
+            let points = round_points(c, &plane, r, *sides, *cursor);
+            scene.draw_curve(tile, plane, &points, true, c, *kind)?;
+            *center = None;
+            *cursor = None;
+        }
+        Ok(())
+    }
+
+    fn handle_arc(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Arc { start, end, cursor } = &mut self.state else {
+            unreachable!("dispatched on state")
+        };
+        let bulge = |a: Point3, b: Point3, plane: &Plane, p: Point3| {
+            let side = plane.normal().cross(b - a).normalized().ok()?;
+            Some((p - (a + (b - a) * 0.5)).dot(side))
+        };
+        let mut sagitta = None;
+        match input {
+            Input::Hover(ray) => match start {
+                Some((a, plane, _)) => {
+                    let anchor = if end.is_some() { None } else { Some(*a) };
+                    let next = next_point(scene, ray, anchor, plane, None, aperture);
+                    *cursor = next.map(|n| n.0);
+                    self.preview.snap = next.and_then(|n| n.1);
+                }
+                None => self.preview.snap = start_snap(scene, ray, aperture),
+            },
+            Input::Click(ray) => match (&*start, *end) {
+                (None, _) => *start = first_point(scene, ray, aperture),
+                (Some((a, plane, _)), None) => {
+                    if let Some((p, _)) = next_point(scene, ray, Some(*a), plane, None, aperture)
+                        && (p - *a).length() >= MIN_LEN
+                    {
+                        *end = Some(p);
+                    }
+                }
+                (Some((a, plane, _)), Some(b)) => {
+                    if let Some((p, _)) = next_point(scene, ray, None, plane, None, aperture) {
+                        sagitta = bulge(*a, b, plane, p);
+                    }
+                }
+            },
+            Input::Typed(text) => {
+                let (Some((a, plane, _)), Some(b)) = (&*start, *end) else {
+                    return Err(needs("klik dua ujung busur dulu"));
+                };
+                let Some(Vcb::One(s)) = vcb::parse(&text) else {
+                    return Err(needs("busur butuh satu tinggi lengkung"));
+                };
+                // Typed heights go to the cursor's side, as in the preview.
+                let side = cursor
+                    .and_then(|p| bulge(*a, b, plane, p))
+                    .filter(|v| *v < 0.0)
+                    .map_or(1.0, |_| -1.0);
+                sagitta = Some(s * side);
+            }
+            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        if let (Some(s), Some((a, plane, tile)), Some(b)) = (sagitta, *start, *end)
+            && let Some((points, center)) = arc_points(a, b, s, &plane)
+        {
+            scene.draw_curve(tile, plane, &points, false, center, SketchCurveKind::Circle)?;
+            *start = None;
+            *end = None;
+            *cursor = None;
+        }
+        Ok(())
+    }
+
+    fn handle_offset(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
+        let aperture = self.aperture;
+        let State::Offset {
+            armed,
+            cursor,
+            hover,
+        } = &mut self.state
+        else {
+            unreachable!("dispatched on state")
+        };
+        // Signed distance towards the cursor: outward when it is outside.
+        let toward = |a: &Armed, p: Point3| {
+            let plane = Plane::from_point_normal(a.anchor, a.normal).ok()?;
+            let d = ring_distance(p, &a.outline);
+            Some(if inside_ring(p, &a.outline, &plane) {
+                -d
+            } else {
+                d
+            })
+        };
+        let mut distance = None;
+        match input {
+            Input::Hover(ray) => match armed {
+                Some(a) => {
+                    let plane = Plane::from_point_normal(a.anchor, a.normal).ok();
+                    *cursor = plane.and_then(|pl| ray_on_plane(&ray, &pl));
+                }
+                None => {
+                    self.preview.snap = scene.snap(&query(ray, aperture));
+                    *hover = Self::arm(scene, ray).map_or_else(Vec::new, |a| ring(&a.outline));
+                }
+            },
+            Input::Click(ray) => match armed {
+                None => {
+                    *armed = Self::arm(scene, ray);
+                    hover.clear();
+                }
+                Some(a) => {
+                    let plane = Plane::from_point_normal(a.anchor, a.normal).ok();
+                    let p = plane.and_then(|pl| ray_on_plane(&ray, &pl));
+                    distance = p.and_then(|p| toward(a, p));
+                }
+            },
+            Input::Typed(text) => {
+                let Some(a) = armed else {
+                    return Err(needs("klik region atau face dulu"));
+                };
+                let Some(Vcb::One(d)) = vcb::parse(&text) else {
+                    return Err(needs("offset butuh satu jarak"));
+                };
+                // A plain number goes the way the cursor is; a sign flips that.
+                let side = cursor
+                    .and_then(|p| toward(a, p))
+                    .filter(|v| *v < 0.0)
+                    .map_or(1.0, |_| -1.0);
+                distance = Some(d * side);
+            }
+            Input::LockAxis(_) | Input::Cancel | Input::ToggleCopy => {}
+        }
+        if let (Some(d), Some(a)) = (distance, armed.as_ref())
+            && d.abs() >= MIN_LEN
+        {
+            let tile = match a.target {
+                Target::Solid { tile, .. } | Target::Region { tile, .. } => tile,
+            };
+            let plane = Plane::from_point_normal(a.anchor, a.normal)
+                .map_err(|_| needs("bidang tidak sah"))?;
+            scene.offset(tile, plane, a.anchor, d)?;
+            *armed = None;
+            *cursor = None;
+        }
+        Ok(())
+    }
+
     fn handle_erase(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
         let State::Erase { hover } = &mut self.state else {
@@ -1181,6 +1555,40 @@ impl Tool {
                 _ => Vec::new(),
             },
             State::Erase { hover } => hover.clone(),
+            State::Round {
+                sides,
+                center,
+                cursor,
+                ..
+            } => match (center, cursor) {
+                (Some((c, plane, _)), Some(p)) => ring(&round_points(
+                    *c,
+                    plane,
+                    (*p - *c).length(),
+                    *sides,
+                    *cursor,
+                )),
+                _ => Vec::new(),
+            },
+            State::Arc { start, end, cursor } => match (start, end, cursor) {
+                (Some((a, _, _)), None, Some(p)) => vec![(*a, *p)],
+                (Some((a, plane, _)), Some(b), Some(p)) => plane
+                    .normal()
+                    .cross(*b - *a)
+                    .normalized()
+                    .ok()
+                    .and_then(|side| {
+                        arc_points(*a, *b, (*p - (*a + (*b - *a) * 0.5)).dot(side), plane)
+                    })
+                    .map_or_else(
+                        || vec![(*a, *b)],
+                        |(pts, _)| pts.windows(2).map(|w| (w[0], w[1])).collect(),
+                    ),
+                _ => Vec::new(),
+            },
+            State::Offset { armed, hover, .. } => armed
+                .as_ref()
+                .map_or_else(|| hover.clone(), |a| ring(&a.outline)),
             State::Rotate { turning, hover, .. } => match turning {
                 None => hover.clone(),
                 Some(t) => rotation_about(t.center, t.axis, t.angle).map_or_else(

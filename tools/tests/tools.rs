@@ -687,3 +687,136 @@ fn scale_by_typing_and_by_dragging() {
     let ratio = (hi[0] - lo[0]) / 5.0;
     assert!(((hi[2] - lo[2]) / 3.0 - ratio).abs() < 1e-6, "uniform");
 }
+
+fn sketch_points(s: &Scene) -> Vec<Point3> {
+    let doc = s.project().tiles.values().next().unwrap();
+    doc.sketch_ids()
+        .iter()
+        .filter_map(|i| doc.sketch(*i))
+        .flat_map(|k| {
+            k.vertices()
+                .values()
+                .map(|v| v.position)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn circle_and_polygon_with_typed_sizes() {
+    let mut s = scene();
+    let mut c = Tool::circle(APERTURE);
+    click(&mut c, &mut s, [20.0, 20.0, 0.0]);
+    assert!(c.busy());
+    hover(&mut c, &mut s, [23.0, 20.0, 0.0]);
+    assert_eq!(c.preview().lines.len(), 48, "the preview shows the circle");
+    typed(&mut c, &mut s, "2").unwrap();
+    assert!(!c.busy());
+    let pts = sketch_points(&s);
+    assert_eq!(pts.len(), 48);
+    for p in &pts {
+        let r = (p.x - 20.0).hypot(p.y - 20.0);
+        assert!((r - 2.0).abs() <= MM, "{p:?}");
+    }
+    assert_eq!(edges(&s), 48);
+    // One undo step, and it extrudes.
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [20.0, 20.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    assert_eq!(bounds(&s).len(), 1);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(edges(&s), 0);
+
+    let mut g = Tool::polygon(APERTURE);
+    assert!(typed(&mut g, &mut s, "2s").is_err(), "fewer than 3 sides");
+    typed(&mut g, &mut s, "8s").unwrap();
+    click(&mut g, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut g, &mut s, [23.0, 20.0, 0.0]);
+    assert!(!g.busy());
+    assert_eq!(edges(&s), 8);
+
+    let mut c = Tool::circle(APERTURE);
+    assert!(
+        typed(&mut c, &mut s, "12s").is_err(),
+        "a circle has at least 24"
+    );
+    typed(&mut c, &mut s, "24s").unwrap();
+}
+
+#[test]
+fn arc_by_clicks_and_typed_height() {
+    let mut s = scene();
+    let mut a = Tool::arc(APERTURE);
+    click(&mut a, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [26.0, 20.0, 0.0]);
+    assert!(a.busy());
+    hover(&mut a, &mut s, [23.0, 22.0, 0.0]);
+    assert!(a.preview().lines.len() >= 4, "the preview shows the arc");
+    typed(&mut a, &mut s, "3").unwrap();
+    assert!(!a.busy());
+    // A half circle: radius 3 about (23, 20), on the side of the cursor.
+    let pts = sketch_points(&s);
+    assert!(pts.len() >= 5);
+    for p in &pts {
+        let r = (p.x - 23.0).hypot(p.y - 20.0);
+        assert!((r - 3.0).abs() <= MM, "{p:?}");
+        assert!(p.y >= 20.0 - MM, "{p:?}");
+        assert!(p.z.abs() <= MM);
+    }
+    assert!(
+        pts.iter().any(|p| (p.y - 23.0).abs() <= MM),
+        "reaches the apex: {pts:?}"
+    );
+    s.undo().unwrap();
+    assert_eq!(edges(&s), 0, "one undo step");
+
+    // The other side, by mouse.
+    click(&mut a, &mut s, [20.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [26.0, 20.0, 0.0]);
+    click(&mut a, &mut s, [23.0, 18.0, 0.0]);
+    assert!(!a.busy());
+    assert!(sketch_points(&s).iter().all(|p| p.y <= 20.0 + MM));
+}
+
+#[test]
+fn offset_towards_the_cursor_on_regions_and_faces() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let mut f = Tool::offset(APERTURE);
+    click(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    assert!(f.busy());
+    // Inside, by typing: the rectangle at (10, 10) of 5 x 4 gains a ring inside.
+    hover(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut f, &mut s, "1").unwrap();
+    assert!(!f.busy());
+    assert_eq!(edges(&s), 8);
+    let pts = sketch_points(&s);
+    assert!(
+        pts.iter()
+            .any(|p| (p.x - 11.0).abs() <= MM && (p.y - 11.0).abs() <= MM),
+        "{pts:?}"
+    );
+    s.undo().unwrap();
+
+    // Outside, by mouse.
+    click(&mut f, &mut s, [12.5, 12.0, 0.0]);
+    click(&mut f, &mut s, [12.5, 16.0, 0.0]);
+    assert!(!f.busy());
+    assert_eq!(edges(&s), 8);
+    let top = sketch_points(&s)
+        .iter()
+        .map(|p| p.y)
+        .fold(f64::MIN, f64::max);
+    assert!((top - 16.0).abs() <= MM, "{top}");
+    s.undo().unwrap();
+
+    // On a solid's face: the inner loop splits it.
+    let mut p = Tool::push_pull(APERTURE);
+    click(&mut p, &mut s, [12.5, 12.0, 0.0]);
+    typed(&mut p, &mut s, "3").unwrap();
+    click(&mut f, &mut s, [12.5, 12.0, 3.0]);
+    hover(&mut f, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut f, &mut s, "1").unwrap();
+    assert_eq!(faces_where(&s, |p| (p.z - 3.0).abs() <= MM), 2);
+}

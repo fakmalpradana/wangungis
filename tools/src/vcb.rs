@@ -4,7 +4,7 @@
 //! `5;4` or `5x4` for two dimensions, an optional unit `mm`, `cm` or `m`
 //! (default m) per value, and a sign for the opposite direction.
 //! After a copy: `x5`, `5x`, `*5` or `5*` for five copies, `/5` or `5/` for five
-//! copies spaced evenly up to the copy just made.
+//! copies spaced evenly up to the copy just made. `8s` for eight sides.
 
 use std::num::NonZeroU32;
 
@@ -17,6 +17,8 @@ pub enum Vcb {
     Copies(NonZeroU32),
     /// Copies filling the distance to the first.
     Divide(NonZeroU32),
+    /// Sides of a circle or polygon.
+    Sides(u32),
 }
 
 /// More copies than this in one go is a typing error, not a model.
@@ -69,6 +71,9 @@ pub fn parse(text: &str) -> Option<Vcb> {
     if let Some(v) = array(&lower) {
         return Some(v);
     }
+    if let Some(n) = lower.trim().strip_suffix('s') {
+        return count(n).map(|n| Vcb::Sides(n.get()));
+    }
     let parts: Vec<&str> = lower.split([';', 'x']).collect();
     match parts[..] {
         [a] => Some(Vcb::One(length(a)?)),
@@ -80,6 +85,15 @@ pub fn parse(text: &str) -> Option<Vcb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sides() {
+        assert_eq!(parse("8s"), Some(Vcb::Sides(8)));
+        assert_eq!(parse(" 48S "), Some(Vcb::Sides(48)));
+        for t in ["s", "0s", "-3s", "2,5s", "s8"] {
+            assert_eq!(parse(t), None, "{t}");
+        }
+    }
 
     #[test]
     fn array_counts() {

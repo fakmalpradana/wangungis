@@ -495,7 +495,17 @@ impl App {
             K::E if self.typed.is_empty() => self.switch_tool(Tool::eraser),
             K::Q if self.typed.is_empty() => self.switch_tool(Tool::rotate),
             K::S if self.typed.is_empty() => self.switch_tool(Tool::scale),
-            K::C if self.typed.is_empty() => self.feed(Input::ToggleCopy),
+            // C copies in the tools that can; everywhere else it is Circle.
+            K::C if self.typed.is_empty() => {
+                if self.tool.can_copy() {
+                    self.feed(Input::ToggleCopy);
+                } else {
+                    self.switch_tool(Tool::circle);
+                }
+            }
+            K::G if self.typed.is_empty() => self.switch_tool(Tool::polygon),
+            K::A if self.typed.is_empty() => self.switch_tool(Tool::arc),
+            K::F if self.typed.is_empty() => self.switch_tool(Tool::offset),
             _ => {}
         }
     }
@@ -678,7 +688,7 @@ fn snap_label(kind: SnapKind) -> &'static str {
 fn typed_accepts(typed: &str, ch: char) -> bool {
     match ch {
         '0'..='9' | '.' | ',' | ';' | '-' | '+' | 'x' | 'X' | '*' | '/' => true,
-        'm' | 'M' | 'c' | 'C' | ' ' => !typed.is_empty(),
+        'm' | 'M' | 'c' | 'C' | 's' | 'S' | ' ' => !typed.is_empty(),
         _ => false,
     }
 }
@@ -799,7 +809,7 @@ impl App {
         }
         self.handle_keys(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("File:");
                 let field = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -817,7 +827,11 @@ impl App {
                     ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
                     ("Garis (L)", Tool::line),
                     ("Persegi (R)", Tool::rectangle),
+                    ("Lingkaran (C)", Tool::circle),
+                    ("Poligon (G)", Tool::polygon),
+                    ("Busur (A)", Tool::arc),
                     ("Push/Pull (P)", Tool::push_pull),
+                    ("Offset (F)", Tool::offset),
                     ("Pindah (M)", Tool::move_tool),
                     ("Putar (Q)", Tool::rotate),
                     ("Skala (S)", Tool::scale),

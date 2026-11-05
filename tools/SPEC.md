@@ -13,11 +13,13 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `movable_center(&Movable)`: pusat batas benda, titik acuan Skala.
 - `transform(&Movable, &Transform)`, `copy(&Movable, &step, count)`, `respace_copy(&Movable, &step, count)`: transform dalam koordinat lokal proyek, satu langkah undo. Hasil tetap di tile asal; melewati 1,5 km dari pusat tile atau batas proyek ditolak sebelum dokumen berubah. Pengecualian: gambar yang disalin keluar bidangnya dicatat satu langkah per salinan.
 - `erasable_at(&Hit) -> Option<Erasable>`, `erasable_lines`, `erase`: garis gambar (bebas atau pembagi face) hilang sendiri, dan dua face yang dibaginya menyatu; tepi asli solid menghapus seluruh objek puncak. Face dan sudut tidak bisa dihapus.
+- `draw_curve(tile, plane, points, closed, center, kind)`: lingkaran, poligon, atau busur sebagai satu kurva Hew dan satu langkah undo.
+- `offset(tile, plane, at, distance)`: offset region atau face yang memuat `at`; positif ke luar.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
 - `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
 
 ## Tool (`tool`, `vcb`)
-Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, push_pull, move_tool, rotate, scale, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
+Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
 - Input: `Hover(ray)`, `Click(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `Cancel`, `ToggleCopy`.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
@@ -30,6 +32,9 @@ Perilaku:
 - **Rectangle:** dua klik, atau klik lalu ketik ukuran. Tanpa inference sumbu dari sudut pertama, karena itu menghapus luasnya. Ukuran ketikan mengikuti kuadran kursor. Luas nol tidak menggambar dan gesture tetap terbuka.
 - **Push/Pull:** klik region atau face, lalu klik atau ketik jarak. Region dipilih lewat snap sempit, face lewat pick, supaya klik tepat di tepi tetap kena; yang lebih dekat menang. Pratinjau berupa garis tepi (ponytail: pratinjau solid menyusul).
 - **Move:** klik benda, lalu klik tujuan atau ketik jarak searah kursor. `ToggleCopy` membuat langkah berikutnya menyalin, lalu kembali ke memindah (`copying()`). Tepat setelah menyalin, `x5` membuat lima salinan sejarak salinan pertama, dan `/5` membuat lima salinan yang mengisi jarak itu; angka baru menggantikan array sebelumnya, dan semuanya tetap satu langkah undo. Benda yang dipindah tidak bisa snap ke dirinya sendiri. Tanpa snap, titik bergerak di bidang horizontal melalui titik dasar, atau di sumbu terkunci.
+- **Circle, Polygon:** klik pusat, lalu klik atau ketik jari-jari. `8s` mengubah jumlah sisi kapan saja; lingkaran minimal 24, bawaan 48; poligon minimal 3, bawaan 6.
+- **Arc:** klik dua ujung, lalu klik atau ketik tinggi lengkung, ke sisi kursor.
+- **Offset:** klik region atau face, lalu klik atau ketik jarak, ke arah kursor; angka negatif membalik arah.
 - **Rotate:** klik benda (titik itu jadi poros), klik arah nol, lalu klik atau ketik sudut dalam derajat. Sumbu Z kecuali dipilih lewat panah. Sudut menempel ke kelipatan 15° bila dalam 1,5°. Menyalin dan array seperti Move, jadi `x5` membuat array melingkar.
 - **Scale:** klik benda, lalu gerakkan kursor menjauh atau mendekati pusatnya dan klik, atau ketik faktor. Selalu seragam, terhadap pusat benda. Faktor harus positif.
 - **Eraser:** arahkan ke tepi; yang akan hilang menyala oranye, klik menghapusnya sebagai satu langkah undo.

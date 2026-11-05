@@ -685,14 +685,30 @@ impl Scene {
             local.push((offset(*a, c), offset(*b, c)));
         }
         let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        self.run_draft(key, plane, "draw", |sk| {
+            let mut closed = false;
+            for (a, b) in &local {
+                closed |= !sk.add_segment(*a, *b)?.regions_created.is_empty();
+            }
+            Ok(closed)
+        })
+    }
+
+    /// One draft on tile `key` as one undo step. `plane` is tile-local; `edit`
+    /// answers whether a region closed.
+    fn run_draft(
+        &mut self,
+        key: TileKey,
+        plane: Plane,
+        label: &str,
+        edit: impl FnOnce(&mut kernel::Sketch) -> Result<bool, kernel::SketchError>,
+    ) -> Result<Drawn, EditError> {
         let existed = self.project.tiles.contains_key(&key);
         let doc = self.project.tile_mut(key)?;
         let objects = doc.drawable_objects_on_plane(plane, None);
         let mut closed = false;
-        let drafted = doc.draft(plane, None, &objects, "draw", |sk| {
-            for (a, b) in &local {
-                closed |= !sk.add_segment(*a, *b)?.regions_created.is_empty();
-            }
+        let drafted = doc.draft(plane, None, &objects, label, |sk| {
+            closed = edit(sk)?;
             Ok(())
         });
         let report = match drafted {
@@ -713,6 +729,84 @@ impl Scene {
             tile: key,
             sketch: report.sketches.last().copied(),
             closed,
+        })
+    }
+
+    /// Draws a circle, polygon or arc (`points`, project-local, in order; closed
+    /// back to the first when `closed`) on the circle at `center`, as one curve
+    /// and one undo step.
+    pub fn draw_curve(
+        &mut self,
+        tile: TileKey,
+        plane: Plane,
+        points: &[Point3],
+        closed: bool,
+        center: Point3,
+        kind: kernel::SketchCurveKind,
+    ) -> Result<Drawn, EditError> {
+        let c = tile.center();
+        let radius = (points.first().copied().unwrap_or(center) - center).length();
+        let mut local = Vec::with_capacity(points.len());
+        for p in points {
+            check_local([p.x, p.y, p.z]).map_err(|_| EditError::OutOfProject)?;
+            let reach_m = (p.x - c[0]).hypot(p.y - c[1]);
+            if reach_m > KERNEL_FRAME_BOUND_M {
+                return Err(EditError::OutOfTile { tile, reach_m });
+            }
+            local.push(offset(*p, c));
+        }
+        let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        let geom = kernel::CurveGeom {
+            center: offset(center, c),
+            radius,
+        };
+        self.run_draft(tile, plane, "curve", |sk| {
+            sk.begin_curve_with_kind(geom, kind)?;
+            let mut made = false;
+            let n = local.len();
+            let spans = if closed { n } else { n.saturating_sub(1) };
+            let mut result = Ok(());
+            for k in 0..spans {
+                match sk.add_segment(local[k], local[(k + 1) % n]) {
+                    Ok(added) => made |= !added.regions_created.is_empty(),
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+            sk.end_curve();
+            result.map(|()| made)
+        })
+    }
+
+    /// Offsets the region or face holding `at` by `distance`, as one undo step.
+    /// Positive is outward. Project-local.
+    pub fn offset(
+        &mut self,
+        tile: TileKey,
+        plane: Plane,
+        at: Point3,
+        distance: f64,
+    ) -> Result<Drawn, EditError> {
+        Self::check_distance(distance)?;
+        let c = tile.center();
+        let plane = shifted_plane(plane, c).map_err(kernel_err)?;
+        let at = offset(at, c);
+        let at = at - plane.normal() * plane.signed_distance(at);
+        self.run_draft(tile, plane, "offset", |sk| {
+            let mut best = None;
+            for (id, r) in sk.regions().iter() {
+                if !r.faceless && sk.region_contains_point(id, at)? {
+                    let area = sk.region_area(id)?;
+                    if best.is_none_or(|(_, b)| area < b) {
+                        best = Some((id, area));
+                    }
+                }
+            }
+            let (region, _) = best.ok_or(kernel::SketchError::UnknownRegion)?;
+            sk.offset_region(region, distance)?;
+            Ok(true)
         })
     }
 
