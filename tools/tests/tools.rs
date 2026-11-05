@@ -1646,3 +1646,101 @@ fn a_line_runs_parallel_to_an_edge_of_a_turned_instance() {
         "{dir:?}"
     );
 }
+
+fn has_box(s: &Scene, lo: [f64; 3], hi: [f64; 3]) {
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() <= MM);
+    let all = bounds(s);
+    assert!(
+        all.iter().any(|(l, h)| near(*l, lo) && near(*h, hi)),
+        "no box {lo:?} to {hi:?} in {all:?}"
+    );
+}
+
+/// With Ctrl the face leaves as a new solid, and the old one does not change.
+#[test]
+fn push_pull_keeping_the_solid() {
+    let mut s = scene();
+    box_at_10(&mut s);
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE / 10.0);
+    p.handle(&mut s, Input::ToggleCopy).unwrap();
+    assert!(p.keeping());
+
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "2").unwrap();
+    let boxes = bounds(&s);
+    assert_eq!(boxes.len(), 2, "{boxes:?}");
+    has_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 3.0]);
+    has_box(&s, [10.0, 10.0, 3.0], [15.0, 14.0, 5.0]);
+    assert!(p.keeping(), "stays on");
+    s.undo().unwrap();
+    assert_eq!(s.project().save(), saved, "one undo step");
+
+    // Into the solid works too: they may overlap.
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "-1").unwrap();
+    has_box(&s, [10.0, 10.0, 2.0], [15.0, 14.0, 3.0]);
+    s.undo().unwrap();
+
+    // Off again: the ordinary push.
+    p.handle(&mut s, Input::ToggleCopy).unwrap();
+    click(&mut p, &mut s, [12.5, 12.0, 3.0]);
+    typed(&mut p, &mut s, "1").unwrap();
+    assert_box(&s, [10.0, 10.0, 0.0], [15.0, 14.0, 4.0]);
+}
+
+/// A sketch region already becomes a new solid: asking for one more is refused.
+#[test]
+fn push_pull_keeping_refuses_a_region_and_leaves_it() {
+    let mut s = scene();
+    typed_rectangle(&mut s);
+    let saved = s.project().save();
+    let mut p = Tool::push_pull(APERTURE);
+    p.handle(&mut s, Input::ToggleCopy).unwrap();
+    click(&mut p, &mut s, [12.5, 12.0, 0.0]);
+    assert!(typed(&mut p, &mut s, "3").is_err());
+    assert!(p.busy(), "the gesture stays open");
+    assert_eq!(s.project().save(), saved);
+}
+
+proptest! {
+    /// Any face, any way, any distance: both solids stay sound, the old one is
+    /// untouched, and undo gives the same file back.
+    #[test]
+    fn keeping_the_solid_keeps_it(
+        w in 1.0f64..20.0,
+        d in 1.0f64..20.0,
+        h in 1.0f64..10.0,
+        side in any::<bool>(),
+        distance in prop_oneof![-5.0f64..-0.01, 0.01f64..5.0],
+    ) {
+        let mut s = scene();
+        let mut r = Tool::rectangle(APERTURE);
+        click(&mut r, &mut s, [10.0, 10.0, 0.0]);
+        hover(&mut r, &mut s, [11.0, 11.0, 0.0]);
+        typed(&mut r, &mut s, &format!("{w};{d}")).unwrap();
+        let mut p = Tool::push_pull(APERTURE / 100.0);
+        click(&mut p, &mut s, [10.0 + w / 2.0, 10.0 + d / 2.0, 0.0]);
+        typed(&mut p, &mut s, &format!("{h}")).unwrap();
+        let before = bounds(&s);
+        let saved = s.project().save();
+
+        p.handle(&mut s, Input::ToggleCopy).unwrap();
+        // The top, or the wall facing the test's camera.
+        let at = if side {
+            [10.0 + w / 2.0, 10.0, h / 2.0]
+        } else {
+            [10.0 + w / 2.0, 10.0 + d / 2.0, h]
+        };
+        click(&mut p, &mut s, at);
+        prop_assert!(p.busy());
+        typed(&mut p, &mut s, &format!("{distance}")).unwrap();
+
+        let after = bounds(&s);
+        prop_assert_eq!(after.len(), 2);
+        prop_assert!(after.contains(&before[0]), "{:?} lost {:?}", after, before[0]);
+        prop_assert!(s.project().tiles.values().all(|d| d.health_report(None).rows.is_empty()));
+        s.undo().unwrap();
+        prop_assert_eq!(s.project().save(), saved);
+    }
+}

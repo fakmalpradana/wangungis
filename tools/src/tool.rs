@@ -96,6 +96,8 @@ enum State {
         armed: Option<Armed>,
         /// Outline of what a click would pick.
         hover: Vec<(Point3, Point3)>,
+        /// The face goes out as a new solid, and the old one stays.
+        keep: bool,
     },
     Move {
         moving: Option<Moving>,
@@ -810,6 +812,7 @@ impl Tool {
             State::PushPull {
                 armed: None,
                 hover: Vec::new(),
+                keep: false,
             },
             aperture,
         )
@@ -947,7 +950,14 @@ impl Tool {
             }
             State::Rectangle { first: None, .. } => "Klik sudut pertama.",
             State::Rectangle { .. } => "Klik sudut lawan atau ketik ukuran, mis. 5;4.",
-            State::PushPull { armed: None, .. } => "Klik region atau face.",
+            State::PushPull {
+                armed: None,
+                keep: true,
+                ..
+            } => "Klik face: menjadi solid baru, solid asal tetap. Ctrl atau C membatalkan.",
+            State::PushPull { armed: None, .. } => {
+                "Klik region atau face. Ctrl atau C: buat solid baru dari face."
+            }
             State::PushPull { .. } => "Klik tinggi atau ketik jarak.",
             State::Move { moving: None, .. } => "Klik benda. C: salin.",
             State::Move { .. } => "Klik tujuan atau ketik jarak. Panah: kunci sumbu.",
@@ -979,7 +989,10 @@ impl Tool {
     /// Whether a copying toggle means anything to this tool, so C can mean
     /// Circle everywhere else.
     pub fn can_copy(&self) -> bool {
-        matches!(self.state, State::Move { .. } | State::Rotate { .. })
+        matches!(
+            self.state,
+            State::Move { .. } | State::Rotate { .. } | State::PushPull { .. }
+        )
     }
 
     pub fn eraser(aperture: f64) -> Self {
@@ -992,6 +1005,11 @@ impl Tool {
             self.state,
             State::Move { copy: true, .. } | State::Rotate { copy: true, .. }
         )
+    }
+
+    /// Whether Push/Pull leaves the solid and makes a new one.
+    pub fn keeping(&self) -> bool {
+        matches!(self.state, State::PushPull { keep: true, .. })
     }
 
     /// Whether `other` is the same tool, whatever state each is in.
@@ -2051,7 +2069,7 @@ impl Tool {
 
     fn handle_push_pull(&mut self, scene: &mut Scene, input: Input) -> Result<(), EditError> {
         let aperture = self.aperture;
-        let State::PushPull { armed, hover } = &mut self.state else {
+        let State::PushPull { armed, hover, keep } = &mut self.state else {
             unreachable!("dispatched on state")
         };
         match input {
@@ -2073,7 +2091,7 @@ impl Tool {
                 }
                 Some(a) => {
                     if a.distance.abs() >= MIN_LEN {
-                        Self::commit_push_pull(scene, a.target, a.distance)?;
+                        Self::commit_push_pull(scene, a.target, a.distance, *keep)?;
                         *armed = None;
                     }
                 }
@@ -2088,14 +2106,11 @@ impl Tool {
                 if d.abs() < MIN_LEN {
                     return Err(needs("jarak tidak boleh nol"));
                 }
-                Self::commit_push_pull(scene, a.target, d)?;
+                Self::commit_push_pull(scene, a.target, d, *keep)?;
                 *armed = None;
             }
-            Input::ClickAdd(_)
-            | Input::LockAxis(_)
-            | Input::LockNormal
-            | Input::Cancel
-            | Input::ToggleCopy => {}
+            Input::ToggleCopy => *keep = !*keep,
+            Input::ClickAdd(_) | Input::LockAxis(_) | Input::LockNormal | Input::Cancel => {}
         }
         Ok(())
     }
@@ -2143,13 +2158,24 @@ impl Tool {
         })
     }
 
-    fn commit_push_pull(scene: &mut Scene, target: Target, d: f64) -> Result<(), EditError> {
+    fn commit_push_pull(
+        scene: &mut Scene,
+        target: Target,
+        d: f64,
+        keep: bool,
+    ) -> Result<(), EditError> {
         match target {
+            Target::Region { .. } if keep => Err(needs(
+                "solid baru hanya dari face solid; region sudah menjadi solid baru tanpa Ctrl",
+            )),
             Target::Region {
                 tile,
                 sketch,
                 region,
             } => scene.extrude(tile, sketch, region, d).map(|_| ()),
+            Target::Solid { tile, source } if keep => {
+                scene.extrude_face_new(tile, source, d).map(|_| ())
+            }
             Target::Solid { tile, source } => scene.push_pull(tile, source, d),
         }
     }
@@ -2251,7 +2277,7 @@ impl Tool {
                     lines
                 }
             },
-            State::PushPull { armed, hover } => armed.as_ref().map_or_else(
+            State::PushPull { armed, hover, .. } => armed.as_ref().map_or_else(
                 || hover.clone(),
                 |a| {
                     let moved: Vec<Point3> = a

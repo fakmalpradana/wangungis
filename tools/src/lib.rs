@@ -1520,6 +1520,30 @@ impl Scene {
         Ok(())
     }
 
+    /// Extrudes a solid's face into a new solid, leaving this one as it is. The
+    /// two share the face, which Hew's freely overlapping solids allow.
+    pub fn extrude_face_new(
+        &mut self,
+        key: TileKey,
+        source: SnapSource,
+        distance: f64,
+    ) -> Result<ObjectId, EditError> {
+        Self::check_distance(distance)?;
+        if source.instance.is_some() {
+            return Err(EditError::Unsupported("mengedit isi komponen"));
+        }
+        let inference::ElementRef::Face(face) = source.element else {
+            return Err(EditError::Unsupported("push/pull selain pada face"));
+        };
+        let doc = self.project.tile_mut(key)?;
+        let (object, _) = doc
+            .extrude_face_as_new_object(source.object, face, distance)
+            .map_err(kernel_err)?;
+        self.guard_reach(key)?;
+        self.record(key);
+        Ok(object)
+    }
+
     /// Undoes the latest edit, in whichever tile it happened.
     pub fn undo(&mut self) -> Result<Option<TileKey>, EditError> {
         let Some((key, steps)) = self.undo.last().copied() else {

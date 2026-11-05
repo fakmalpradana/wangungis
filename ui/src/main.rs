@@ -1157,6 +1157,10 @@ impl App {
                     ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
                     ui.separator();
                 }
+                if self.tool.keeping() {
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Solid baru");
+                    ui.separator();
+                }
                 if let Some(hit) = self.tool.preview().snap {
                     ui.label(snap_label(hit.snap.kind));
                     ui.separator();
