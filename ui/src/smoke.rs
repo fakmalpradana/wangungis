@@ -961,13 +961,27 @@ fn a_guide_is_seen_and_announced() {
         seen.truncate(12);
         seen
     };
-    assert!(
-        guide_pixels(&d) > 200,
-        "{} px; lines {:?}; colors {:?}",
-        guide_pixels(&d),
-        d.app.scene.guide_lines(),
-        top_colors()
-    );
+    let (seen, lines, colors) = (guide_pixels(&d), d.app.scene.guide_lines(), top_colors());
+    if seen <= 200 {
+        // Which overlay lines does this GPU draw in the app's own view?
+        let mut report = Vec::new();
+        for reach in [0.5, 2.0, 20.0, 100.0, 500.0] {
+            d.app.renderer.set_overlay(
+                &d.app.rs.device,
+                &[OverlayLines {
+                    color: GUIDE_COLOR,
+                    lines: vec![([4.5 - reach, 2.0, 0.0], [4.5 + reach, 2.0, 0.0])],
+                }],
+            );
+            d.app.render();
+            report.push((reach, guide_pixels(&d)));
+        }
+        panic!(
+            "{seen} px; lines {lines:?}; colors {colors:?}; by reach {report:?}; camera {:?} {:?}",
+            d.app.orbit.eye(),
+            d.app.orbit.distance
+        );
+    }
 }
 
 /// Uji asap step 19: a line straight out of a wall, by the arrow keys and by an
