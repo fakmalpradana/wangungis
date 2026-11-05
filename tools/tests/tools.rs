@@ -927,6 +927,8 @@ fn tape_measures_and_leaves_guides_that_snap() {
     hover(&mut t, &mut s, [12.5, 8.0, 0.0]);
     let m = t.measure().unwrap();
     assert!((m - 2.0).abs() < 0.05, "{m}");
+    assert!(typed(&mut t, &mut s, "0").is_err(), "zero says so");
+    assert!(t.busy());
     typed(&mut t, &mut s, "3").unwrap();
     assert!(!t.busy());
     let lines = s.guide_lines();

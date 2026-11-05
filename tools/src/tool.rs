@@ -1503,6 +1503,9 @@ impl Tool {
                 let Some(Vcb::One(len)) = vcb::parse(&text) else {
                     return Err(needs("pita ukur butuh satu jarak"));
                 };
+                if len.abs() < MIN_LEN {
+                    return Err(needs("jarak pita ukur tidak boleh nol"));
+                }
                 let dir = (c - *a)
                     .normalized()
                     .map_err(|_| needs("arahkan kursor dulu"))?;
