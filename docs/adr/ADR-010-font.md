@@ -46,3 +46,6 @@ Semua font berlisensi SIL Open Font License 1.1. OFL mengizinkan font dibundel d
 | RSS 8 detik setelah start, bahasa `ja` | - | 110-111 MB |
 
 Diukur 2026-11-25 di Mac pengembang, tiga kali bergantian. RSS tidak berubah karena byte font berada di biner yang dipetakan dan glyph baru dirasterisasi saat dipakai. Waktu sampai frame pertama tidak diukur dengan angka; jendela terbuka tanpa jeda yang terasa berbeda. Terlihat di jendela asli: menu bahasa menampilkan ke-16 nama, termasuk aksara CJK, Hangul, Arab tersambung, Thai, dan Devanagari.
+
+## Tambahan 2026-11-25: Arab di depan untuk bahasa Arab
+egui memecah teks menjadi run per font. Bila font Latin ada di depan, spasi dalam kalimat Arab diambil dari font itu, sehingga setiap kata menjadi run sendiri dan kata-kata tersusun kiri-ke-kanan, terbalik dari seharusnya. Untuk bahasa Arab, Noto Sans Arabic dipasang paling depan, sehingga satu kalimat Arab menjadi satu run yang dibentuk kanan-ke-kiri. Terlihat benar di jendela asli. Kalimat yang mencampur huruf Latin atau angka masih bisa tertukar, karena egui belum punya bidi.

@@ -4,7 +4,7 @@
 Teks layar dalam bahasa pilihan pengguna, tanpa dependensi baru selain `serde_json`. Satu bahasa aktif untuk seluruh proses. Tanpa mesin jamak, ICU, atau Fluent.
 
 ## API publik
-- `Lang`: Id, En, ZhHans, ZhHant, Ja, Ko, Ar, Es, PtBr, Fr, De, Ru, Tr, Vi, Th, Hi, dalam urutan itu. `Lang::ALL`, `code()` (`id`, `en`, `zh-Hans`, `zh-Hant`, `ja`, `ko`, `ar`, `es`, `pt-BR`, `fr`, `de`, `ru`, `tr`, `vi`, `th`, `hi`), `from_code()`, `native_name()`, `rtl()` (hanya Ar), `has_catalog()`.
+- `Lang`: Id, En, ZhHans, ZhHant, Ja, Ko, Ar, Es, PtBr, Fr, De, Ru, Tr, Vi, Th, Hi, dalam urutan itu. `Lang::ALL`, `code()` (`id`, `en`, `zh-Hans`, `zh-Hant`, `ja`, `ko`, `ar`, `es`, `pt-BR`, `fr`, `de`, `ru`, `tr`, `vi`, `th`, `hi`), `from_code()`, `native_name()`, `rtl()` (hanya Ar), `machine_draft()` (semua kecuali Id dan En).
 - `set(lang)`, `current()`: satu `AtomicU8`, bawaan Id.
 - `t(kunci) -> &'static str`: teks bahasa aktif.
 - `tf(kunci, &[&dyn Display]) -> String`: `t` dengan `{0}`, `{1}`, ... diganti menurut urutan argumen. Isi argumen tidak dibaca ulang sebagai penanda. Penanda tanpa argumen dibiarkan.

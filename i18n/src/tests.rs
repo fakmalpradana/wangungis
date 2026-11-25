@@ -179,11 +179,16 @@ fn t_and_tf_follow_the_language() {
 }
 
 #[test]
-fn a_language_without_a_catalog_falls_back_to_english_then_the_key() {
+fn every_language_reads_its_own_catalog_and_an_unknown_key_shows_the_key() {
+    // Every language has a full catalog now (checked above), so the English
+    // fallback is only reachable through a key that no catalog has.
     let _l = lang_lock();
     set(Lang::Ja);
     assert_eq!(current(), Lang::Ja);
-    assert_eq!(t("menu.file"), "File");
+    assert_ne!(t("menu.file"), "File");
+    for lang in Lang::ALL {
+        assert!(lang.source().is_some(), "{lang:?}");
+    }
     assert_eq!(t("no.such.key"), "no.such.key");
     assert_eq!(tf("no.such.key", &[&1]), "no.such.key");
     set(Lang::Id);
