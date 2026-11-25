@@ -14,6 +14,9 @@ Teks layar dalam bahasa pilihan pengguna, tanpa dependensi baru selain `serde_js
 - Saat ini hanya `id.json` (teks Indonesia apa adanya, sumber kebenaran urutan kunci) dan `en.json`. Empat belas bahasa lain jatuh ke fallback; menambah bahasa = menambah berkas dan satu baris di `Lang::source`.
 - Fallback: bahasa aktif, lalu `en`, lalu `id`, lalu kunci itu sendiri.
 
+## Font
+Glyph untuk semua bahasa datang dari font Noto yang dibundel di crate `ui` (ADR-010); crate ini tidak memuat font. Setiap karakter katalog dan `native_name()` harus punya glyph, dan tes di `ui/src/fonts.rs` memeriksanya terhadap semua berkas di `locales/`.
+
 ## Nama kunci
 Bertitik, huruf kecil, bahasa Inggris, dikelompokkan menurut tempat: `menu.*`, `toolbar.*`, `tool.hint.*`, `tool.lock.*`, `status.*`, `panel.*`, `dialog.*`, `error.*`, `cloud.*`, `view.*`, `snap.*`, `paint.*`, `outline.*`, `format.*`. Nama stabil, bukan teksnya. Tidak ada kunci yang dirakit dengan `format!`: setiap kunci muncul utuh sebagai literal di kode. Penanda memakai nomor `{0}`.
 
