@@ -1,0 +1,75 @@
+name: binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  # Only when this file changes, so the PR proves the workflow works.
+  pull_request:
+    paths: [".github/workflows/binaries.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+          - os: macos-15
+            name: macos-arm64
+          - os: windows-2025
+            name: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p wangungis --locked
+
+      # Fonts are embedded in the binary; the OFL requires its licence to travel with it.
+      # The commit is in the name so testers can report which build they ran.
+      # On a PR, github.sha is the merge commit, so take the branch head.
+      - name: Package
+        shell: bash
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          dir="wangungis-${SHA::7}-${{ matrix.name }}"
+          mkdir "$dir"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/wangungis.exe "$dir/"
+          else
+            cp target/release/wangungis "$dir/"
+          fi
+          cp LICENSE ui/fonts/OFL-*.txt "$dir/"
+          # tar keeps the executable bit, which artifact zips lose.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            archive="$dir.zip"
+            7z a "$archive" "$dir"
+          else
+            archive="$dir.tar.gz"
+            tar -czf "$archive" "$dir"
+          fi
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          echo "DIR=$dir" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DIR }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
+          retention-days: 30
