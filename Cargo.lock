@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "wangungis"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "inference",
@@ -2819,14 +2819,14 @@ dependencies = [
 
 [[package]]
 name = "wangungis-i18n"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "wangungis-io"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kernel",
  "mesh-export",
@@ -2837,7 +2837,7 @@ dependencies = [
 
 [[package]]
 name = "wangungis-pointcloud"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "las",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "wangungis-render"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "kernel",
@@ -2863,7 +2863,7 @@ dependencies = [
 
 [[package]]
 name = "wangungis-scene"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kernel",
  "proptest",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "wangungis-tools"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "inference",
  "kernel",
