@@ -89,7 +89,7 @@ Pembagian:
 | ponytail (kode minimal, reuse dulu) | semua implementasi, refactor, review | mengurangi test, validasi input, error handling, robust predicates, toleransi numerik, sandbox plugin, aksesibilitas UI |
 
 Tangga ponytail sebelum menulis kode: perlu ada? sudah ada di stdlib/dependensi/library terpilih? ada fitur platform? baru tulis versi paling kecil yang benar.
-Mode usulan (verifikasi setelah baca SKILL.md): ringan untuk `core-geometry`/`inference`, standar untuk fitur umum, agresif untuk boilerplate, wrapper I/O, glue UI.
+Mode usulan (verifikasi setelah baca SKILL.md): ringan untuk kode geometri dan snap (`tools`, `scene`, pembungkus Hew), standar untuk fitur umum, agresif untuk boilerplate, wrapper I/O, glue UI.
 Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi (`cargo tree`), waktu build CI, dan token per sesi per fase. `/ponytail-gain` hanya menampilkan median benchmark plugin, bukan ukuran repo ini. Ekspektasi realistis: `docs/research/skill.md`.
 
 ## 8. Alur setiap tugas
