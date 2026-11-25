@@ -7,6 +7,7 @@
 //! Usage: wangungis [file.hew | file.wangun]
 
 mod camera;
+mod fonts;
 mod icons;
 #[cfg(test)]
 mod smoke;
@@ -220,6 +221,8 @@ struct App {
     leaving: Option<Leaving>,
     /// The user answered: the window may close.
     closing: bool,
+    /// The CJK face follows the language: new fonts are installed on the next frame.
+    fonts_stale: bool,
     #[cfg(test)]
     view_rect: egui::Rect,
 }
@@ -235,6 +238,8 @@ impl App {
         if let Some(p) = &lang_file {
             wangungis_i18n::set(read_lang(p));
         }
+        cc.egui_ctx
+            .set_fonts(fonts::definitions(wangungis_i18n::current()));
         let mut app = Self::with_render_state(rs);
         app.lang_file = lang_file;
         app.autosave = default_autosave();
@@ -298,6 +303,7 @@ impl App {
             recovery: false,
             leaving: None,
             closing: false,
+            fonts_stale: false,
             #[cfg(test)]
             view_rect: egui::Rect::NOTHING,
         }
@@ -949,7 +955,9 @@ impl App {
             .paint
             .as_ref()
             .and_then(|p| PAINTS.iter().find(|(key, _)| t(key) == p.name).copied());
+        let face = fonts::cjk_face(wangungis_i18n::current());
         wangungis_i18n::set(lang);
+        self.fonts_stale |= fonts::cjk_face(lang) != face;
         if let Some(preset) = preset {
             self.paint = Some(ready_paint(named_paint(preset)));
         }
@@ -1865,6 +1873,10 @@ fn union_bounds(tiles: &[PlacedBounds]) -> Option<([f64; 3], [f64; 3])> {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if std::mem::take(&mut self.fonts_stale) {
+            ui.ctx()
+                .set_fonts(fonts::definitions(wangungis_i18n::current()));
+        }
         self.shell(ui);
     }
 }
