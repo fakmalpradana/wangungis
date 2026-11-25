@@ -11,6 +11,8 @@ cargo run --release -p wangungis
 
 Untuk membuka file: tambahkan `-- path/ke/file.hew`.
 
+Di Windows, ikuti [panduan uji beta](panduan-uji-beta.md). Laporan memakai [format umpan balik](format-umpan-balik.md).
+
 ## Kontrol
 | Aksi | Cara |
 |---|---|
@@ -91,7 +93,7 @@ Warna penanda snap: hijau titik ujung, sian titik tengah, merah tepi, biru face,
 
 
 ## Pengaman data
-Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin`. Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
+Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpan. Autosave berjalan tiap 60 detik ke `~/.wangungis/autosave.bin` (Windows: `%USERPROFILE%\.wangungis\autosave.bin`). Setelah crash, aplikasi menawarkan pemulihan saat dibuka lagi.
 
 ## Yang diketahui belum ada
 - Pratinjau Push/Pull berupa garis tepi, bukan solid.
