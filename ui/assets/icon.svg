@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- WangunGIS app icon. White tile, a W drawn as connected line strokes like the
+       Line tool: black strokes, the last one in the accent orange #F27300, and an
+       endpoint snap marker on the middle peak. -->
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="#FFFFFF"/>
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="none" stroke="#E6E6E6" stroke-width="8"/>
+  <polyline points="208,268 360,704 512,398 664,704" fill="none" stroke="#1A1A1A"
+            stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="664" y1="704" x2="816" y2="268" stroke="#F27300"
+        stroke-width="104" stroke-linecap="round"/>
+  <circle cx="512" cy="398" r="58" fill="#FFFFFF" stroke="#F27300" stroke-width="28"/>
+  <rect x="208" y="794" width="608" height="20" rx="10" fill="#1A1A1A"/>
+  <rect x="704" y="794" width="112" height="20" rx="10" fill="#F27300"/>
+</svg>
