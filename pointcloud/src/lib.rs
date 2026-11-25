@@ -87,22 +87,17 @@ pub enum ImportError {
 
 impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Las(e) => write!(f, "Berkas LAS tidak dapat dibaca atau rusak: {e}"),
-            Self::NoPoints => write!(f, "Berkas LAS tidak berisi titik."),
-            Self::Truncated { expected, got } => write!(
-                f,
-                "Data titik LAS terpotong: {got} dari {expected} titik. Salin ulang berkas sumber."
-            ),
-            Self::BadCoordinates => write!(f, "Berkas LAS memuat koordinat yang tidak valid."),
-            Self::Cancelled => write!(f, "Impor point cloud dibatalkan."),
-            Self::Io(e) => write!(f, "Berkas point cloud tidak dapat dibaca atau ditulis: {e}"),
-            Self::BadCache(_) => write!(f, "Cache point cloud rusak; impor ulang berkas LAS."),
-            Self::Panicked => write!(
-                f,
-                "Pembaca LAS berhenti secara tidak terduga; periksa berkas sumber."
-            ),
-        }
+        use wangungis_i18n::{t, tf};
+        f.write_str(&match self {
+            Self::Las(e) => tf("error.las_unreadable", &[e]),
+            Self::NoPoints => t("error.las_empty").into(),
+            Self::Truncated { expected, got } => tf("error.las_truncated", &[got, expected]),
+            Self::BadCoordinates => t("error.las_bad_coords").into(),
+            Self::Cancelled => t("error.import_cancelled").into(),
+            Self::Io(e) => tf("error.cloud_io", &[e]),
+            Self::BadCache(_) => t("error.cloud_cache").into(),
+            Self::Panicked => t("error.las_panicked").into(),
+        })
     }
 }
 

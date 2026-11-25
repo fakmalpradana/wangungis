@@ -8,6 +8,7 @@ use inference::{
 };
 use kernel::{NodeId, Plane, Point3, SketchCurveKind, SketchId, SketchRegionId, Transform, Vec3};
 use std::num::NonZeroU32;
+use wangungis_i18n::{t, tf};
 use wangungis_pointcloud::Slice;
 use wangungis_scene::project::TileKey;
 
@@ -339,9 +340,9 @@ impl Lock {
 
     fn describe(self) -> String {
         match self {
-            Lock::Axis(a) => format!("sumbu {}", axis_name(a)),
-            Lock::Normal(_) => "tegak lurus bidang".into(),
-            Lock::Angle { name, degrees, .. } => format!("{degrees}° dari {name}"),
+            Lock::Axis(a) => tf("tool.lock.axis", &[&axis_name(a)]),
+            Lock::Normal(_) => t("tool.lock.normal").into(),
+            Lock::Angle { name, degrees, .. } => tf("tool.lock.angle", &[&degrees, &name]),
         }
     }
 }
@@ -451,16 +452,16 @@ impl Chain {
     /// angle takes the other side. Typing again starts from the same direction.
     /// Needs the pointer to have moved since the last segment, to tell the side.
     fn aim(&mut self, degrees: f64) -> Result<(), EditError> {
-        let ray = self.ray.ok_or(needs("arahkan kursor dulu"))?;
+        let ray = self.ray.ok_or(needs("error.aim_first"))?;
         let (from, name) = match self.lock {
             Some(Lock::Axis(a)) => (a.unit(), axis_name(a)),
-            Some(Lock::Normal(n)) => (n, "tegak lurus bidang"),
+            Some(Lock::Normal(n)) => (n, t("tool.lock.normal")),
             Some(Lock::Angle { from, name, .. }) => (from, name),
             None => {
                 let name = if self.plane.normal().z.abs() > 0.999 {
                     "X"
                 } else {
-                    "horizontal"
+                    t("tool.lock.horizontal")
                 };
                 (plane_axes(&self.plane).0, name)
             }
@@ -976,7 +977,7 @@ fn ring_distance(p: Point3, ring: &[Point3]) -> f64 {
 /// A rotation of `angle` (rad) about the line through `center` along `axis`.
 fn rotation_about(center: Point3, axis: Vec3, angle: f64) -> Result<Transform, EditError> {
     let to = center - Point3::ORIGIN;
-    let spin = Transform::rotation(axis, angle).map_err(|_| needs("sumbu putar tidak sah"))?;
+    let spin = Transform::rotation(axis, angle).map_err(|_| needs("error.bad_rotation_axis"))?;
     Ok(Transform::translation(-to)
         .then(&spin)
         .then(&Transform::translation(to)))
@@ -1234,80 +1235,69 @@ impl Tool {
     /// What the tool waits for now, in words for the status bar.
     pub fn hint(&self) -> String {
         let s = match &self.state {
-            State::Select { .. } => "Klik benda untuk memilih. Shift + klik menambah.",
-            State::Line { chain: None } => "Klik titik awal.",
+            State::Select { .. } => t("tool.hint.select"),
+            State::Line { chain: None } => t("tool.hint.line_start"),
             State::Line { chain: Some(c) } => {
                 return match c.lock {
-                    Some(l) => format!(
-                        "Terkunci {}. Klik atau ketik panjang. {}",
-                        l.describe(),
-                        if matches!(l, Lock::Angle { .. }) {
-                            "Panah mengganti kunci."
-                        } else {
-                            "Panah yang sama melepas kunci."
-                        }
+                    Some(l) => tf(
+                        "tool.hint.line_locked",
+                        &[
+                            &l.describe(),
+                            &t(if matches!(l, Lock::Angle { .. }) {
+                                "tool.hint.lock_change"
+                            } else {
+                                "tool.hint.lock_release"
+                            }),
+                        ],
                     ),
-                    None => "Klik titik berikut atau ketik panjang. Panah kanan/kiri/atas: sumbu X/Y/Z, bawah: tegak lurus bidang. 30d: miring 30°. Esc: selesai.".into(),
+                    None => t("tool.hint.line_next").into(),
                 };
             }
-            State::Rectangle { first: None, .. } => "Klik sudut pertama.",
-            State::Rectangle { .. } => "Klik sudut lawan atau ketik ukuran, mis. 5;4.",
+            State::Rectangle { first: None, .. } => t("tool.hint.rect_first"),
+            State::Rectangle { .. } => t("tool.hint.rect_second"),
             State::CloudMove {
                 moving: Some(_), ..
-            } => {
-                "Klik tujuan: titik, tepi, face, sumbu, atau origin. Atau ketik jarak. Panah: kunci sumbu. Esc membatalkan."
-            }
+            } => t("tool.hint.cloud_move_dest"),
             State::CloudMove {
                 target: Some(_), ..
-            } => "Klik titik acuan, boleh di mana saja. Titik itu yang akan ditaruh di tujuan.",
-            State::CloudMove { .. } => {
-                "Klik sebuah titik pada awan. Titik itu yang akan ditaruh di tujuan."
-            }
-            State::CloudSlice { first: Some(_), .. } => {
-                "Klik sudut seberang. Tinggi kotak mengikuti seluruh awan."
-            }
+            } => t("tool.hint.cloud_move_ref"),
+            State::CloudMove { .. } => t("tool.hint.cloud_move_pick"),
+            State::CloudSlice { first: Some(_), .. } => t("tool.hint.cloud_slice_second"),
             State::CloudSlice {
                 holding: Some(_), ..
-            } => "Gerakkan sisi kotak, lalu klik. Esc membatalkan.",
-            State::CloudSlice { shown: Some(_), .. } => {
-                "Klik tanda di tengah sisi untuk menggesernya. Tampilkan semua ada di panel kanan."
-            }
-            State::CloudSlice { .. } => {
-                "Klik sudut pertama area yang ingin dilihat, paling mudah dari tampilan atas."
-            }
+            } => t("tool.hint.cloud_slice_hold"),
+            State::CloudSlice { shown: Some(_), .. } => t("tool.hint.cloud_slice_shown"),
+            State::CloudSlice { .. } => t("tool.hint.cloud_slice_first"),
             State::PushPull {
                 armed: None,
                 keep: true,
                 ..
-            } => "Klik face: menjadi solid baru, solid asal tetap. Ctrl atau C membatalkan.",
-            State::PushPull { armed: None, .. } => {
-                "Klik region atau face. Shift+klik: pilih beberapa. Ctrl atau C: buat solid baru dari face."
-            }
-            State::PushPull { .. } => "Klik tinggi atau ketik jarak. Shift+klik: tambah face lain.",
-            State::Move { moving: None, .. } => "Klik benda. C: salin.",
-            State::Move { .. } => "Klik tujuan atau ketik jarak. Panah: kunci sumbu.",
-            State::Rotate { turning: None, .. } => "Klik benda: titik itu jadi poros.",
+            } => t("tool.hint.pushpull_keep"),
+            State::PushPull { armed: None, .. } => t("tool.hint.pushpull_pick"),
+            State::PushPull { .. } => t("tool.hint.pushpull_height"),
+            State::Move { moving: None, .. } => t("tool.hint.move_pick"),
+            State::Move { .. } => t("tool.hint.move_dest"),
+            State::Rotate { turning: None, .. } => t("tool.hint.rotate_pick"),
             State::Rotate {
-                turning: Some(t), ..
-            } if t.reference.is_none() => "Klik arah nol. Panah: sumbu putar.",
-            State::Rotate { .. } => "Klik atau ketik sudut.",
-            State::Scale { scaling: None, .. } => "Klik benda.",
-            State::Scale { .. } => "Gerakkan kursor lalu klik, atau ketik faktor.",
-            State::Paint { .. } => "Klik face untuk mengecat. Warna dipilih di baris atas.",
-            State::Erase { .. } => "Klik tepi untuk menghapus.",
-            State::Round { center: None, .. } => "Klik pusat. 8s: jumlah sisi.",
-            State::Round { .. } => "Klik atau ketik jari-jari.",
-            State::Arc { start: None, .. } => "Klik ujung pertama.",
-            State::Arc { end: None, .. } => "Klik ujung kedua.",
-            State::Arc { .. } => "Klik atau ketik tinggi lengkung.",
-            State::Offset { armed: None, .. } => "Klik region atau face.",
-            State::Offset { .. } => "Klik atau ketik jarak.",
-            State::Tape { from: None, .. } => {
-                "Klik tepi untuk garis panduan, atau titik untuk titik panduan."
-            }
-            State::Tape { .. } => "Gerakkan kursor menjauh, lalu klik atau ketik jarak.",
-            State::Follow { profile: None, .. } => "Klik region atau face sebagai penampang.",
-            State::Follow { .. } => "Klik garis sebagai jalur.",
+                turning: Some(turning),
+                ..
+            } if turning.reference.is_none() => t("tool.hint.rotate_zero"),
+            State::Rotate { .. } => t("tool.hint.rotate_angle"),
+            State::Scale { scaling: None, .. } => t("tool.hint.scale_pick"),
+            State::Scale { .. } => t("tool.hint.scale_factor"),
+            State::Paint { .. } => t("tool.hint.paint"),
+            State::Erase { .. } => t("tool.hint.erase"),
+            State::Round { center: None, .. } => t("tool.hint.round_center"),
+            State::Round { .. } => t("tool.hint.round_radius"),
+            State::Arc { start: None, .. } => t("tool.hint.arc_first"),
+            State::Arc { end: None, .. } => t("tool.hint.arc_second"),
+            State::Arc { .. } => t("tool.hint.arc_height"),
+            State::Offset { armed: None, .. } => t("tool.hint.offset_pick"),
+            State::Offset { .. } => t("tool.hint.offset_dist"),
+            State::Tape { from: None, .. } => t("tool.hint.tape_start"),
+            State::Tape { .. } => t("tool.hint.tape_move"),
+            State::Follow { profile: None, .. } => t("tool.hint.follow_profile"),
+            State::Follow { .. } => t("tool.hint.follow_path"),
         };
         s.into()
     }
@@ -1644,20 +1634,20 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let Some(c) = chain else {
-                    return Err(needs("klik titik awal dulu"));
+                    return Err(needs("error.click_start_first"));
                 };
                 let len = match vcb::parse_in(&text, self.unit) {
                     Some(Vcb::One(len)) => len,
                     Some(Vcb::Angle(degrees)) => return c.aim(degrees),
-                    _ => return Err(needs("garis butuh panjang (2,5) atau sudut (30d)")),
+                    _ => return Err(needs("error.line_needs_length")),
                 };
                 let dir = match c.lock {
                     Some(Lock::Angle { dir, .. }) => dir,
                     _ => {
-                        let cursor = c.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                        let cursor = c.cursor.ok_or(needs("error.aim_first"))?;
                         (cursor - c.anchor)
                             .normalized()
-                            .map_err(|_| needs("arahkan kursor dulu"))?
+                            .map_err(|_| needs("error.aim_first"))?
                     }
                 };
                 let end = on_plane(c.anchor + dir * len, &c.next_plane());
@@ -1754,10 +1744,10 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let Some((a, plane, tile)) = first else {
-                    return Err(needs("klik sudut pertama dulu"));
+                    return Err(needs("error.click_corner_first"));
                 };
                 let Some(Vcb::Two(w, d)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("persegi panjang butuh dua ukuran, mis. 5;4"));
+                    return Err(needs("error.rect_needs_sizes"));
                 };
                 // Typed sizes go toward the cursor's quadrant, as in the preview.
                 let (cw, cd) = cursor.map_or((1.0, 1.0), |b| spans(*a, b, plane));
@@ -1870,7 +1860,7 @@ impl Tool {
             Input::Typed(text) => match (&*turning, vcb::parse(&text)) {
                 (Some(t), Some(Vcb::One(degrees) | Vcb::Angle(degrees))) => {
                     if degrees.abs() < 1e-6 {
-                        return Err(needs("sudut nol tidak mengubah apa pun"));
+                        return Err(needs("error.zero_angle"));
                     }
                     let snapshot = t.clone();
                     finish(scene, &snapshot, degrees.to_radians(), *copy)?;
@@ -1879,15 +1869,13 @@ impl Tool {
                 }
                 (None, Some(v @ (Vcb::Copies(_) | Vcb::Divide(_)))) => {
                     let (what, center, axis, angle) =
-                        last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
+                        last.as_ref().ok_or(needs("error.copy_first"))?;
                     let (n, part) = typed_array(v).expect("matched above");
                     let step = rotation_about(*center, *axis, angle * part)?;
                     scene.respace_copy(what, &step, n)?;
                 }
                 _ => {
-                    return Err(needs(
-                        "putar butuh sudut dalam derajat; setelah menyalin, x5",
-                    ));
+                    return Err(needs("error.rotate_needs_angle"));
                 }
             },
             Input::LockAxis(axis) => {
@@ -1957,16 +1945,16 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let Some(s) = scaling else {
-                    return Err(needs("klik benda dulu"));
+                    return Err(needs("error.click_object_first"));
                 };
                 let Some(Vcb::One(factor)) = vcb::parse(&text) else {
-                    return Err(needs("skala butuh satu faktor, mis. 2 atau 0,5"));
+                    return Err(needs("error.scale_needs_factor"));
                 };
                 if factor < MIN_SCALE {
-                    return Err(needs("faktor skala harus positif"));
+                    return Err(needs("error.scale_positive"));
                 }
                 if (factor - 1.0).abs() < 1e-6 {
-                    return Err(needs("faktor 1 tidak mengubah apa pun"));
+                    return Err(needs("error.scale_one"));
                 }
                 scene.transform(&s.what, &scaling_about(s.center, factor))?;
                 *scaling = None;
@@ -2018,15 +2006,13 @@ impl Tool {
             Input::Typed(text) => match vcb::parse_in(&text, self.unit) {
                 Some(Vcb::Sides(n)) => {
                     if !(lowest..=kernel::MAX_CIRCLE_SEGMENTS as u32).contains(&n) {
-                        return Err(needs("jumlah sisi di luar batas (lingkaran minimal 24)"));
+                        return Err(needs("error.sides_out_of_range"));
                     }
                     *sides = n;
                 }
                 Some(Vcb::One(r)) if center.is_some() && r > 0.0 => radius = Some(r),
                 _ => {
-                    return Err(needs(
-                        "klik pusat, lalu ketik jari-jari, atau 8s untuk sisi",
-                    ));
+                    return Err(needs("error.round_needs"));
                 }
             },
             Input::ClickAdd(_)
@@ -2083,10 +2069,10 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let (Some((a, plane, _)), Some(b)) = (&*start, *end) else {
-                    return Err(needs("klik dua ujung busur dulu"));
+                    return Err(needs("error.click_arc_ends"));
                 };
                 let Some(Vcb::One(s)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("busur butuh satu tinggi lengkung"));
+                    return Err(needs("error.arc_needs_height"));
                 };
                 // Typed heights go to the cursor's side, as in the preview.
                 let side = cursor
@@ -2157,10 +2143,10 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let Some(a) = armed else {
-                    return Err(needs("klik region atau face dulu"));
+                    return Err(needs("error.click_region_first"));
                 };
                 let Some(Vcb::One(d)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("offset butuh satu jarak"));
+                    return Err(needs("error.offset_needs_distance"));
                 };
                 // A plain number goes the way the cursor is; a sign flips that.
                 let side = cursor
@@ -2182,7 +2168,7 @@ impl Tool {
                 Target::Solid { tile, .. } | Target::Region { tile, .. } => tile,
             };
             let plane = Plane::from_point_normal(a.anchor, a.normal)
-                .map_err(|_| needs("bidang tidak sah"))?;
+                .map_err(|_| needs("error.bad_plane"))?;
             scene.offset(tile, plane, a.anchor, d)?;
             *armed = None;
             *cursor = None;
@@ -2229,17 +2215,17 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let (Some((a, along)), Some(c)) = (&*from, *cursor) else {
-                    return Err(needs("klik titik awal lalu arahkan kursor dulu"));
+                    return Err(needs("error.tape_click_start"));
                 };
                 let Some(Vcb::One(len)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("pita ukur butuh satu jarak"));
+                    return Err(needs("error.tape_needs_distance"));
                 };
                 if len.abs() < MIN_LEN {
-                    return Err(needs("jarak pita ukur tidak boleh nol"));
+                    return Err(needs("error.tape_zero"));
                 }
                 let dir = tape_span(*a, *along, c)
                     .normalized()
-                    .map_err(|_| needs("arahkan kursor dulu"))?;
+                    .map_err(|_| needs("error.aim_first"))?;
                 to = Some(*a + dir * len);
             }
             Input::ClickAdd(_)
@@ -2280,19 +2266,19 @@ impl Tool {
                             *profile = Some(armed.target);
                             *outline = scene.outline(armed.target);
                         } else if hit.is_some() {
-                            return Err(needs("klik region atau face sebagai penampang"));
+                            return Err(needs("error.follow_click_profile"));
                         }
                     }
                     Some(target) => {
                         let Some(h) = hit else { return Ok(()) };
                         let Some(path) = h.snap.sketch_source else {
-                            return Err(needs("klik garis sebagai jalur"));
+                            return Err(needs("error.follow_click_path"));
                         };
                         let tile = match target {
                             Target::Region { tile, .. } | Target::Solid { tile, .. } => tile,
                         };
                         if h.tile != tile {
-                            return Err(needs("penampang dan jalur harus di tile yang sama"));
+                            return Err(needs("error.follow_same_tile"));
                         }
                         match target {
                             Target::Region { sketch, region, .. } => {
@@ -2403,16 +2389,14 @@ impl Tool {
             },
             Input::Typed(text) => match (&*moving, vcb::parse_in(&text, self.unit)) {
                 (Some(m), Some(Vcb::One(len))) => {
-                    let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                    let cursor = m.cursor.ok_or(needs("error.aim_first"))?;
                     let toward = cursor - m.base;
                     // Under a lock the cursor only says which way along the axis:
                     // it may predate the lock.
                     let dir = match m.lock {
                         Some(axis) if toward.dot(axis.unit()) < 0.0 => axis.unit() * -1.0,
                         Some(axis) => axis.unit(),
-                        None => toward
-                            .normalized()
-                            .map_err(|_| needs("arahkan kursor dulu"))?,
+                        None => toward.normalized().map_err(|_| needs("error.aim_first"))?,
                     };
                     let m = moving.as_mut().expect("matched above");
                     if Self::finish_move(scene, m, dir * len, *copy, last)? {
@@ -2421,11 +2405,11 @@ impl Tool {
                     }
                 }
                 (None, Some(v @ (Vcb::Copies(_) | Vcb::Divide(_)))) => {
-                    let (what, step) = last.as_ref().ok_or(needs("salin sesuatu dulu"))?;
+                    let (what, step) = last.as_ref().ok_or(needs("error.copy_first"))?;
                     let (n, part) = typed_array(v).expect("matched above");
                     scene.respace_copy(what, &Transform::translation(*step * part), n)?;
                 }
-                _ => return Err(needs("Move butuh satu jarak; setelah menyalin, x5 atau /5")),
+                _ => return Err(needs("error.move_needs_distance")),
             },
             Input::LockAxis(axis) => {
                 if let Some(m) = moving {
@@ -2481,13 +2465,11 @@ impl Tool {
                         .snap(&query(ray, NARROW))
                         .is_some_and(|h| h.snap.sketch_region_source.is_some());
                     if on_region {
-                        return Err(needs(
-                            "cat hanya untuk face solid; tarik region menjadi solid dulu",
-                        ));
+                        return Err(needs("error.paint_solid_only"));
                     }
                 }
             },
-            Input::Typed(_) => return Err(needs("cat tidak memakai angka")),
+            Input::Typed(_) => return Err(needs("error.paint_no_numbers")),
             Input::ClickAdd(_)
             | Input::LockAxis(_)
             | Input::LockNormal
@@ -2524,17 +2506,17 @@ impl Tool {
             Input::Click(ray) => match moving {
                 None => {
                     if scene.clouds.is_empty() {
-                        return Err(needs("impor point cloud dulu"));
+                        return Err(needs("error.import_cloud_first"));
                     }
                     let hit = match target {
                         Some(_) => scene.snap(&query(ray, aperture)),
                         None => scene.cloud_under(ray, aperture),
                     };
                     let Some(id) = target.or(hit.and_then(|h| h.cloud)) else {
-                        return Err(needs("klik sebuah titik pada awan"));
+                        return Err(needs("error.click_cloud_point"));
                     };
                     let Some(from) = scene.clouds.offset_of(id) else {
-                        return Err(needs("awan itu sudah dilepas"));
+                        return Err(needs("error.cloud_removed"));
                     };
                     let ground = Plane::from_point_normal(Point3::ORIGIN, Vec3::new(0.0, 0.0, 1.0))
                         .expect("a unit normal");
@@ -2563,19 +2545,17 @@ impl Tool {
             },
             Input::Typed(text) => {
                 let Some(m) = moving else {
-                    return Err(needs("klik sebuah titik pada awan dulu"));
+                    return Err(needs("error.click_cloud_point_first"));
                 };
                 let Some(Vcb::One(len)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("geser awan butuh satu jarak, mis. 3"));
+                    return Err(needs("error.cloud_move_needs_distance"));
                 };
-                let cursor = m.cursor.ok_or(needs("arahkan kursor dulu"))?;
+                let cursor = m.cursor.ok_or(needs("error.aim_first"))?;
                 let toward = cursor - m.base;
                 let dir = match m.lock {
                     Some(axis) if toward.dot(axis.unit()) < 0.0 => axis.unit() * -1.0,
                     Some(axis) => axis.unit(),
-                    None => toward
-                        .normalized()
-                        .map_err(|_| needs("arahkan kursor dulu"))?,
+                    None => toward.normalized().map_err(|_| needs("error.aim_first"))?,
                 };
                 let p = m.base + dir * len;
                 if Self::finish_cloud_move(scene, m, p)? {
@@ -2638,7 +2618,7 @@ impl Tool {
             Input::Click(ray) | Input::ClickAdd(ray) => {
                 *eye = Some(ray.origin);
                 let Some((_, top)) = scene.clouds.bounds() else {
-                    return Err(needs("impor point cloud dulu"));
+                    return Err(needs("error.import_cloud_first"));
                 };
                 let (bottom, _) = scene.clouds.bounds().unwrap_or(([0.0; 3], top));
                 if let Some((grip, _)) = holding {
@@ -2675,7 +2655,7 @@ impl Tool {
                 }
             }
             Input::Typed(_) => {
-                return Err(needs("kotak potong diatur dengan klik, bukan angka"));
+                return Err(needs("error.slice_by_click"));
             }
             Input::LockAxis(_) | Input::LockNormal | Input::Cancel | Input::ToggleCopy => {}
         }
@@ -2737,7 +2717,7 @@ impl Tool {
                 } else if added.target.tile() == first.target.tile() {
                     also.push(added);
                 } else {
-                    return Err(needs("Push/Pull banyak target harus dalam satu tile"));
+                    return Err(needs("error.pushpull_one_tile"));
                 }
                 if let Some(a) = armed {
                     a.base = along_line(&ray, a.anchor, a.normal).unwrap_or(0.0);
@@ -2746,13 +2726,13 @@ impl Tool {
             }
             Input::Typed(text) => {
                 let Some(a) = armed else {
-                    return Err(needs("klik face atau region dulu"));
+                    return Err(needs("error.click_face_first"));
                 };
                 let Some(Vcb::One(d)) = vcb::parse_in(&text, self.unit) else {
-                    return Err(needs("Push/Pull butuh satu jarak, mis. 3"));
+                    return Err(needs("error.pushpull_needs_distance"));
                 };
                 if d.abs() < MIN_LEN {
-                    return Err(needs("jarak tidak boleh nol"));
+                    return Err(needs("error.distance_zero"));
                 }
                 Self::commit_push_pull(scene, a, also, d, *keep)?;
                 *armed = None;
@@ -2785,12 +2765,10 @@ impl Tool {
             .map(|&(tile, node)| {
                 let source = scene
                     .matching_face(tile, node, first.normal)
-                    .ok_or(needs(
-                        "objek terpilih lain tidak punya face searah; grup dan komponen diedit lewat Edit isi",
-                    ))?;
+                    .ok_or(needs("error.no_matching_face"))?;
                 let (plane, outline) = scene
                     .face_shape(tile, source)
-                    .ok_or(needs("face objek terpilih tidak ditemukan"))?;
+                    .ok_or(needs("error.face_not_found"))?;
                 Ok(Armed {
                     target: Target::Solid { tile, source },
                     anchor: outline[0],

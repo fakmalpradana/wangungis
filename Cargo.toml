@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["scene", "render", "tools", "io", "pointcloud", "ui"]
+members = ["i18n", "scene", "render", "tools", "io", "pointcloud", "ui"]
 
 [workspace.package]
 version = "0.0.0"
@@ -11,6 +11,7 @@ repository = "https://github.com/fakmalpradana/wangungis"
 # Hew core crates (ADR-000 option A2), pinned to one commit: v1.3.1.
 # Changing this rev needs human approval (AGENTS.md §14).
 [workspace.dependencies]
+wangungis-i18n = { path = "i18n" }
 wangungis-scene = { path = "scene" }
 wangungis-render = { path = "render" }
 wangungis-tools = { path = "tools" }

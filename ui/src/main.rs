@@ -22,6 +22,7 @@ use eframe::{egui, egui_wgpu};
 use icons::Icon;
 use inference::{Axis, PickRay, SnapKind};
 use kernel::{NodeId, Point3, Vec3};
+use wangungis_i18n::{Lang, t, tf};
 use wangungis_pointcloud::{
     CloudFile, ImportError, MAX_DRAW_BUDGET, MAX_POINT_SIZE, MIN_DRAW_BUDGET, MIN_POINT_SIZE,
     Progress, SavedCloud, SavedClouds, View as CloudView, saved_clouds_path,
@@ -43,20 +44,20 @@ const MARKER: f64 = 6.0;
 /// Half-length (m) of the drawn project axes.
 const AXIS_LEN: f64 = 500.0;
 const PREVIEW_COLOR: [f32; 3] = [0.95, 0.45, 0.0];
-/// The Paint Bucket's ready colors.
+/// The Paint Bucket's ready colors: name key and color.
 const PAINTS: [(&str, [u8; 3]); 12] = [
-    ("Beton", [190, 190, 185]),
-    ("Plester", [240, 238, 230]),
-    ("Bata", [170, 85, 60]),
-    ("Genteng", [175, 75, 45]),
-    ("Kayu", [150, 105, 65]),
-    ("Batu", [150, 140, 125]),
-    ("Baja", [120, 130, 140]),
-    ("Kaca", [150, 200, 220]),
-    ("Aspal", [70, 70, 75]),
-    ("Rumput", [110, 160, 80]),
-    ("Kuning", [235, 200, 80]),
-    ("Biru", [70, 110, 170]),
+    ("paint.concrete", [190, 190, 185]),
+    ("paint.plaster", [240, 238, 230]),
+    ("paint.brick", [170, 85, 60]),
+    ("paint.roof_tile", [175, 75, 45]),
+    ("paint.wood", [150, 105, 65]),
+    ("paint.stone", [150, 140, 125]),
+    ("paint.steel", [120, 130, 140]),
+    ("paint.glass", [150, 200, 220]),
+    ("paint.asphalt", [70, 70, 75]),
+    ("paint.grass", [110, 160, 80]),
+    ("paint.yellow", [235, 200, 80]),
+    ("paint.blue", [70, 110, 170]),
 ];
 /// Unlike the axes, the preview, the snap markers and the pale background.
 const GUIDE_COLOR: [f32; 3] = [0.85, 0.0, 0.55];
@@ -107,6 +108,11 @@ fn ready_paint((name, [r, g, b]): (&str, [u8; 3])) -> Paint {
     }
 }
 
+/// A ready color with its name in the language of the moment.
+fn named_paint((key, rgb): (&'static str, [u8; 3])) -> (&'static str, [u8; 3]) {
+    (t(key), rgb)
+}
+
 fn user_file(name: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     Some(PathBuf::from(home).join(".wangungis").join(name))
@@ -122,6 +128,12 @@ fn read_unit(path: &Path) -> Unit {
         .into_iter()
         .find(|u| u.label() == text.trim())
         .unwrap_or_default()
+}
+
+/// The language kept in `path`. Missing or unknown means Indonesian.
+fn read_lang(path: &Path) -> Lang {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    Lang::from_code(text.trim()).unwrap_or(Lang::Id)
 }
 
 /// Where the open project lives on disk.
@@ -155,6 +167,8 @@ struct App {
     paint: Option<Paint>,
     /// `None`: the unit is not remembered, as when the home folder is unknown.
     unit_file: Option<PathBuf>,
+    /// Same for the language.
+    lang_file: Option<PathBuf>,
     /// What the user is typing for the tool.
     typed: String,
     /// The Outliner's lines and what is open in it, refreshed when something changed.
@@ -225,6 +239,10 @@ impl App {
             app.unit = read_unit(p);
             app.tool.set_unit(app.unit);
         }
+        app.lang_file = user_file("lang");
+        if let Some(p) = &app.lang_file {
+            wangungis_i18n::set(read_lang(p));
+        }
         // Last: a project's clouds need the folders above.
         if let Some(path) = path {
             app.open_path(Path::new(&path));
@@ -243,8 +261,9 @@ impl App {
             scene: empty_scene(),
             tool: Tool::select(0.01),
             unit: Unit::default(),
-            paint: Some(ready_paint(PAINTS[0])),
+            paint: Some(ready_paint(named_paint(PAINTS[0]))),
             unit_file: None,
+            lang_file: None,
             typed: String::new(),
             outline_rows: Vec::new(),
             outline_expanded: BTreeSet::new(),
@@ -355,7 +374,7 @@ impl App {
             .and_then(|()| self.write_saved_clouds(&path));
         match written {
             Ok(()) => self.autosave_stale = false,
-            Err(e) => self.error = Some(format!("Autosave gagal: {e}")),
+            Err(e) => self.error = Some(tf("error.autosave_failed", &[&e])),
         }
     }
 
@@ -377,7 +396,7 @@ impl App {
                 self.fit_pending = true;
                 self.load_saved_clouds(&path);
             }
-            Err(e) => self.error = Some(format!("Autosave tidak bisa dibuka: {e}")),
+            Err(e) => self.error = Some(tf("error.autosave_unreadable", &[&e])),
         }
     }
 
@@ -399,11 +418,11 @@ impl App {
         self.error = None;
         self.notice = None;
         let opened = std::fs::read(path)
-            .map_err(|e| format!("Tidak bisa membaca {}: {e}", path.display()))
+            .map_err(|e| tf("error.read_failed", &[&path.display(), &e]))
             .and_then(|bytes| {
                 Project::open(&bytes)
                     .map(|p| (p, Project::is_container(&bytes)))
-                    .map_err(|e| format!("Tidak bisa membuka proyek: {e:?}"))
+                    .map_err(|e| tf("error.open_failed", &[&format!("{e:?}")]))
             });
         match opened {
             Ok((project, container)) => {
@@ -440,10 +459,7 @@ impl App {
         let single = project.single().is_some();
         let target = save_target(&self.source, chosen, single);
         if target != chosen && self.source.path.as_deref() != Some(&target) && target.exists() {
-            self.error = Some(format!(
-                "{} sudah ada dan bukan file yang sedang dibuka. Pakai Simpan sebagai dengan nama lain.",
-                target.display()
-            ));
+            self.error = Some(tf("error.save_exists", &[&target.display()]));
             return;
         }
         match write_atomic(&target, &project.save()) {
@@ -462,13 +478,11 @@ impl App {
                         self.drop_autosave();
                     }
                     Err(e) => {
-                        self.error = Some(format!(
-                            "Proyek tersimpan, tetapi daftar point cloud tidak: {e}"
-                        ));
+                        self.error = Some(tf("error.save_clouds_failed", &[&e]));
                     }
                 }
             }
-            Err(e) => self.error = Some(format!("Tidak bisa menyimpan {}: {e}", target.display())),
+            Err(e) => self.error = Some(tf("error.save_failed", &[&target.display(), &e])),
         }
     }
 
@@ -536,7 +550,7 @@ impl App {
         let saved: SavedClouds = match serde_json::from_slice(&bytes) {
             Ok(saved) => saved,
             Err(e) => {
-                self.error = Some(format!("{} tidak bisa dibaca: {e}", file.display()));
+                self.error = Some(tf("error.file_unreadable", &[&file.display(), &e]));
                 return;
             }
         };
@@ -573,8 +587,7 @@ impl App {
         let queued = self.cloud_queue.remove(0);
         let source = queued.source.clone();
         let Some(dir) = self.cache_dir.clone() else {
-            self.error =
-                Some("Folder pengguna tidak diketahui, jadi tidak ada tempat cache.".into());
+            self.error = Some(t("error.no_cache_dir").into());
             return;
         };
         let progress = Arc::new(Progress::default());
@@ -612,7 +625,7 @@ impl App {
         let job = self.cloud_import.take().expect("checked above");
         match answer {
             Ok(file) => self.place_cloud(file, job.queued),
-            Err(ImportError::Cancelled) => self.notice = Some("Impor dibatalkan.".into()),
+            Err(ImportError::Cancelled) => self.notice = Some(t("cloud.cancelled").into()),
             Err(e) => {
                 self.error = Some(format!("{}: {e}", job.queued.source.display()));
                 // Only what the project already named is worth remembering.
@@ -648,10 +661,7 @@ impl App {
         if let (Some(a), Some(b)) = (epsg, project_epsg)
             && a != b
         {
-            self.error = Some(format!(
-                "{} memakai EPSG:{a}, proyek memakai EPSG:{b}. Reproyeksi belum didukung.",
-                source.display()
-            ));
+            self.error = Some(tf("cloud.crs_mismatch", &[&source.display(), &a, &b]));
             return;
         }
         let center: [f64; 3] = std::array::from_fn(|k| {
@@ -678,18 +688,16 @@ impl App {
                     self.scene.clouds.frame = center;
                 }
                 Err(e) => {
-                    self.error = Some(format!("Origin proyek tidak bisa dibuat: {e:?}"));
+                    self.error = Some(tf("error.origin_failed", &[&format!("{e:?}")]));
                     return;
                 }
             }
         } else if self.scene.clouds.is_empty() && self.scene.clouds.frame == [0.0; 3] {
             self.scene.clouds.frame = center;
-            note = Some(
-                "Proyek belum punya origin: model tetap di koordinat lokal, tengah awan di titik nol.",
-            );
+            note = Some(t("cloud.note_no_origin"));
         }
         if epsg.is_none() {
-            note = Some("LAS tidak menyebut CRS: koordinatnya dipakai apa adanya.");
+            note = Some(t("cloud.note_no_crs"));
         }
         let points = file.info.points;
         let id = self.scene.clouds.add(file, source);
@@ -699,17 +707,15 @@ impl App {
         if offset.iter().all(|v| v.abs() <= PROJECT_BOUND_M) {
             self.scene.clouds.set_offset(id, offset);
         } else {
-            note = Some("Offset awan di berkas pendamping di luar batas proyek, jadi diabaikan.");
+            note = Some(t("cloud.note_offset_ignored"));
         }
         self.fit_pending = true;
         if !restoring {
             self.unsaved = true;
             self.autosave_stale = true;
         }
-        self.notice = Some(format!(
-            "{points} titik dimuat.{}",
-            note.map_or_else(String::new, |n| format!(" {n}"))
-        ));
+        let note = note.map_or_else(String::new, |n| format!(" {n}"));
+        self.notice = Some(tf("cloud.loaded", &[&points, &note]));
     }
 
     /// Brings the clouds up to this view: takes in what was read, decides what to
@@ -752,27 +758,23 @@ impl App {
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .filter(|e| wangungis_io::FORMATS.contains(&e.as_str()));
         let Some(format) = format else {
-            self.error = Some(format!(
-                "Nama file harus berakhiran salah satu dari: {}.",
-                wangungis_io::FORMATS.join(", ")
+            self.error = Some(tf(
+                "error.bad_export_name",
+                &[&wangungis_io::FORMATS.join(", ")],
             ));
             return;
         };
         let written = wangungis_io::export(self.scene.project(), &format)
             .map_err(|e| match e {
-                wangungis_io::ExportError::MultiTile => {
-                    "Format ini hanya untuk proyek satu tile. Pakai .obj.".to_string()
-                }
-                wangungis_io::ExportError::NothingToExport => {
-                    "Tidak ada solid untuk diekspor.".to_string()
-                }
-                other => format!("Ekspor gagal: {other:?}"),
+                wangungis_io::ExportError::MultiTile => t("error.export_multi_tile").to_string(),
+                wangungis_io::ExportError::NothingToExport => t("error.export_nothing").to_string(),
+                other => tf("error.export_failed", &[&format!("{other:?}")]),
             })
             .and_then(|bytes| write_atomic(target, &bytes).map_err(|e| e.to_string()));
         match written {
             Ok(()) => {
                 self.error = None;
-                self.notice = Some(format!("Diekspor ke {}", target.display()));
+                self.notice = Some(tf("status.exported", &[&target.display()]));
             }
             Err(e) => self.error = Some(e),
         }
@@ -809,9 +811,7 @@ impl App {
         // ponytail: timing guess, as rfd gives no error to read.
         #[cfg(target_os = "linux")]
         if picked.is_none() && opened_at.elapsed().as_millis() < 150 {
-            self.error = Some(
-                "Jendela berkas tidak bisa dibuka. Pasang xdg-desktop-portal atau zenity.".into(),
-            );
+            self.error = Some(t("error.no_file_window").into());
         }
         #[cfg(not(target_os = "linux"))]
         let _ = opened_at;
@@ -839,7 +839,12 @@ impl App {
                     },
                 );
             }
-            Err(e) => self.error = Some(format!("Gagal membuat mesh tile {key:?}: {e:?}")),
+            Err(e) => {
+                self.error = Some(tf(
+                    "error.mesh_failed",
+                    &[&format!("{key:?}"), &format!("{e:?}")],
+                ));
+            }
         }
     }
 
@@ -879,8 +884,7 @@ impl App {
         let guides = self.scene.guide_lines().len();
         match self.tool.handle(&mut self.scene, input) {
             Ok(()) if self.scene.guide_lines().len() > guides => {
-                self.notice =
-                    Some("Panduan dibuat: garis merah muda, snap menempel padanya.".into());
+                self.notice = Some(t("status.guide_made").into());
             }
             Ok(()) => {}
             Err(e) => self.error = Some(e.to_string()),
@@ -914,14 +918,14 @@ impl App {
     /// The colors, shown while the Paint Bucket is the tool.
     fn paint_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Cat:");
+            ui.label(t("paint.label"));
             for ready in PAINTS {
                 let [r, g, b] = ready.1;
                 let swatch = egui::Button::new("")
                     .fill(egui::Color32::from_rgb(r, g, b))
                     .min_size(egui::vec2(20.0, 20.0));
-                if ui.add(swatch).on_hover_text(ready.0).clicked() {
-                    self.set_paint(Some(ready_paint(ready)));
+                if ui.add(swatch).on_hover_text(t(ready.0)).clicked() {
+                    self.set_paint(Some(ready_paint(named_paint(ready))));
                 }
             }
             let held = self.paint.as_ref().map(|p| p.color);
@@ -930,11 +934,24 @@ impl App {
                 let name = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
                 self.set_paint(Some(ready_paint((&name, rgb))));
             }
-            if ui.button("Hapus cat").clicked() {
+            if ui.button(t("paint.clear")).clicked() {
                 self.set_paint(None);
             }
-            ui.label(self.paint.as_ref().map_or("Tanpa cat", |p| &p.name));
+            ui.label(self.paint.as_ref().map_or(t("paint.none"), |p| &p.name));
         });
+    }
+
+    fn set_lang(&mut self, lang: Lang) {
+        wangungis_i18n::set(lang);
+        if let Some(p) = &self.lang_file {
+            let written = p
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(p, lang.code()));
+            if let Err(e) = written {
+                self.error = Some(tf("error.lang_not_saved", &[&e]));
+            }
+        }
     }
 
     fn set_unit(&mut self, unit: Unit) {
@@ -946,7 +963,7 @@ impl App {
                 .map_or(Ok(()), std::fs::create_dir_all)
                 .and_then(|()| std::fs::write(p, unit.label()));
             if let Err(e) = written {
-                self.error = Some(format!("Gagal mengingat satuan: {e}"));
+                self.error = Some(tf("error.unit_not_saved", &[&e]));
             }
         }
     }
@@ -963,7 +980,7 @@ impl App {
     ) {
         self.notice = None;
         let Some((tile, nodes)) = self.tool.picked_nodes() else {
-            self.error = Some("Pilih objek dulu dengan Pilih (Spasi).".into());
+            self.error = Some(t("error.pick_first").into());
             return;
         };
         match edit(&mut self.scene, tile, &nodes) {
@@ -1011,9 +1028,7 @@ impl App {
         let name = name.to_owned();
         self.on_picked(move |s, t, n| match n {
             [node] => s.rename_node(t, *node, &name),
-            _ => Err(wangungis_tools::EditError::Unsupported(
-                "mengubah nama lebih dari satu benda sekaligus",
-            )),
+            _ => Err(wangungis_tools::EditError::Unsupported("error.rename_many")),
         });
     }
 
@@ -1026,7 +1041,7 @@ impl App {
             Rename,
         }
         let mut action = None;
-        egui::CollapsingHeader::new("Outliner")
+        egui::CollapsingHeader::new(t("panel.outliner"))
             .default_open(true)
             .show(ui, |ui| {
                 let picked = self.tool.picked_nodes();
@@ -1073,7 +1088,7 @@ impl App {
                         egui::TextEdit::singleline(&mut self.outline_rename).desired_width(120.0),
                     );
                     if ui
-                        .add_enabled(picked.is_some(), egui::Button::new("Ubah nama"))
+                        .add_enabled(picked.is_some(), egui::Button::new(t("panel.rename")))
                         .clicked()
                     {
                         action = Some(Action::Rename);
@@ -1142,12 +1157,12 @@ impl App {
         }
 
         let mut action = None;
-        egui::CollapsingHeader::new("Tags")
+        egui::CollapsingHeader::new(t("panel.tags"))
             .default_open(true)
             .show(ui, |ui| {
                 let picked = self.tool.picked_nodes().is_some();
                 if !picked {
-                    ui.label("Pilih objek dulu dengan Pilih (Spasi).");
+                    ui.label(t("error.pick_first"));
                 }
                 for (name, hidden) in self.tag_rows.clone() {
                     ui.horizontal_wrapped(|ui| {
@@ -1156,29 +1171,35 @@ impl App {
                             action = Some(Action::Visible(name.clone(), visible));
                         }
                         ui.label(&name);
-                        if ui.add_enabled(picked, egui::Button::new("Beri")).clicked() {
+                        if ui
+                            .add_enabled(picked, egui::Button::new(t("panel.tag_give")))
+                            .clicked()
+                        {
                             action = Some(Action::Give(name.clone()));
                         }
-                        if ui.add_enabled(picked, egui::Button::new("Lepas")).clicked() {
+                        if ui
+                            .add_enabled(picked, egui::Button::new(t("panel.tag_take")))
+                            .clicked()
+                        {
                             action = Some(Action::Take(name.clone()));
                         }
-                        if ui.button("Hapus").clicked() {
+                        if ui.button(t("panel.tag_delete")).clicked() {
                             action = Some(Action::Delete(name.clone()));
                         }
                     });
                     ui.horizontal(|ui| {
                         let rename = self.tag_renames.entry(name.clone()).or_insert(name.clone());
                         ui.add(egui::TextEdit::singleline(rename).desired_width(120.0));
-                        if ui.button("Ubah nama").clicked() {
+                        if ui.button(t("panel.rename")).clicked() {
                             action = Some(Action::Rename(name.clone(), rename.clone()));
                         }
                     });
                     ui.separator();
                 }
-                ui.label("Tag baru:");
+                ui.label(t("panel.tag_new"));
                 ui.add(egui::TextEdit::singleline(&mut self.tag_name));
                 if ui
-                    .add_enabled(picked, egui::Button::new("Buat dan beri"))
+                    .add_enabled(picked, egui::Button::new(t("panel.tag_create")))
                     .clicked()
                 {
                     action = Some(Action::Give(std::mem::take(&mut self.tag_name)));
@@ -1209,9 +1230,7 @@ impl App {
     fn enter_picked(&mut self) {
         self.on_picked(|s, t, n| match n {
             [node] => s.enter(t, *node),
-            _ => Err(wangungis_tools::EditError::Unsupported(
-                "mengedit isi lebih dari satu benda sekaligus",
-            )),
+            _ => Err(wangungis_tools::EditError::Unsupported("error.edit_many")),
         });
     }
 
@@ -1233,7 +1252,7 @@ impl App {
             .into_iter()
             .map(|n| self.scene.node_name(tile, n))
             .collect();
-        Some(format!("Mengedit: {}", names.join(" > ")))
+        Some(tf("status.editing", &[&names.join(" > ")]))
     }
 
     fn delete_picked(&mut self) {
@@ -1617,7 +1636,7 @@ fn paint_tip(ui: &egui::Ui, view: egui::Rect, at: egui::Pos2, text: &str) {
 /// What a snap is called on screen. A point of a cloud is not a model's corner.
 fn hit_label(hit: &wangungis_tools::Hit) -> &'static str {
     if hit.cloud.is_some() {
-        "Titik awan"
+        t("snap.cloud_point")
     } else {
         snap_label(hit.snap.kind)
     }
@@ -1625,18 +1644,18 @@ fn hit_label(hit: &wangungis_tools::Hit) -> &'static str {
 
 fn snap_label(kind: SnapKind) -> &'static str {
     match kind {
-        SnapKind::Endpoint => "Titik ujung",
-        SnapKind::Midpoint => "Titik tengah",
-        SnapKind::Center => "Titik pusat",
-        SnapKind::Quadrant => "Titik kuadran",
-        SnapKind::Intersection => "Perpotongan",
-        SnapKind::Tangent => "Singgung",
-        SnapKind::OnGuide => "Pada panduan",
-        SnapKind::OnEdge => "Pada tepi",
-        SnapKind::OnFace => "Pada face",
-        SnapKind::OnAxis => "Pada sumbu",
-        SnapKind::Parallel => "Sejajar tepi",
-        SnapKind::Perpendicular => "Tegak lurus tepi",
+        SnapKind::Endpoint => t("snap.endpoint"),
+        SnapKind::Midpoint => t("snap.midpoint"),
+        SnapKind::Center => t("snap.center"),
+        SnapKind::Quadrant => t("snap.quadrant"),
+        SnapKind::Intersection => t("snap.intersection"),
+        SnapKind::Tangent => t("snap.tangent"),
+        SnapKind::OnGuide => t("snap.on_guide"),
+        SnapKind::OnEdge => t("snap.on_edge"),
+        SnapKind::OnFace => t("snap.on_face"),
+        SnapKind::OnAxis => t("snap.on_axis"),
+        SnapKind::Parallel => t("snap.parallel"),
+        SnapKind::Perpendicular => t("snap.perpendicular"),
     }
 }
 
@@ -1719,73 +1738,54 @@ impl Dialog {
         }
         let stem = current
             .and_then(Path::file_stem)
-            .map_or("proyek".into(), |n| n.to_string_lossy());
+            .map_or(t("dialog.default_name").into(), |n| n.to_string_lossy());
         match self {
             Dialog::Open => window
-                .set_title("Buka proyek")
-                .add_filter("Proyek WangunGIS (.hew, .wangun)", &["hew", "wangun"])
+                .set_title(t("dialog.open_title"))
+                .add_filter(t("format.filter_project"), &["hew", "wangun"])
                 .pick_file(),
             Dialog::SaveAs if single => window
-                .set_title("Simpan proyek")
+                .set_title(t("dialog.save_title"))
                 .set_file_name(format!("{stem}.hew"))
-                .add_filter("Proyek satu tile (.hew)", &["hew"])
+                .add_filter(t("format.filter_single"), &["hew"])
                 .save_file(),
             Dialog::SaveAs => window
-                .set_title("Simpan proyek")
+                .set_title(t("dialog.save_title"))
                 .set_file_name(format!("{stem}.wangun"))
-                .add_filter("Proyek banyak tile (.wangun)", &["wangun"])
+                .add_filter(t("format.filter_multi"), &["wangun"])
                 .save_file(),
             Dialog::Export if single => window
-                .set_title("Ekspor model")
+                .set_title(t("dialog.export_title"))
                 .set_file_name(format!("{stem}.obj"))
                 .add_filter("Wavefront OBJ (.obj)", &["obj"])
-                .add_filter("glTF biner (.glb)", &["glb"])
+                .add_filter(t("format.filter_glb"), &["glb"])
                 .add_filter("glTF (.gltf)", &["gltf"])
                 .add_filter("STL (.stl)", &["stl"])
                 .add_filter("3MF (.3mf)", &["3mf"])
                 .save_file(),
             Dialog::ImportCloud => window
-                .set_title("Impor point cloud")
-                .add_filter("Point cloud LAS (.las)", &["las", "LAS"])
+                .set_title(t("dialog.import_title"))
+                .add_filter(t("format.filter_las"), &["las", "LAS"])
                 .pick_file(),
             Dialog::Export => window
-                .set_title("Ekspor model")
+                .set_title(t("dialog.export_title"))
                 .set_file_name(format!("{stem}.obj"))
-                .add_filter(
-                    "Wavefront OBJ (.obj), satu-satunya untuk banyak tile",
-                    &["obj"],
-                )
+                .add_filter(t("format.filter_obj_multi"), &["obj"])
                 .save_file(),
         }
     }
 }
 
-/// What the file windows can read and write, as the Format window shows it.
+/// What the file windows can read and write, as the Format window shows it: action key, extension, description key.
 const FILE_FORMATS: [(&str, &str, &str); 8] = [
-    (
-        "Buka, Simpan",
-        ".hew",
-        "Proyek satu tile: geometri, warna, tag, nama, grup, komponen.",
-    ),
-    (
-        "Buka, Simpan",
-        ".wangun",
-        "Proyek banyak tile, isi sama. Dibuat otomatis saat proyek lebih dari satu tile.",
-    ),
-    (
-        "Ekspor",
-        ".obj",
-        "Semua tile. Tanpa warna. Koordinat lokal proyek, origin tertulis di komentar.",
-    ),
-    ("Ekspor", ".glb", "Satu tile, dengan warna. Biner."),
-    ("Ekspor", ".gltf", "Satu tile, dengan warna. Teks."),
-    ("Ekspor", ".stl", "Satu tile, tanpa warna."),
-    ("Ekspor", ".3mf", "Satu tile, dengan warna."),
-    (
-        "Impor",
-        ".las",
-        "Point cloud LAS 1.0 sampai 1.4, tanpa LAZ. Menjadi acuan untuk menggambar. Tidak mengubah model, tidak ikut terekspor.",
-    ),
+    ("format.action_open_save", ".hew", "format.hew"),
+    ("format.action_open_save", ".wangun", "format.wangun"),
+    ("format.action_export", ".obj", "format.obj"),
+    ("format.action_export", ".glb", "format.glb"),
+    ("format.action_export", ".gltf", "format.gltf"),
+    ("format.action_export", ".stl", "format.stl"),
+    ("format.action_export", ".3mf", "format.3mf"),
+    ("format.action_import", ".las", "format.las"),
 ];
 
 /// Writes through a temporary file, so a failed write cannot damage `target`.
@@ -1922,32 +1922,36 @@ impl App {
                         .path
                         .as_deref()
                         .and_then(Path::file_name)
-                        .map_or("Proyek baru".into(), |n| n.to_string_lossy()),
+                        .map_or(t("toolbar.new_project").into(), |n| n.to_string_lossy()),
                     if self.unsaved { " *" } else { "" }
                 ));
                 ui.separator();
                 for (label, icon, make) in [
                     (
-                        "Pilih (Spasi)",
+                        t("toolbar.select"),
                         Icon::Select,
                         Tool::select as fn(f64) -> Tool,
                     ),
-                    ("Garis (L)", Icon::Line, Tool::line),
-                    ("Persegi (R)", Icon::Rectangle, Tool::rectangle),
-                    ("Lingkaran (C)", Icon::Circle, Tool::circle),
-                    ("Poligon (G)", Icon::Polygon, Tool::polygon),
-                    ("Busur (A)", Icon::Arc, Tool::arc),
-                    ("Push/Pull (P)", Icon::PushPull, Tool::push_pull),
-                    ("Offset (F)", Icon::Offset, Tool::offset),
-                    ("Follow Me", Icon::FollowMe, Tool::follow_me),
-                    ("Ukur (T)", Icon::Tape, Tool::tape),
-                    ("Pindah (M)", Icon::Move, Tool::move_tool),
-                    ("Putar (Q)", Icon::Rotate, Tool::rotate),
-                    ("Skala (S)", Icon::Scale, Tool::scale),
-                    ("Cat (B)", Icon::Paint, Tool::paint),
-                    ("Potong area (K)", Icon::CloudSlice, Tool::cloud_slice),
-                    ("Geser awan (J)", Icon::CloudMove, Tool::cloud_move),
-                    ("Hapus (E)", Icon::Eraser, Tool::eraser),
+                    (t("toolbar.line"), Icon::Line, Tool::line),
+                    (t("toolbar.rectangle"), Icon::Rectangle, Tool::rectangle),
+                    (t("toolbar.circle"), Icon::Circle, Tool::circle),
+                    (t("toolbar.polygon"), Icon::Polygon, Tool::polygon),
+                    (t("toolbar.arc"), Icon::Arc, Tool::arc),
+                    (t("toolbar.push_pull"), Icon::PushPull, Tool::push_pull),
+                    (t("toolbar.offset"), Icon::Offset, Tool::offset),
+                    (t("toolbar.follow_me"), Icon::FollowMe, Tool::follow_me),
+                    (t("toolbar.tape"), Icon::Tape, Tool::tape),
+                    (t("toolbar.move"), Icon::Move, Tool::move_tool),
+                    (t("toolbar.rotate"), Icon::Rotate, Tool::rotate),
+                    (t("toolbar.scale"), Icon::Scale, Tool::scale),
+                    (t("toolbar.paint"), Icon::Paint, Tool::paint),
+                    (
+                        t("toolbar.cloud_slice"),
+                        Icon::CloudSlice,
+                        Tool::cloud_slice,
+                    ),
+                    (t("toolbar.cloud_move"), Icon::CloudMove, Tool::cloud_move),
+                    (t("toolbar.erase"), Icon::Eraser, Tool::eraser),
                 ] {
                     if icon_button(ui, icon, label, self.tool.same_kind(&make(0.0)), true).clicked()
                     {
@@ -1958,7 +1962,7 @@ impl App {
                 if icon_button(
                     ui,
                     Icon::Undo,
-                    "Undo (Cmd/Ctrl+Z)",
+                    t("toolbar.undo"),
                     false,
                     self.scene.can_undo(),
                 )
@@ -1969,7 +1973,7 @@ impl App {
                 if icon_button(
                     ui,
                     Icon::Redo,
-                    "Redo (Cmd/Ctrl+Shift+Z)",
+                    t("toolbar.redo"),
                     false,
                     self.scene.can_redo(),
                 )
@@ -1977,37 +1981,61 @@ impl App {
                 {
                     self.redo();
                 }
-                if icon_button(ui, Icon::ClearGuides, "Hapus panduan", false, true).clicked() {
+                if icon_button(
+                    ui,
+                    Icon::ClearGuides,
+                    t("toolbar.clear_guides"),
+                    false,
+                    true,
+                )
+                .clicked()
+                {
                     match self.scene.delete_guides() {
                         Ok(()) => self.error = None,
                         Err(e) => self.error = Some(e.to_string()),
                     }
                     self.sync_edits();
                 }
-                if icon_button(ui, Icon::Group, "Grup", false, true).clicked() {
+                if icon_button(ui, Icon::Group, t("toolbar.group"), false, true).clicked() {
                     self.on_picked(|s, t, n| s.group(t, n));
                 }
-                if icon_button(ui, Icon::Component, "Komponen", false, true).clicked() {
+                if icon_button(ui, Icon::Component, t("toolbar.component"), false, true).clicked() {
                     self.on_picked(|s, t, n| s.make_component(t, n));
                 }
-                if icon_button(ui, Icon::Dissolve, "Pecah", false, true).clicked() {
+                if icon_button(ui, Icon::Dissolve, t("toolbar.dissolve"), false, true).clicked() {
                     self.on_picked(|s, t, n| s.dissolve(t, n));
                 }
-                if icon_button(ui, Icon::EditContents, "Edit isi", false, true).clicked() {
+                if icon_button(
+                    ui,
+                    Icon::EditContents,
+                    t("toolbar.edit_contents"),
+                    false,
+                    true,
+                )
+                .clicked()
+                {
                     self.enter_picked();
                 }
                 if self.scene.session().is_some()
-                    && icon_button(ui, Icon::Leave, "Keluar (Esc)", false, true).clicked()
+                    && icon_button(ui, Icon::Leave, t("toolbar.leave"), false, true).clicked()
                 {
                     self.leave_session();
                 }
-                if icon_button(ui, Icon::ZoomExtents, "Zoom extents", false, true).clicked() {
+                if icon_button(
+                    ui,
+                    Icon::ZoomExtents,
+                    t("toolbar.zoom_extents"),
+                    false,
+                    true,
+                )
+                .clicked()
+                {
                     self.fit_pending = true;
                 }
                 ui.separator();
-                for (label, yaw, pitch) in camera::VIEWS {
-                    let icon = Icon::view(label).expect("every view has an icon");
-                    let clicked = icon_button(ui, icon, label, false, true).clicked();
+                for (key, yaw, pitch) in camera::VIEWS {
+                    let icon = Icon::view(key).expect("every view has an icon");
+                    let clicked = icon_button(ui, icon, t(key), false, true).clicked();
                     if clicked {
                         self.orbit.yaw = yaw;
                         self.orbit.pitch = pitch;
@@ -2024,7 +2052,7 @@ impl App {
         });
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Nilai:");
+                ui.label(t("status.value"));
                 ui.monospace(if self.typed.is_empty() {
                     "-"
                 } else {
@@ -2044,11 +2072,11 @@ impl App {
                 }
                 ui.separator();
                 if let Some(m) = self.tool.measure() {
-                    ui.label(format!("Jarak: {}", self.unit.format(m)));
+                    ui.label(tf("status.distance", &[&self.unit.format(m)]));
                     ui.separator();
                 }
                 if self.tool.copying() {
-                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Menyalin");
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), t("status.copying"));
                     ui.separator();
                 }
                 if let Some(open) = self.session_label() {
@@ -2056,7 +2084,7 @@ impl App {
                     ui.separator();
                 }
                 if self.tool.keeping() {
-                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Solid baru");
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), t("status.new_solid"));
                     ui.separator();
                 }
                 if let Some(hit) = self.tool.preview().snap {
@@ -2071,30 +2099,37 @@ impl App {
                     ui.label(n);
                     ui.separator();
                 }
-                ui.label(format!(
-                    "{} tile · {} objek · {} segitiga",
-                    self.tile_count(),
-                    self.stats.values().map(|s| s.objects).sum::<usize>(),
-                    self.stats.values().map(|s| s.triangles).sum::<usize>(),
+                ui.label(tf(
+                    "status.stats",
+                    &[
+                        &self.tile_count(),
+                        &self.stats.values().map(|s| s.objects).sum::<usize>(),
+                        &self.stats.values().map(|s| s.triangles).sum::<usize>(),
+                    ],
                 ));
                 ui.separator();
                 match self.scene.project().origin {
-                    Some(o) => ui.label(format!(
-                        "EPSG:{} · origin ({:.3}, {:.3}, {:.3})",
-                        o.epsg, o.origin[0], o.origin[1], o.origin[2]
+                    Some(o) => ui.label(tf(
+                        "status.origin",
+                        &[
+                            &o.epsg,
+                            &format!("{:.3}", o.origin[0]),
+                            &format!("{:.3}", o.origin[1]),
+                            &format!("{:.3}", o.origin[2]),
+                        ],
                     )),
-                    None => ui.label("Tanpa origin proyek"),
+                    None => ui.label(t("status.no_origin")),
                 };
                 if self.split_on_open {
                     ui.separator();
                     ui.colored_label(
                         egui::Color32::from_rgb(200, 120, 0),
-                        format!("Dipecah menjadi {} tile kernel 1 km", self.tile_count()),
+                        tf("status.split", &[&self.tile_count()]),
                     );
                 }
                 if self.unsaved {
                     ui.separator();
-                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), "Belum disimpan");
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 0), t("status.unsaved"));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dt = ui.input(|i| i.stable_dt);
@@ -2165,7 +2200,7 @@ impl App {
         if self.scene.clouds.is_empty() && self.clouds_missing.is_empty() {
             return;
         }
-        egui::CollapsingHeader::new("Point cloud")
+        egui::CollapsingHeader::new(t("cloud.panel"))
             .default_open(true)
             .show(ui, |ui| {
                 let rows: Vec<_> = self
@@ -2191,18 +2226,21 @@ impl App {
                             self.unsaved = true;
                         }
                         if ui
-                            .small_button("Lepas")
-                            .on_hover_text("Dari proyek saja. File LAS tidak terhapus.")
+                            .small_button(t("cloud.remove"))
+                            .on_hover_text(t("cloud.remove_tip"))
                             .clicked()
                         {
                             self.remove_cloud(id);
                         }
                     });
-                    ui.weak(format!("{:.1} juta titik", points as f64 / 1e6));
+                    ui.weak(tf(
+                        "cloud.points",
+                        &[&format!("{:.1}", points as f64 / 1e6)],
+                    ));
                     if ui
                         .add(
                             egui::Slider::new(&mut size, MIN_POINT_SIZE..=MAX_POINT_SIZE)
-                                .text("ukuran titik"),
+                                .text(t("cloud.point_size")),
                         )
                         .changed()
                     {
@@ -2212,16 +2250,16 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("Geser")
-                            .on_hover_text("Klik titik acuan, lalu tujuannya. Snap ke apa pun.")
+                            .small_button(t("cloud.move"))
+                            .on_hover_text(t("cloud.move_tip"))
                             .clicked()
                         {
                             self.start_cloud_move(id);
                         }
                         if offset != [0.0; 3]
                             && ui
-                                .small_button("Kembalikan posisi")
-                                .on_hover_text("Ke koordinat aslinya di LAS.")
+                                .small_button(t("cloud.reset"))
+                                .on_hover_text(t("cloud.reset_tip"))
                                 .clicked()
                         {
                             self.reset_cloud_offset(id);
@@ -2230,9 +2268,13 @@ impl App {
                     if offset != [0.0; 3] {
                         ui.colored_label(
                             egui::Color32::from_rgb(190, 130, 30),
-                            format!(
-                                "Digeser {:.3}, {:.3}, {:.3} m dari koordinat LAS",
-                                offset[0], offset[1], offset[2]
+                            tf(
+                                "cloud.offset",
+                                &[
+                                    &format!("{:.3}", offset[0]),
+                                    &format!("{:.3}", offset[1]),
+                                    &format!("{:.3}", offset[2]),
+                                ],
                             ),
                         );
                     }
@@ -2240,7 +2282,7 @@ impl App {
                 for missing in self.clouds_missing.clone() {
                     ui.colored_label(
                         egui::Color32::from_rgb(170, 40, 40),
-                        format!("Tidak terbaca: {}", missing.path.display()),
+                        tf("cloud.missing", &[&missing.path.display()]),
                     );
                 }
                 let clouds = &mut self.scene.clouds;
@@ -2251,28 +2293,31 @@ impl App {
                             &mut budget,
                             MIN_DRAW_BUDGET as f64 / 1e6..=MAX_DRAW_BUDGET as f64 / 1e6,
                         )
-                        .text("juta titik digambar"),
+                        .text(t("cloud.budget")),
                     )
-                    .on_hover_text("Turunkan bila gerakan kamera terasa berat.")
+                    .on_hover_text(t("cloud.budget_tip"))
                     .changed();
                 if changed {
                     clouds.draw_budget = (budget * 1e6) as u64;
                     self.unsaved = true;
                 }
-                if ui.checkbox(&mut clouds.snap, "Snap ke titik").changed() {
+                if ui.checkbox(&mut clouds.snap, t("cloud.snap")).changed() {
                     self.unsaved = true;
                 }
                 ui.separator();
                 let has_box = clouds.slice.is_some();
                 ui.add_enabled_ui(has_box, |ui| {
-                    if ui.checkbox(&mut clouds.slice_on, "Potong aktif").changed() {
+                    if ui
+                        .checkbox(&mut clouds.slice_on, t("cloud.slice_on"))
+                        .changed()
+                    {
                         self.unsaved = true;
                         self.last_pointer = None;
                     }
                 });
                 if ui
-                    .add_enabled(clouds.slice_on, egui::Button::new("Tampilkan semua"))
-                    .on_hover_text("Memunculkan titik di luar kotak. Kotaknya tetap diingat.")
+                    .add_enabled(clouds.slice_on, egui::Button::new(t("cloud.show_all")))
+                    .on_hover_text(t("cloud.show_all_tip"))
                     .clicked()
                 {
                     clouds.slice_on = false;
@@ -2280,14 +2325,14 @@ impl App {
                     self.last_pointer = None;
                 }
                 if !has_box {
-                    ui.weak("Pakai Potong area (K) untuk melihat satu area saja.");
+                    ui.weak(t("cloud.slice_hint"));
                 }
             });
     }
 
-    /// The Berkas menu. Every entry says what it reads or writes.
+    /// The File menu. Every entry says what it reads or writes.
     fn file_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Berkas", |ui| {
+        ui.menu_button(t("menu.file"), |ui| {
             let item = |ui: &mut egui::Ui, label: &str, hint: &str| {
                 let clicked = ui.button(label).on_hover_text(hint).clicked();
                 if clicked {
@@ -2295,48 +2340,43 @@ impl App {
                 }
                 clicked
             };
-            if item(ui, "Baru", "Mulai proyek kosong.") {
+            if item(ui, t("menu.new"), t("menu.new_tip")) {
                 self.leave(Leaving::New);
             }
-            if item(
-                ui,
-                "Buka…  (Cmd/Ctrl+O)",
-                "Membuka proyek .hew atau .wangun.",
-            ) {
+            if item(ui, t("menu.open"), t("menu.open_tip")) {
                 self.leave(Leaving::Open);
             }
-            if item(
-                ui,
-                "Simpan  (Cmd/Ctrl+S)",
-                "Menyimpan ke file yang sedang dibuka. Proyek baru akan ditanya lokasinya.",
-            ) {
+            if item(ui, t("menu.save"), t("menu.save_tip")) {
                 self.save();
             }
-            if item(
-                ui,
-                "Simpan sebagai…  (Cmd/Ctrl+Shift+S)",
-                "Satu tile menjadi .hew, banyak tile menjadi .wangun.",
-            ) {
+            if item(ui, t("menu.save_as"), t("menu.save_as_tip")) {
                 self.dialog = Some(Dialog::SaveAs);
             }
-            if item(
-                ui,
-                "Ekspor…",
-                "Menulis model ke .obj, .glb, .gltf, .stl, atau .3mf. Proyek tidak berubah.",
-            ) {
+            if item(ui, t("menu.export"), t("menu.export_tip")) {
                 self.dialog = Some(Dialog::Export);
             }
-            if item(
-                ui,
-                "Impor point cloud…",
-                "Memuat .las sebagai acuan. Hanya titik yang perlu terlihat yang dimuat.",
-            ) {
+            if item(ui, t("menu.import_cloud"), t("menu.import_cloud_tip")) {
                 self.dialog = Some(Dialog::ImportCloud);
             }
             ui.separator();
-            if item(ui, "Format yang didukung…", "Penjelasan tiap format.") {
+            if item(ui, t("menu.formats"), t("menu.formats_tip")) {
                 self.formats_open = true;
             }
+            ui.separator();
+            // Fixed text in both languages, so that anyone can find it.
+            ui.menu_button("Bahasa / Language", |ui| {
+                for lang in Lang::ALL {
+                    let name = if lang.has_catalog() {
+                        lang.native_name().to_owned()
+                    } else {
+                        format!("{} (en)", lang.native_name())
+                    };
+                    if ui.radio(wangungis_i18n::current() == lang, name).clicked() {
+                        self.set_lang(lang);
+                        ui.close();
+                    }
+                }
+            });
         });
     }
 
@@ -2351,12 +2391,12 @@ impl App {
             p.total.load(Ordering::Relaxed),
         );
         let phase = match p.phase.load(Ordering::Relaxed) {
-            wangungis_pointcloud::PHASE_SCAN => "Membaca",
-            wangungis_pointcloud::PHASE_WRITE => "Menulis cache",
-            _ => "Mengacak",
+            wangungis_pointcloud::PHASE_SCAN => t("cloud.phase_scan"),
+            wangungis_pointcloud::PHASE_WRITE => t("cloud.phase_write"),
+            _ => t("cloud.phase_shuffle"),
         };
         let mut cancel = false;
-        egui::Window::new("Mengimpor point cloud")
+        egui::Window::new(t("cloud.import_title"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -40.0))
@@ -2372,7 +2412,7 @@ impl App {
                         .text(phase)
                         .desired_width(240.0),
                 );
-                cancel = ui.button("Batal").clicked();
+                cancel = ui.button(t("dialog.cancel")).clicked();
             });
         if cancel {
             p.cancel.store(true, Ordering::Relaxed);
@@ -2384,19 +2424,19 @@ impl App {
     /// The window explaining the formats.
     fn formats_window(&mut self, ctx: &egui::Context) {
         let mut open = self.formats_open;
-        egui::Window::new("Format yang didukung")
+        egui::Window::new(t("dialog.formats_title"))
             .open(&mut open)
             .collapsible(false)
             .show(ctx, |ui| {
                 egui::Grid::new("formats").striped(true).show(ui, |ui| {
-                    ui.strong("Aksi");
-                    ui.strong("Format");
-                    ui.strong("Isi dan batas");
+                    ui.strong(t("format.col_action"));
+                    ui.strong(t("format.col_format"));
+                    ui.strong(t("format.col_what"));
                     ui.end_row();
                     for (action, format, what) in FILE_FORMATS {
-                        ui.label(action);
+                        ui.label(t(action));
                         ui.monospace(format);
-                        ui.label(what);
+                        ui.label(t(what));
                         ui.end_row();
                     }
                 });
@@ -2420,23 +2460,23 @@ impl App {
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         };
         if self.recovery {
-            window("Pulihkan pekerjaan?").show(ctx, |ui| {
-                ui.label("Ada autosave dari sesi yang tidak berakhir normal.");
+            window(t("dialog.recover_title")).show(ctx, |ui| {
+                ui.label(t("dialog.recover_text"));
                 ui.horizontal(|ui| {
-                    if ui.button("Pulihkan").clicked() {
+                    if ui.button(t("dialog.recover")).clicked() {
                         self.recover();
                     }
-                    if ui.button("Buang").clicked() {
+                    if ui.button(t("dialog.discard")).clicked() {
                         self.discard_recovery();
                     }
                 });
             });
         }
         if let Some(what) = self.leaving {
-            window("Perubahan belum disimpan").show(ctx, |ui| {
-                ui.label("Perubahan terakhir belum disimpan.");
+            window(t("dialog.unsaved_title")).show(ctx, |ui| {
+                ui.label(t("dialog.unsaved_text"));
                 ui.horizontal(|ui| {
-                    if ui.button("Simpan").clicked() {
+                    if ui.button(t("dialog.save")).clicked() {
                         self.save();
                         if self.dialog.is_some() {
                             // Never saved: goes on once the file window has.
@@ -2449,11 +2489,11 @@ impl App {
                             self.leaving = None;
                         }
                     }
-                    if ui.button("Buang").clicked() {
+                    if ui.button(t("dialog.discard")).clicked() {
                         self.unsaved = false;
                         self.do_leave(what);
                     }
-                    if ui.button("Batal").clicked() {
+                    if ui.button(t("dialog.cancel")).clicked() {
                         self.leaving = None;
                     }
                 });
@@ -2667,6 +2707,23 @@ mod tests {
         }
         std::fs::write(&file, [0xff, 0xfe]).unwrap();
         assert_eq!(read_unit(&file), Unit::M, "not text");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_language_is_remembered_and_junk_means_indonesian() {
+        let dir = std::env::temp_dir().join(format!("wangungis-lang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("lang");
+        assert_eq!(read_lang(&file), Lang::Id, "no file yet");
+        for (text, want) in [
+            ("en", Lang::En),
+            ("zh-Hans\n", Lang::ZhHans),
+            ("klingon", Lang::Id),
+        ] {
+            std::fs::write(&file, text).unwrap();
+            assert_eq!(read_lang(&file), want, "{text:?}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

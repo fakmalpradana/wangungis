@@ -2798,7 +2798,7 @@ fn blank_tag_names_are_refused() {
     box_at_10(&mut s);
     let (&tile, doc) = s.project().tiles.iter().next().unwrap();
     let node = doc.top_level_nodes()[0];
-    let no = Err(EditError::Unsupported("nama tag kosong"));
+    let no = Err(EditError::Unsupported("error.tag_empty"));
     assert_eq!(s.tag_nodes(tile, &[node], "  "), no);
     assert_eq!(s.untag_nodes(tile, &[node], "A/ "), no);
     assert_eq!(s.set_tag_hidden("", true), no);

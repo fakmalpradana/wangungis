@@ -39,6 +39,12 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 
 - `smoke.rs` (hanya test): checklist `docs/user/uji-asap.md` dijalankan pada `App` asli dengan event egui mentah dan GPU offscreen, tanpa jendela. Mencakup keyboard, klik, seret, scroll, undo, simpan, buka ulang. Tombol toolbar tidak diklik lewat tata letak; kodenya hanya memanggil metode yang sama. Jendela OS tidak dibuka dalam test: `App::dialog` diperiksa, lalu `App::answer_dialog` dipanggil dengan path. `WANGUNGIS_SMOKE_DUMP=<folder>` menulis gambar viewport untuk dilihat.
 
+## Bahasa
+- Semua teks layar (menu, toolbar, tooltip, status bar, panel, jendela, pesan, nama sudut pandang `camera::VIEWS`, nama cat siap pakai) dibaca dari katalog `i18n` lewat `t(kunci)` dan `tf(kunci, args)`. Daftar `camera::VIEWS` dan `PAINTS` menyimpan kunci; `Icon::view` memetakan menurut kunci.
+- Menu Berkas punya submenu `Bahasa / Language` (teks tetap dua bahasa) berisi 16 bahasa dengan nama aslinya; yang aktif bertanda. Bahasa tanpa katalog diberi akhiran ` (en)` dan tampil dalam bahasa Inggris lewat fallback.
+- Pilihan disimpan sebagai kode bahasa di `~/.wangungis/lang` (seperti `unit`) dan dibaca saat start; berkas hilang atau kode tak dikenal berarti Indonesia. Teks sistem operasi seperti judul jendela berkas diambil saat jendela dibuka.
+- Nama cat yang dipilih disimpan ke dokumen dalam bahasa saat dipilih; nama itu data, tidak diterjemahkan ulang.
+
 ## Non-goals (menyusul)
 - Dialog file native.
 - Form pengisian origin.

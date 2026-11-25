@@ -2287,3 +2287,43 @@ fn outliner_through_the_app() {
     }
     assert_eq!(d.app.outline_rows[0].name, "Grup");
 }
+
+/// Puts Indonesian back when the English test ends, panic or not.
+struct BackToIndonesian;
+
+impl Drop for BackToIndonesian {
+    fn drop(&mut self) {
+        wangungis_i18n::set(wangungis_i18n::Lang::Id);
+    }
+}
+
+/// The hint line follows the language: a rectangle and a Push/Pull in English.
+#[test]
+fn the_hint_line_reads_english_when_english_is_set() {
+    let _gpu = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut d) = Driver::start() else { return };
+    let _reset = BackToIndonesian;
+    use egui::Key as K;
+
+    d.letter(K::R, "r");
+    assert!(d.app.tool.hint().contains("Klik sudut pertama"));
+    wangungis_i18n::set(wangungis_i18n::Lang::En);
+    assert_eq!(d.app.tool.hint(), "Click the first corner.");
+    d.click([2.0, 2.0, 0.0]);
+    d.hover([3.0, 3.0, 0.0]);
+    assert!(d.app.tool.hint().contains("opposite corner"));
+    d.value("5;4");
+    d.letter(K::P, "p");
+    assert!(d.app.tool.hint().starts_with("Click a region or face"));
+    d.click([3.5, 3.0, 0.0]);
+    assert!(d.app.tool.hint().contains("Click a height"));
+    d.value("3");
+    assert_eq!(d.counts(), (1, 12));
+    // A refused input is worded in English too.
+    d.letter(K::P, "p");
+    d.app.feed(Input::Typed("3".into()));
+    assert_eq!(
+        d.app.error.as_deref(),
+        Some("Not supported yet: click a face or region first")
+    );
+}
