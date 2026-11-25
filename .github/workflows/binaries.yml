@@ -95,7 +95,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Notes: the CHANGELOG section for this version (tag v0.1.0 -> [0.1.0]).
+          # A release candidate (v0.1.0-rc.1) takes the notes of its version.
           ver="${GITHUB_REF_NAME#v}"
+          ver="${ver%%-*}"
           awk -v v="$ver" '
             /^## \[/ { if (on) exit; on = index($0, "[" v "]") > 0; next }
             on { print }
