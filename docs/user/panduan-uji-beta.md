@@ -8,9 +8,11 @@ Tujuan uji ini ada tiga: menemukan masalah yang hanya muncul di Windows, menilai
 
 Pilih satu jalur. Jalur A lebih cepat bila pemilik proyek sudah membagikan file zip.
 
+Catatan untuk pemilik proyek: file zip dibuat oleh workflow `binaries` di GitHub Actions. Buka tab Actions, pilih `binaries`, lalu **Run workflow** pada `main`. Setelah selesai, unduh artifact `wangungis-<commit>-windows-x86_64` dari halaman run tersebut (perlu login GitHub). Artifact itu berupa zip yang berisi zip aplikasi beserta file `.sha256`, jadi bagikan zip di dalamnya.
+
 ### Jalur A: memakai file zip dari pemilik proyek
 
-1. Ekstrak `wangungis-<commit>-windows.zip` ke folder biasa, misalnya `C:\WangunGIS`. Kode `<commit>` pada nama file adalah versi yang Anda uji, jadi catat kodenya.
+1. Ekstrak `wangungis-<commit>-windows-x86_64.zip` ke folder biasa, misalnya `C:\WangunGIS`. Kode `<commit>` pada nama file adalah versi yang Anda uji, jadi catat kodenya.
 2. Buka PowerShell, lalu jalankan:
 
    ```powershell

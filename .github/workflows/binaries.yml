@@ -34,10 +34,14 @@ jobs:
         run: cargo build --release -p wangungis --locked
 
       # Fonts are embedded in the binary; the OFL requires its licence to travel with it.
+      # The commit is in the name so testers can report which build they ran.
+      # On a PR, github.sha is the merge commit, so take the branch head.
       - name: Package
         shell: bash
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          dir="wangungis-${{ matrix.name }}"
+          dir="wangungis-${SHA::7}-${{ matrix.name }}"
           mkdir "$dir"
           if [ "$RUNNER_OS" = "Windows" ]; then
             cp target/release/wangungis.exe "$dir/"
@@ -59,10 +63,11 @@ jobs:
             shasum -a 256 "$archive" > "$archive.sha256"
           fi
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          echo "DIR=$dir" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wangungis-${{ matrix.name }}
+          name: ${{ env.DIR }}
           path: |
             ${{ env.ARCHIVE }}
             ${{ env.ARCHIVE }}.sha256
