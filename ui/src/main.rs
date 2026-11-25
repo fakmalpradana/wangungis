@@ -7,6 +7,7 @@
 //! Usage: wangungis [file.hew | file.wangun]
 
 mod camera;
+mod icons;
 #[cfg(test)]
 mod smoke;
 
@@ -18,6 +19,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use camera::Orbit;
 use eframe::{egui, egui_wgpu};
+use icons::Icon;
 use inference::{Axis, PickRay, SnapKind};
 use kernel::{NodeId, Point3, Vec3};
 use wangungis_pointcloud::{
@@ -1857,6 +1859,37 @@ impl eframe::App for App {
     }
 }
 
+/// A square toolbar button drawn from `icons`. The tooltip and the accessible
+/// label are `label`; a disabled button ignores clicks.
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+) -> egui::Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label)
+        });
+        if ui.is_rect_visible(rect) {
+            let v = ui.style().interact_selectable(&resp, selected);
+            let painter = ui.painter();
+            painter.rect(
+                rect,
+                v.corner_radius,
+                v.weak_bg_fill,
+                v.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+            icons::paint(painter, rect.shrink(4.0), icon, v.fg_stroke.color);
+        }
+        resp.on_hover_text(label).on_disabled_hover_text(label)
+    })
+    .inner
+}
+
 impl App {
     /// One frame of the whole window. The smoke test drives this directly.
     fn shell(&mut self, ui: &mut egui::Ui) {
@@ -1893,74 +1926,89 @@ impl App {
                     if self.unsaved { " *" } else { "" }
                 ));
                 ui.separator();
-                for (label, make) in [
-                    ("Pilih (Spasi)", Tool::select as fn(f64) -> Tool),
-                    ("Garis (L)", Tool::line),
-                    ("Persegi (R)", Tool::rectangle),
-                    ("Lingkaran (C)", Tool::circle),
-                    ("Poligon (G)", Tool::polygon),
-                    ("Busur (A)", Tool::arc),
-                    ("Push/Pull (P)", Tool::push_pull),
-                    ("Offset (F)", Tool::offset),
-                    ("Follow Me", Tool::follow_me),
-                    ("Ukur (T)", Tool::tape),
-                    ("Pindah (M)", Tool::move_tool),
-                    ("Putar (Q)", Tool::rotate),
-                    ("Skala (S)", Tool::scale),
-                    ("Cat (B)", Tool::paint),
-                    ("Potong area (K)", Tool::cloud_slice),
-                    ("Geser awan (J)", Tool::cloud_move),
-                    ("Hapus (E)", Tool::eraser),
+                for (label, icon, make) in [
+                    (
+                        "Pilih (Spasi)",
+                        Icon::Select,
+                        Tool::select as fn(f64) -> Tool,
+                    ),
+                    ("Garis (L)", Icon::Line, Tool::line),
+                    ("Persegi (R)", Icon::Rectangle, Tool::rectangle),
+                    ("Lingkaran (C)", Icon::Circle, Tool::circle),
+                    ("Poligon (G)", Icon::Polygon, Tool::polygon),
+                    ("Busur (A)", Icon::Arc, Tool::arc),
+                    ("Push/Pull (P)", Icon::PushPull, Tool::push_pull),
+                    ("Offset (F)", Icon::Offset, Tool::offset),
+                    ("Follow Me", Icon::FollowMe, Tool::follow_me),
+                    ("Ukur (T)", Icon::Tape, Tool::tape),
+                    ("Pindah (M)", Icon::Move, Tool::move_tool),
+                    ("Putar (Q)", Icon::Rotate, Tool::rotate),
+                    ("Skala (S)", Icon::Scale, Tool::scale),
+                    ("Cat (B)", Icon::Paint, Tool::paint),
+                    ("Potong area (K)", Icon::CloudSlice, Tool::cloud_slice),
+                    ("Geser awan (J)", Icon::CloudMove, Tool::cloud_move),
+                    ("Hapus (E)", Icon::Eraser, Tool::eraser),
                 ] {
-                    if ui
-                        .selectable_label(self.tool.same_kind(&make(0.0)), label)
-                        .clicked()
+                    if icon_button(ui, icon, label, self.tool.same_kind(&make(0.0)), true).clicked()
                     {
                         self.switch_tool(make);
                     }
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(self.scene.can_undo(), egui::Button::new("Undo"))
-                    .clicked()
+                if icon_button(
+                    ui,
+                    Icon::Undo,
+                    "Undo (Cmd/Ctrl+Z)",
+                    false,
+                    self.scene.can_undo(),
+                )
+                .clicked()
                 {
                     self.undo();
                 }
-                if ui
-                    .add_enabled(self.scene.can_redo(), egui::Button::new("Redo"))
-                    .clicked()
+                if icon_button(
+                    ui,
+                    Icon::Redo,
+                    "Redo (Cmd/Ctrl+Shift+Z)",
+                    false,
+                    self.scene.can_redo(),
+                )
+                .clicked()
                 {
                     self.redo();
                 }
-                if ui.button("Hapus panduan").clicked() {
+                if icon_button(ui, Icon::ClearGuides, "Hapus panduan", false, true).clicked() {
                     match self.scene.delete_guides() {
                         Ok(()) => self.error = None,
                         Err(e) => self.error = Some(e.to_string()),
                     }
                     self.sync_edits();
                 }
-                if ui.button("Grup").clicked() {
+                if icon_button(ui, Icon::Group, "Grup", false, true).clicked() {
                     self.on_picked(|s, t, n| s.group(t, n));
                 }
-                if ui.button("Komponen").clicked() {
+                if icon_button(ui, Icon::Component, "Komponen", false, true).clicked() {
                     self.on_picked(|s, t, n| s.make_component(t, n));
                 }
-                if ui.button("Pecah").clicked() {
+                if icon_button(ui, Icon::Dissolve, "Pecah", false, true).clicked() {
                     self.on_picked(|s, t, n| s.dissolve(t, n));
                 }
-                if ui.button("Edit isi").clicked() {
+                if icon_button(ui, Icon::EditContents, "Edit isi", false, true).clicked() {
                     self.enter_picked();
                 }
-                if self.scene.session().is_some() && ui.button("Keluar").clicked() {
+                if self.scene.session().is_some()
+                    && icon_button(ui, Icon::Leave, "Keluar (Esc)", false, true).clicked()
+                {
                     self.leave_session();
                 }
-                ui.separator();
-                if ui.button("Zoom extents").clicked() {
+                if icon_button(ui, Icon::ZoomExtents, "Zoom extents", false, true).clicked() {
                     self.fit_pending = true;
                 }
                 ui.separator();
                 for (label, yaw, pitch) in camera::VIEWS {
-                    if ui.button(label).clicked() {
+                    let icon = Icon::view(label).expect("every view has an icon");
+                    let clicked = icon_button(ui, icon, label, false, true).clicked();
+                    if clicked {
                         self.orbit.yaw = yaw;
                         self.orbit.pitch = pitch;
                         self.camera_moved();
