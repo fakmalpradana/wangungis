@@ -2326,4 +2326,12 @@ fn the_hint_line_reads_english_when_english_is_set() {
         d.app.error.as_deref(),
         Some("Not supported yet: click a face or region first")
     );
+    // The picked preset paint follows a switch from the menu, both ways.
+    d.app.set_lang(wangungis_i18n::Lang::Id);
+    assert_eq!(d.app.paint.as_ref().map(|p| p.name.as_str()), Some("Beton"));
+    d.app.set_lang(wangungis_i18n::Lang::En);
+    assert_eq!(
+        d.app.paint.as_ref().map(|p| p.name.as_str()),
+        Some("Concrete")
+    );
 }

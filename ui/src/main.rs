@@ -230,7 +230,13 @@ impl App {
             .wgpu_render_state
             .clone()
             .expect("eframe started with the wgpu renderer");
+        // The language first: `with_render_state` already names the default paint.
+        let lang_file = user_file("lang");
+        if let Some(p) = &lang_file {
+            wangungis_i18n::set(read_lang(p));
+        }
         let mut app = Self::with_render_state(rs);
+        app.lang_file = lang_file;
         app.autosave = default_autosave();
         app.recovery = app.autosave.as_ref().is_some_and(|p| p.exists());
         app.cache_dir = user_file("cache");
@@ -238,10 +244,6 @@ impl App {
         if let Some(p) = &app.unit_file {
             app.unit = read_unit(p);
             app.tool.set_unit(app.unit);
-        }
-        app.lang_file = user_file("lang");
-        if let Some(p) = &app.lang_file {
-            wangungis_i18n::set(read_lang(p));
         }
         // Last: a project's clouds need the folders above.
         if let Some(path) = path {
@@ -942,7 +944,15 @@ impl App {
     }
 
     fn set_lang(&mut self, lang: Lang) {
+        // The picked preset is renamed into the new language; a custom color keeps its name.
+        let preset = self
+            .paint
+            .as_ref()
+            .and_then(|p| PAINTS.iter().find(|(key, _)| t(key) == p.name).copied());
         wangungis_i18n::set(lang);
+        if let Some(preset) = preset {
+            self.paint = Some(ready_paint(named_paint(preset)));
+        }
         if let Some(p) = &self.lang_file {
             let written = p
                 .parent()
