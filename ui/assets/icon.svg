@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- WangunGIS app icon: a slanted W from two strokes built on circles. Black
+       U in front with a thin white rim; orange arm and partial bottom arc behind.
+       The outer group centres the glyph's bounding box on the tile. -->
+  <defs>
+    <linearGradient id="o" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#FF8A1F"/><stop offset="0.6" stop-color="#F27300"/><stop offset="1" stop-color="#D45F00"/></linearGradient>
+    <linearGradient id="k" x1="0.2" y1="0" x2="0.5" y2="1"><stop offset="0" stop-color="#3C3C3C"/><stop offset="0.5" stop-color="#1A1A1A"/><stop offset="1" stop-color="#050505"/></linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="#FFFFFF"/>
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="none" stroke="#E6E6E6" stroke-width="8"/>
+  <g transform="translate(512 512) scale(0.94) translate(-578 -513)">
+  <g transform="translate(512 512) skewX(-12) translate(-512 -512)">
+    <path d="M234,328 A56,56 0 0 1 290,384 L290,640 A112,112 0 0 0 499.0,696.0" stroke="url(#o)" stroke-width="98" stroke-linecap="round" fill="none"/>
+    <path d="M534,420 L534,640 A112,112 0 0 0 758,640 L758,330 A56,56 0 0 1 814,274" stroke="#FFFFFF" stroke-width="190" stroke-linecap="round" fill="none"/>
+    <path d="M534,420 L534,640 A112,112 0 0 0 758,640 L758,330 A56,56 0 0 1 814,274" stroke="url(#k)" stroke-width="158" stroke-linecap="round" fill="none"/>
+  </g>
+  </g>
+</svg>

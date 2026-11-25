@@ -9,6 +9,7 @@ Bagian bertanda `TODO` diisi setelah riset (Tahap 0) dan ADR selesai. Jangan men
 - Platform: macOS, Windows, Linux. Satu basis kode. Dev utama di macOS (Apple Silicon).
 - Pelaksana: 1 manusia (pemilik, pengambil keputusan) + agen AI. Penguji beta: 3D engineer milik pemilik, menguji perilaku aplikasi dan memberi umpan balik langsung. Tidak ada budget uang.
 - Strategi: jalur **A2** (ADR-000, K2 2026-11-01). Crate inti Hew (`kernel`, `inference`, `tessellate`, `mesh-export`) dipakai sebagai library, dengan aplikasi native sendiri.
+- Status: `v0.1.0-rc.1` di-tag 2026-11-25 (prerelease untuk uji beta). Lingkup v0.1.0 dan batas yang diketahui: `CHANGELOG.md` dan `README.md`.
 - Clean-room: tiru alur kerja dan perilaku UX SketchUp, JANGAN salin kode, aset, ikon, nama, atau merek dagangnya.
 
 ## 2. Prinsip (urutan prioritas)
@@ -25,26 +26,33 @@ Bagian bertanda `TODO` diisi setelah riset (Tahap 0) dan ADR selesai. Jangan men
 - Kernel geometri: crate `kernel` Hew, dependensi git dipin ke satu commit. Manifold opsional untuk boolean berat/LOD3 (ADR-004)
 - Format native: `.hew` + atribut `wangungis.*` (ADR-006)
 - Scripting/plugin: Python sebagai proses terpisah, mulai v0.5. WASM dipertimbangkan setelah v0.5 (ADR-007)
-- Build/CI: GitHub Actions (macOS, Windows, Linux), semua wajib hijau.
+- Teks UI: crate `wangungis-i18n`, 16 bahasa. Font Noto disematkan di binary (ADR-010).
+- Build/CI: GitHub Actions (macOS, Windows, Linux), semua wajib hijau. Workflow `ci` untuk test, `binaries` untuk binary rilis dan draft release.
 
-## 4. Struktur repo (target)
+## 4. Struktur repo
+Crate workspace saat ini (`Cargo.toml`):
 ```
-core-geometry/   half-edge mesh, operasi geometri, robust predicates
-scene/           scene graph, Groups, Components, Tags, Scenes
-commands/        command pattern, undo/redo
-inference/       inference engine (snapping, axis lock, ray picking)
-tools/           tool interaksi (Line, Rect, Push/Pull, Follow Me, ...)
-render/          renderer, edge rendering, shadow
-ui/              antarmuka, VCB, toolbar, shortcut
-lod/             LOD1–3: footprint extrude, roof fitting, template fasad, semantik
-io/              CityJSON, CityGML, 3D Tiles, IFC, glTF/OBJ, DXF, GeoJSON/Shapefile/GeoTIFF
-plugin-host/     API Python
-docs/            adr/, spec/, user/
-tests/           unit, property-based, golden-image, benchmark
+i18n/        teks UI: Lang, t(), tf(), katalog locales/*.json, GLOSSARY.md
+scene/       proyek: origin (EPSG + titik f64), tile, batas koordinat aman untuk kernel
+render/      renderer wgpu, batching per tile + RTC, golden-image test
+tools/       lapisan edit tanpa GPU/UI: tool, snap, pick, grup, tag, cat, undo/redo
+io/          ekspor mesh (.obj, .stl, .glb, .3mf)
+pointcloud/  impor LAS, cache, potong kotak
+ui/          aplikasi eframe: toolbar, ikon, VCB, menu, font, smoke test; binary `wangungis`
+docs/        adr/, plan/, research/, sessions/, user/
+scripts/     validate_lod.py
+tests/       fixtures bersama
 ```
-Jalur A2: `core-geometry` (half-edge, push/pull, boolean, toleransi), `commands` (undo/redo), dan `inference` disediakan crate Hew. Modul kita hanya membungkus atau menambah yang belum ada. Jangan menulis ulang yang sudah ada di Hew (§8 langkah 3a). Struktur final ditetapkan saat scaffold F0.
+Modul rencana yang belum ada: `lod/` (roof fitting, template fasad), I/O geospasial (CityJSON, CityGML, 3D Tiles, IFC), `plugin-host/` (Python, v0.5).
+Jalur A2: half-edge, Push/Pull, boolean, toleransi, undo, dan inference dasar disediakan crate Hew (`kernel`, `inference`, `tessellate`, `mesh-export`), dipin ke satu rev di `Cargo.toml`. Modul kita hanya membungkus atau menambah yang belum ada. Jangan menulis ulang yang sudah ada di Hew (§8 langkah 3a).
 
 Setiap modul punya `SPEC.md` (tujuan, API publik, invariant, non-goals). Ubah kode publik = ubah SPEC.md di PR yang sama.
+
+Teks yang dilihat pengguna:
+- Selalu lewat kunci `t("grup.nama")` atau `tf("grup.nama", &[..])`, tidak pernah string literal di UI.
+- Kunci baru ditambahkan ke ke-16 katalog `i18n/locales/*.json` dengan placeholder `{n}` yang sama. `id.json` adalah sumber set kunci. Test `i18n` menolak kunci hilang, tidak terpakai, atau placeholder berbeda.
+- Terjemahan selain id dan en adalah draf mesin: ikuti `i18n/GLOSSARY.md`, dan bila istilah berubah, ubah glosarium dulu.
+- Aksara baru wajib punya glyph di font bawaan (test `every_screen_character_has_a_glyph` di `ui/src/fonts.rs`).
 
 ## 5. Reuse vs tulis sendiri
 Wajib pakai library matang (jangan tulis ulang):
@@ -81,7 +89,7 @@ Pembagian:
 | ponytail (kode minimal, reuse dulu) | semua implementasi, refactor, review | mengurangi test, validasi input, error handling, robust predicates, toleransi numerik, sandbox plugin, aksesibilitas UI |
 
 Tangga ponytail sebelum menulis kode: perlu ada? sudah ada di stdlib/dependensi/library terpilih? ada fitur platform? baru tulis versi paling kecil yang benar.
-Mode usulan (verifikasi setelah baca SKILL.md): ringan untuk `core-geometry`/`inference`, standar untuk fitur umum, agresif untuk boilerplate, wrapper I/O, glue UI.
+Mode usulan (verifikasi setelah baca SKILL.md): ringan untuk kode geometri dan snap (`tools`, `scene`, pembungkus Hew), standar untuk fitur umum, agresif untuk boilerplate, wrapper I/O, glue UI.
 Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi (`cargo tree`), waktu build CI, dan token per sesi per fase. `/ponytail-gain` hanya menampilkan median benchmark plugin, bukan ukuran repo ini. Ekspektasi realistis: `docs/research/skill.md`.
 
 ## 8. Alur setiap tugas
@@ -100,6 +108,8 @@ Ukur dampak, jangan percaya klaim: catat baris kode (`tokei`), jumlah dependensi
 - Test semua: `cargo test --workspace` (CI juga menjalankan `--release`)
 - Test satu modul: `cargo test -p wangungis-<modul>` (mis. `wangungis-scene`)
 - Lint/format: `cargo fmt --all --check` dan `cargo clippy --workspace --all-targets -- -D warnings`
+- Gerbang lokal sebelum commit (sama dengan CI): `cargo fmt --all --check`, clippy di atas, lalu `WANGUNGIS_REQUIRE_GPU=1 cargo test --workspace --locked` dan versi `--release`. Tanpa variabel itu, golden-image dan smoke test UI terlewati diam-diam bila GPU tidak ada.
+- Binary rilis: `cargo build --release -p wangungis --locked` (hasil di `target/release/wangungis`).
 - Benchmark: `TODO`
 - Validasi ekspor LOD (val3dity): `python scripts/validate_lod.py` (butuh `cjval` dan `val3dity` di PATH)
 
@@ -120,6 +130,9 @@ Tulis di `docs/sessions/YYYY-MM-DD-<topik>.md` (gaya caveman, maks 15 baris): tu
 - Claude Code: perancangan, implementasi modul inti (geometry, inference, tools), refactor besar, ADR, SPEC.
 - Gemini: implementasi modul I/O dan format, test tambahan, benchmark, dokumentasi, review silang pekerjaan Claude.
 - Aturan: agen yang menulis kode tidak jadi satu-satunya reviewer kodenya. Tukar peran per PR.
+- Delegasi di dalam Claude Code (pemilik, 2026-11-25): coding dan tugas repetitif ke subagen Sonnet (effort medium); Opus merancang, menulis brief, membaca diff, menjalankan gerbang, commit, dan membuka PR. Subagen tidak menulis ke git.
+- Batas agen lain: agy/Gemini headless hanya me-review (menulis butuh izin longgar yang belum disetujui pemilik). Codex hanya mengedit berkas di worktree, tanpa GPU, dan tidak commit.
+- Laporan "hijau" dari agen mana pun tidak cukup: baca diff dan jalankan gerbang sendiri.
 - Pembagian ini boleh diubah manusia sesuai hasil.
 
 ## 13. Git
@@ -127,9 +140,11 @@ Tulis di `docs/sessions/YYYY-MM-DD-<topik>.md` (gaya caveman, maks 15 baris): tu
 - Commit kecil, Conventional Commits (`feat(inference): ...`).
 - Main selalu hijau. Tidak ada push langsung ke main.
 - PR: ringkasan 3–5 baris, risiko, test yang ditambah, hasil benchmark bila relevan.
+- Perubahan yang terlihat pengguna dicatat di `CHANGELOG.md` bagian versi berikut.
+- Rilis: versi di `[workspace.package]` `Cargo.toml`. Tag `vX.Y.Z-rc.N` lalu `vX.Y.Z` memicu workflow `binaries`, yang membuat DRAFT GitHub Release (rc = prerelease) berisi arsip 3 OS + `.sha256` dan catatan dari `CHANGELOG.md`. Pemilik yang mempublikasikan.
 
 ## 14. Checkpoint manusia
-Wajib persetujuan manusia sebelum: menambah dependensi, mengganti commit pin crate Hew, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, atau perubahan lisensi. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
+Wajib persetujuan manusia sebelum: menambah dependensi, mengganti commit pin crate Hew, mengubah format file native, mengubah API publik, mengubah toleransi geometri, menghapus test, perubahan lisensi, membuat atau mendorong tag rilis, atau menghapus branch. Review manusia rutin: tiap akhir fase + tiap 2 minggu baca ulang SPEC.md modul inti.
 
 ## 15. Dilarang
 - Menyalin kode/aset/ikon/merek SketchUp atau software proprietary lain.

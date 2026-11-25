@@ -70,7 +70,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("WangunGIS"),
+            .with_title("WangunGIS")
+            .with_icon(app_icon()),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -79,6 +80,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc, path)))),
     )
+}
+
+/// Window, taskbar and Dock icon (ADR-011). The PNG is embedded and tested.
+fn app_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png"))
+        .expect("embedded assets/icon-256.png is a valid PNG")
 }
 
 /// One tile's numbers for the status bar and zoom extents.
@@ -2628,6 +2635,18 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_icon_is_256_rgba_with_transparent_corner_and_opaque_centre() {
+        let i = app_icon();
+        assert_eq!((i.width, i.height), (256, 256));
+        assert_eq!(i.rgba.len(), 256 * 256 * 4);
+        assert_eq!(i.rgba[3], 0, "corner pixel (0,0) must be transparent");
+        let centre_opaque = (120..136)
+            .flat_map(|y| (120..136).map(move |x| (y * 256 + x) * 4 + 3))
+            .any(|a| i.rgba[a] == 255);
+        assert!(centre_opaque, "centre must contain opaque pixels");
+    }
 
     #[test]
     fn bounds_union_shifts_each_tile_by_its_center() {
