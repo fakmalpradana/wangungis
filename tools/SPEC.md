@@ -20,12 +20,12 @@ Lapisan edit tanpa GPU dan tanpa UI. `Scene` membungkus `scene::project::Project
 - `add_guide_point`, `add_guide_line`, `delete_guides`, `guide_lines`, `edge_direction`: panduan konstruksi. Garis panduan digambar dan bisa di-snap ±200 m dari titiknya (ponytail; Hew menganggapnya tak terbatas).
 - `follow_me(tile, profile, path)`, `follow_me_face(tile, source, path)`: menyapu region, atau face solid, sepanjang gambar yang tersambung ke garis `path`. Dalam satu tile, satu langkah undo. Hasil dari face menyatu dengan solidnya bila bersentuhan.
 - `undo()`, `redo()`, `can_undo()`, `can_redo()`: mengikuti urutan edit lintas tile.
-- `EditError { OutOfTile, OutOfProject, Kernel, Unsupported }`, dengan pesan bahasa Indonesia lewat `Display`.
+- `EditError { OutOfTile, OutOfProject, Kernel, Unsupported, OutOfScope }`. Pesan `Display` datang dari katalog bahasa (`i18n`, kunci `error.*`), jadi mengikuti bahasa yang sedang aktif; bawaan Indonesia. `Unsupported` memuat **kunci katalog** (mis. `"error.tag_empty"`), bukan teks. Teks dari Hew di `Kernel(..)` ditambahkan apa adanya.
 
 ## Tool (`tool`, `vcb`)
 Tool adalah mesin status tanpa GPU dan tanpa UI. `Tool::{select, line, rectangle, circle, polygon, arc, push_pull, offset, move_tool, rotate, scale, eraser, tape, follow_me}(aperture)`, lalu `handle(&mut scene, input)` dan `preview()`.
 - Input: `Hover(ray)`, `Click(ray)`, `ClickAdd(ray)`, `Typed(teks)`, `LockAxis(sumbu)`, `LockNormal`, `Cancel`, `ToggleCopy`. `picked_nodes()`: node yang dipilih Select.
-- `hint()`: apa yang ditunggu tool sekarang, dalam kalimat untuk status bar.
+- `hint()`: apa yang ditunggu tool sekarang, dalam kalimat untuk status bar. Teksnya dari katalog (kunci `tool.hint.*`, `tool.lock.*`), dalam bahasa yang sedang aktif.
 - `Preview { lines, snap }`: garis overlay dan isyarat snap, dalam koordinat lokal proyek. Digambar UI.
 - `busy()`: ada gesture berjalan. `reset()`: kembali ke awal; dipanggil UI setelah undo/redo karena id lama bisa basi.
 - `selected()`: hasil pilihan Select (`Target::Solid` atau `Target::Region`).

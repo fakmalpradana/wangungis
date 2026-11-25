@@ -181,15 +181,15 @@ impl Icon {
         Icon::ViewLeft,
     ];
 
-    /// Icon of a `camera::VIEWS` entry, by its label.
-    pub fn view(label: &str) -> Option<Icon> {
-        Some(match label {
-            "Atas" => Icon::ViewTop,
-            "Depan" => Icon::ViewFront,
-            "Kanan" => Icon::ViewRight,
-            "Iso" => Icon::ViewIso,
-            "Belakang" => Icon::ViewBack,
-            "Kiri" => Icon::ViewLeft,
+    /// Icon of a `camera::VIEWS` entry, by its catalog key.
+    pub fn view(key: &str) -> Option<Icon> {
+        Some(match key {
+            "view.top" => Icon::ViewTop,
+            "view.front" => Icon::ViewFront,
+            "view.right" => Icon::ViewRight,
+            "view.iso" => Icon::ViewIso,
+            "view.back" => Icon::ViewBack,
+            "view.left" => Icon::ViewLeft,
             _ => return None,
         })
     }
@@ -902,10 +902,10 @@ mod tests {
 
     #[test]
     fn view_labels_map_to_icons() {
-        assert_eq!(Icon::view("Atas"), Some(Icon::ViewTop));
-        assert_eq!(Icon::view("Iso"), Some(Icon::ViewIso));
-        assert_eq!(Icon::view("Belakang"), Some(Icon::ViewBack));
-        assert_eq!(Icon::view("Kiri"), Some(Icon::ViewLeft));
+        assert_eq!(Icon::view("view.top"), Some(Icon::ViewTop));
+        assert_eq!(Icon::view("view.iso"), Some(Icon::ViewIso));
+        assert_eq!(Icon::view("view.back"), Some(Icon::ViewBack));
+        assert_eq!(Icon::view("view.left"), Some(Icon::ViewLeft));
         for (label, ..) in crate::camera::VIEWS {
             assert!(Icon::view(label).is_some(), "{label} has no icon");
         }

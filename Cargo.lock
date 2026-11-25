@@ -2808,12 +2808,20 @@ dependencies = [
  "pollster 1.0.1",
  "rfd",
  "serde_json",
+ "wangungis-i18n",
  "wangungis-io",
  "wangungis-pointcloud",
  "wangungis-render",
  "wangungis-scene",
  "wangungis-tools",
  "wgpu",
+]
+
+[[package]]
+name = "wangungis-i18n"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -2836,6 +2844,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "wangungis-i18n",
  "wangungis-render",
 ]
 
@@ -2871,6 +2880,7 @@ dependencies = [
  "kernel",
  "las",
  "proptest",
+ "wangungis-i18n",
  "wangungis-pointcloud",
  "wangungis-render",
  "wangungis-scene",

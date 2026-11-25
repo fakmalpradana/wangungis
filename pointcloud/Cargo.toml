@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+wangungis-i18n.workspace = true
 las.workspace = true
 bytemuck.workspace = true
 serde.workspace = true

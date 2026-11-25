@@ -22,6 +22,7 @@ use kernel::{
     Document, KernelOp, Material, NodeId, ObjectId, Plane, Point3, Rgba8, SketchId, SketchIslandId,
     SketchRegionId, Transform, Vec3,
 };
+use wangungis_i18n::{t, tf};
 use wangungis_pointcloud::CloudSet;
 use wangungis_scene::project::{
     Project, ProjectError, TileKey, horizontal_reach, node_points, node_visible,
@@ -41,7 +42,8 @@ pub enum EditError {
     OutOfProject,
     /// The kernel refused the operation.
     Kernel(String),
-    /// Not supported yet (e.g. editing inside a component).
+    /// Not supported yet (e.g. editing inside a component). Holds the catalog key
+    /// of what is not supported, so that it reads in the language of the moment.
     Unsupported(&'static str),
     /// Geometry outside what is open for editing.
     OutOfScope,
@@ -50,20 +52,20 @@ pub enum EditError {
 impl fmt::Display for EditError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EditError::OutOfTile { reach_m, .. } => write!(
-                f,
-                "Ditolak: hasilnya {reach_m:.0} m dari pusat tile (batas {KERNEL_FRAME_BOUND_M:.0} m)"
-            ),
-            EditError::OutOfProject => write!(
-                f,
-                "Ditolak: di luar batas proyek (±{PROJECT_BOUND_M:.0} m dari origin)"
-            ),
-            EditError::Kernel(e) => write!(f, "Ditolak kernel: {e}"),
-            EditError::Unsupported(what) => write!(f, "Belum didukung: {what}"),
-            EditError::OutOfScope => write!(
-                f,
-                "Di luar yang sedang diedit. Isi grup atau komponen: klik dua kali untuk masuk. Esc keluar lagi."
-            ),
+            EditError::OutOfTile { reach_m, .. } => f.write_str(&tf(
+                "error.out_of_tile",
+                &[
+                    &format!("{reach_m:.0}"),
+                    &format!("{KERNEL_FRAME_BOUND_M:.0}"),
+                ],
+            )),
+            EditError::OutOfProject => f.write_str(&tf(
+                "error.out_of_project",
+                &[&format!("{PROJECT_BOUND_M:.0}")],
+            )),
+            EditError::Kernel(e) => f.write_str(&tf("error.kernel", &[e])),
+            EditError::Unsupported(key) => f.write_str(&tf("error.unsupported", &[&t(key)])),
+            EditError::OutOfScope => f.write_str(t("error.out_of_scope")),
         }
     }
 }
@@ -87,9 +89,9 @@ fn kernel_err<E: fmt::Debug>(e: E) -> EditError {
 
 fn node_kind(node: NodeId) -> &'static str {
     match node {
-        NodeId::Object(_) => "Objek",
-        NodeId::Group(_) => "Grup",
-        NodeId::Instance(_) => "Komponen",
+        NodeId::Object(_) => t("outline.object"),
+        NodeId::Group(_) => t("outline.group"),
+        NodeId::Instance(_) => t("outline.component"),
     }
 }
 
@@ -105,7 +107,7 @@ fn own_name(doc: &Document, node: NodeId) -> Option<&str> {
 fn tag_path(name: &str) -> Result<Vec<String>, EditError> {
     let path: Vec<String> = name.split('/').map(str::trim).map(str::to_owned).collect();
     if path.is_empty() || path.iter().any(String::is_empty) {
-        Err(EditError::Unsupported("nama tag kosong"))
+        Err(EditError::Unsupported("error.tag_empty"))
     } else {
         Ok(path)
     }
@@ -468,11 +470,11 @@ fn follow_route(
 ) -> Result<kernel::FollowMePath, EditError> {
     let sk = doc
         .sketch(path.0)
-        .ok_or(EditError::Kernel("sketch hilang".into()))?;
+        .ok_or(EditError::Kernel(t("error.sketch_missing").into()))?;
     let island = sk
         .island_of_edge(path.1)
         .and_then(|i| sk.islands().get(i))
-        .ok_or(EditError::Kernel("garis hilang".into()))?;
+        .ok_or(EditError::Kernel(t("error.line_missing").into()))?;
     Ok(kernel::FollowMePath::SketchEdges {
         sketch: path.0,
         edges: island.edges.clone(),
@@ -1127,7 +1129,7 @@ impl Scene {
             NodeId::Group(g) => doc.open_group_session(g),
             NodeId::Instance(i) => doc.open_explode_session(i),
             NodeId::Object(_) => {
-                return Err(EditError::Unsupported("objek biasa tidak punya isi"));
+                return Err(EditError::Unsupported("error.object_no_contents"));
             }
         }
         .map_err(kernel_err)?;
@@ -1180,9 +1182,7 @@ impl Scene {
                     .is_some_and(|sk| planes_coincide(&plane, &sk.plane()))
         });
         if taken {
-            return Err(EditError::Unsupported(
-                "menggambar pada bidang yang berisi gambar di sisi lain batas grup",
-            ));
+            return Err(EditError::Unsupported("error.draw_across_group"));
         }
         Ok(())
     }
@@ -1352,7 +1352,7 @@ impl Scene {
     ) -> Result<Drawn, EditError> {
         let first = segments
             .first()
-            .ok_or(EditError::Unsupported("gambar kosong"))?
+            .ok_or(EditError::Unsupported("error.empty_drawing"))?
             .0;
         let key = tile.unwrap_or_else(|| TileKey::of([first.x, first.y]));
         let c = key.center();
@@ -1731,7 +1731,7 @@ impl Scene {
             .project
             .tiles
             .get(&key)
-            .ok_or(EditError::Kernel("tile hilang".into()))?;
+            .ok_or(EditError::Kernel(t("error.tile_missing").into()))?;
         let mut points: Vec<Point3> = match m {
             Movable::Node { node, .. } => node_points(doc, *node),
             Movable::Island { segments, .. } => {
@@ -1800,7 +1800,7 @@ impl Scene {
             } => {
                 let plane = doc
                     .sketch(*sketch)
-                    .ok_or(EditError::Kernel("sketch hilang".into()))?
+                    .ok_or(EditError::Kernel(t("error.sketch_missing").into()))?
                     .plane();
                 // Every copy of every point on the plane: the kernel can draft them.
                 let stays = {
@@ -2014,7 +2014,7 @@ impl Scene {
         self.check_source(tile, source)?;
         self.check_sketch(tile, path.0)?;
         let inference::ElementRef::Face(face) = source.element else {
-            return Err(EditError::Unsupported("follow me selain pada face"));
+            return Err(EditError::Unsupported("error.follow_face_only"));
         };
         self.check_tile(tile)?;
         let doc = self.project.tile_mut(tile)?;
@@ -2071,9 +2071,7 @@ impl Scene {
             made += 1;
         }
         if made == 0 {
-            return Err(EditError::Unsupported(
-                "yang dipilih bukan grup atau komponen",
-            ));
+            return Err(EditError::Unsupported("error.not_group_or_component"));
         }
         self.record_steps(tile, made);
         Ok(())
@@ -2143,13 +2141,13 @@ impl Scene {
         Self::check_distance(distance)?;
         self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
-            return Err(EditError::Unsupported("push/pull selain pada face"));
+            return Err(EditError::Unsupported("error.pushpull_face_only"));
         };
         self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
         let object = doc
             .object(source.object)
-            .ok_or(EditError::Kernel("objek hilang".into()))?;
+            .ok_or(EditError::Kernel(t("error.object_missing").into()))?;
         if object.push_pull_overshoots(face, distance) {
             doc.push_pull_through(source.object, face, distance)
                 .map_err(kernel_err)?;
@@ -2173,7 +2171,7 @@ impl Scene {
         Self::check_distance(distance)?;
         self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
-            return Err(EditError::Unsupported("push/pull selain pada face"));
+            return Err(EditError::Unsupported("error.pushpull_face_only"));
         };
         self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
@@ -2199,16 +2197,14 @@ impl Scene {
             return Ok(());
         };
         if targets.iter().any(|t| t.tile() != tile) {
-            return Err(EditError::Unsupported(
-                "Push/Pull banyak target harus dalam satu tile",
-            ));
+            return Err(EditError::Unsupported("error.pushpull_one_tile"));
         }
         let mark = self.undo.len();
         for target in targets {
             let done = match *target {
-                Target::Region { .. } if keep => Err(EditError::Unsupported(
-                    "solid baru hanya dari face solid; region sudah menjadi solid baru tanpa Ctrl",
-                )),
+                Target::Region { .. } if keep => {
+                    Err(EditError::Unsupported("error.new_solid_face_only"))
+                }
                 Target::Region {
                     tile,
                     sketch,
@@ -2279,7 +2275,7 @@ impl Scene {
     ) -> Result<(), EditError> {
         self.check_source(key, source)?;
         let inference::ElementRef::Face(face) = source.element else {
-            return Err(EditError::Unsupported("mengecat selain face"));
+            return Err(EditError::Unsupported("error.paint_face_only"));
         };
         self.check_tile(key)?;
         let doc = self.project.tile_mut(key)?;
@@ -2307,10 +2303,10 @@ impl Scene {
             .iter()
             .all(|v| v.is_finite() && v.abs() <= PROJECT_BOUND_M)
         {
-            return Err(EditError::Unsupported("awan digeser terlalu jauh"));
+            return Err(EditError::Unsupported("error.cloud_too_far"));
         }
         if self.clouds.offset_of(id).is_none() {
-            return Err(EditError::Unsupported("awan itu sudah dilepas"));
+            return Err(EditError::Unsupported("error.cloud_removed"));
         }
         self.clouds.set_offset(id, to);
         self.undo.push(Step::Cloud { id, from, to });

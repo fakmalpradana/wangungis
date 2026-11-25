@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+wangungis-i18n.workspace = true
 kernel.workspace = true
 wangungis-scene.workspace = true
 wangungis-render.workspace = true

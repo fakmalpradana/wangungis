@@ -3,14 +3,14 @@
 use wangungis_render::Camera;
 
 pub const FOVY: f32 = 0.8;
-/// Standard views: label, yaw, pitch (rad).
+/// Standard views: label key, yaw, pitch (rad).
 pub const VIEWS: [(&str, f64, f64); 6] = [
-    ("Atas", -std::f64::consts::FRAC_PI_2, PITCH_LIMIT),
-    ("Depan", -std::f64::consts::FRAC_PI_2, 0.0),
-    ("Belakang", std::f64::consts::FRAC_PI_2, 0.0),
-    ("Kiri", std::f64::consts::PI, 0.0),
-    ("Kanan", 0.0, 0.0),
-    ("Iso", -2.356194490192345, 0.6154797086703873),
+    ("view.top", -std::f64::consts::FRAC_PI_2, PITCH_LIMIT),
+    ("view.front", -std::f64::consts::FRAC_PI_2, 0.0),
+    ("view.back", std::f64::consts::FRAC_PI_2, 0.0),
+    ("view.left", std::f64::consts::PI, 0.0),
+    ("view.right", 0.0, 0.0),
+    ("view.iso", -2.356194490192345, 0.6154797086703873),
 ];
 
 /// Camera orbiting `target` at `distance`, z up. Angles in radians.
@@ -162,12 +162,12 @@ mod tests {
             };
             o.eye()
         };
-        assert!(eye("Atas")[2] > 9.9, "{:?}", eye("Atas"));
-        assert!(eye("Depan")[1] < -9.9, "{:?}", eye("Depan"));
-        assert!(eye("Belakang")[1] > 9.9, "{:?}", eye("Belakang"));
-        assert!(eye("Kiri")[0] < -9.9, "{:?}", eye("Kiri"));
-        assert!(eye("Kanan")[0] > 9.9, "{:?}", eye("Kanan"));
-        let iso = eye("Iso");
+        assert!(eye("view.top")[2] > 9.9, "{:?}", eye("view.top"));
+        assert!(eye("view.front")[1] < -9.9, "{:?}", eye("view.front"));
+        assert!(eye("view.back")[1] > 9.9, "{:?}", eye("view.back"));
+        assert!(eye("view.left")[0] < -9.9, "{:?}", eye("view.left"));
+        assert!(eye("view.right")[0] > 9.9, "{:?}", eye("view.right"));
+        let iso = eye("view.iso");
         assert!(iso[0] < -5.0 && iso[1] < -5.0 && iso[2] > 5.0, "{iso:?}");
     }
 
