@@ -821,10 +821,14 @@ fn push_pull_two_solids_through_the_app() {
     assert_eq!(d.app.tool.picked_nodes().map(|p| p.1.len()), Some(2));
     d.letter(K::P, "p");
     d.click([4.5, 4.0, 3.0]);
+    // The boxes are drawn by screen clicks, so their corners follow the viewport
+    // offset, and Hew's face normal carries ulps from them (3.6e-15 at 7 m once the
+    // toolbar changed width). The exact-height promise of a snap is tested in tools.
+    let height = |d: &Driver| d.extents()[2];
     d.value("1");
-    assert_eq!(d.extents()[2], 7.0, "the taller one moved too");
+    assert!((height(&d) - 7.0).abs() < 1e-6, "the taller one moved too");
     d.key_with(K::Z, COMMAND);
-    assert_eq!(d.extents()[2], 6.0, "one undo");
+    assert!((height(&d) - 6.0).abs() < 1e-6, "one undo");
 
     // An undo resets the tool, and the selection with it.
     d.letter(K::P, "p");
@@ -833,7 +837,7 @@ fn push_pull_two_solids_through_the_app() {
     d.click([14.5, 4.0, 6.0]);
     d.hold(egui::Modifiers::NONE);
     d.value("2");
-    assert_eq!(d.extents()[2], 8.0);
+    assert!((height(&d) - 8.0).abs() < 1e-6, "{}", height(&d));
     assert_eq!(d.app.error, None);
 }
 
