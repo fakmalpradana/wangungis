@@ -100,6 +100,7 @@ Baru, Buka, dan menutup jendela menanyakan dulu bila ada perubahan belum disimpa
 - Jendela berkas di Windows dan Linux belum diuji manusia. Di Linux butuh xdg-desktop-portal atau zenity.
 - Geser awan hanya translasi, belum putar.
 - Point cloud: hanya `.las`, belum `.laz`. Tanpa reproyeksi, jadi EPSG berbeda ditolak. Warna dari RGB berkas, atau dari ketinggian bila tidak ada; belum ada warna atau saring per kelas. Kotak potong sejajar sumbu, belum bisa diputar. Solid menutupi titik di dalamnya. Cache di `~/.wangungis/cache/` memakai ±35% ukuran LAS dan belum dibersihkan otomatis.
+- Bahasa UI: selain Indonesia dan Inggris, 14 bahasa masih draf terjemahan mesin (bertanda `*` di menu Bahasa). Arab tampil dengan huruf tersambung, tetapi tata letak tetap kiri-ke-kanan dan kalimat yang mencampur angka atau huruf Latin bisa tertukar urutannya. Dokumen pengguna hanya dalam bahasa Indonesia.
 - Selama komponen dibuka, salinan lainnya hilang dari layar sampai ditutup.
 - Tidak bisa menggambar pada bidang yang berisi gambar di sisi lain batas grup. Misalnya, garis bebas di dalam grup yang menempel di tanah menghalangi garis baru di tanah di luar grup. Aplikasi menolak dengan pesan.
 - Cat hanya warna solid, tanpa tekstur dan transparansi. Tag belum punya warna. Tinggal satu presisi per satuan, dan ft hanya desimal.

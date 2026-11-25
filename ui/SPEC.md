@@ -42,7 +42,7 @@ Shell aplikasi desktop F0. Membuka `.hew` atau proyek `.wangun`, menampilkannya 
 
 ## Bahasa
 - Semua teks layar (menu, toolbar, tooltip, status bar, panel, jendela, pesan, nama sudut pandang `camera::VIEWS`, nama cat siap pakai) dibaca dari katalog `i18n` lewat `t(kunci)` dan `tf(kunci, args)`. Daftar `camera::VIEWS` dan `PAINTS` menyimpan kunci; `Icon::view` memetakan menurut kunci.
-- Menu Berkas punya submenu `Bahasa / Language` (teks tetap dua bahasa) berisi 16 bahasa dengan nama aslinya; yang aktif bertanda. Bahasa tanpa katalog diberi akhiran ` (en)` dan tampil dalam bahasa Inggris lewat fallback.
+- Menu Berkas punya submenu `Bahasa / Language` (teks tetap dua bahasa) berisi 16 bahasa dengan nama aslinya; yang aktif bertanda. Bahasa yang katalognya masih draf mesin diberi tanda ` *` dengan tooltip dua bahasa, dan baris keterangan di bawah daftar.
 - Pilihan disimpan sebagai kode bahasa di `~/.wangungis/lang` (seperti `unit`) dan dibaca saat start; berkas hilang atau kode tak dikenal berarti Indonesia. Teks sistem operasi seperti judul jendela berkas diambil saat jendela dibuka.
 - Font Noto dibundel (ADR-010), jadi semua 16 bahasa tampil tanpa kotak kosong. Dipasang di `App::new` setelah bahasa tersimpan dibaca; saat bahasa berganti, font dipasang ulang di frame berikutnya hanya jika wajah CJK-nya berbeda (Ja, Ko, ZhHans, ZhHant; lainnya memakai SC). Tata letak kanan-ke-kiri untuk Arab belum ada.
 - Nama cat yang dipilih disimpan ke dokumen dalam bahasa saat dipilih; nama itu data, tidak diterjemahkan ulang.

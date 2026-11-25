@@ -45,6 +45,16 @@ pub fn definitions(lang: Lang) -> FontDefinitions {
                 .push(name.to_owned());
         }
     }
+    // egui splits text into runs by font. With a Latin font first, the spaces
+    // of an Arabic sentence come from it, so every word is its own run and the
+    // words are laid out left to right. Arabic first keeps a sentence one run,
+    // which the shaper orders right to left. Mixed text can still swap (no bidi).
+    if lang.rtl() {
+        for list in defs.families.values_mut() {
+            list.retain(|n| n != "NotoSansArabic");
+            list.insert(0, "NotoSansArabic".to_owned());
+        }
+    }
     defs
 }
 
@@ -97,6 +107,19 @@ mod tests {
                     "NotoSansCJK"
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn arabic_comes_first_for_arabic_only() {
+        for lang in Lang::ALL {
+            let defs = definitions(lang);
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                let list = &defs.families[&family];
+                assert_eq!(list[0] == "NotoSansArabic", lang.rtl(), "{lang:?}");
+                let arabic = list.iter().filter(|n| *n == "NotoSansArabic").count();
+                assert_eq!(arabic, 1, "{lang:?}");
+            }
         }
     }
 

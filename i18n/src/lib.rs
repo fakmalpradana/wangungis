@@ -100,18 +100,31 @@ impl Lang {
         self == Lang::Ar
     }
 
-    /// Whether this language has a catalog of its own. The others show English.
-    pub fn has_catalog(self) -> bool {
-        self.source().is_some()
+    /// A machine draft not yet checked by a native speaker (see `GLOSSARY.md`).
+    pub fn machine_draft(self) -> bool {
+        !matches!(self, Lang::Id | Lang::En)
     }
 
-    /// The catalog file, for the languages that have one.
+    /// The catalog file. Every language has one.
     fn source(self) -> Option<&'static str> {
-        match self {
-            Lang::Id => Some(include_str!("../locales/id.json")),
-            Lang::En => Some(include_str!("../locales/en.json")),
-            _ => None,
-        }
+        Some(match self {
+            Lang::Id => include_str!("../locales/id.json"),
+            Lang::En => include_str!("../locales/en.json"),
+            Lang::ZhHans => include_str!("../locales/zh-Hans.json"),
+            Lang::ZhHant => include_str!("../locales/zh-Hant.json"),
+            Lang::Ja => include_str!("../locales/ja.json"),
+            Lang::Ko => include_str!("../locales/ko.json"),
+            Lang::Ar => include_str!("../locales/ar.json"),
+            Lang::Es => include_str!("../locales/es.json"),
+            Lang::PtBr => include_str!("../locales/pt-BR.json"),
+            Lang::Fr => include_str!("../locales/fr.json"),
+            Lang::De => include_str!("../locales/de.json"),
+            Lang::Ru => include_str!("../locales/ru.json"),
+            Lang::Tr => include_str!("../locales/tr.json"),
+            Lang::Vi => include_str!("../locales/vi.json"),
+            Lang::Th => include_str!("../locales/th.json"),
+            Lang::Hi => include_str!("../locales/hi.json"),
+        })
     }
 }
 

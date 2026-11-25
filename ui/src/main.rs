@@ -2388,16 +2388,27 @@ impl App {
             // Fixed text in both languages, so that anyone can find it.
             ui.menu_button("Bahasa / Language", |ui| {
                 for lang in Lang::ALL {
-                    let name = if lang.has_catalog() {
-                        lang.native_name().to_owned()
+                    let name = if lang.machine_draft() {
+                        format!("{} *", lang.native_name())
                     } else {
-                        format!("{} (en)", lang.native_name())
+                        lang.native_name().to_owned()
                     };
-                    if ui.radio(wangungis_i18n::current() == lang, name).clicked() {
+                    let radio = ui.radio(wangungis_i18n::current() == lang, name);
+                    // Fixed text too: the draft language may be the one in doubt.
+                    let radio = if lang.machine_draft() {
+                        radio.on_hover_text(
+                            "Draf terjemahan mesin, belum ditinjau penutur asli.\nMachine-translated draft, not yet reviewed by a native speaker.",
+                        )
+                    } else {
+                        radio
+                    };
+                    if radio.clicked() {
                         self.set_lang(lang);
                         ui.close();
                     }
                 }
+                ui.separator();
+                ui.weak("* draf mesin / machine draft");
             });
         });
     }
