@@ -1,14 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- WangunGIS app icon. White tile, a W drawn as connected line strokes like the
-       Line tool: black strokes, the last one in the accent orange #F27300, and an
-       endpoint snap marker on the middle peak. -->
+  <!-- WangunGIS app icon: a curved, abstract W on a clean white tile. The left
+       stroke is an orange blade tapering to a point; the right is one black
+       shape with a sharp inner spike and a broad rounded arm. -->
+  <defs>
+    <linearGradient id="orange" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FF8A1F"/>
+      <stop offset="0.55" stop-color="#F27300"/>
+      <stop offset="1" stop-color="#D45F00"/>
+    </linearGradient>
+    <linearGradient id="black" x1="0.2" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#3C3C3C"/>
+      <stop offset="0.5" stop-color="#1A1A1A"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+  </defs>
   <rect x="32" y="32" width="960" height="960" rx="208" fill="#FFFFFF"/>
   <rect x="32" y="32" width="960" height="960" rx="208" fill="none" stroke="#E6E6E6" stroke-width="8"/>
-  <polyline points="208,268 360,704 512,398 664,704" fill="none" stroke="#1A1A1A"
-            stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
-  <line x1="664" y1="704" x2="816" y2="268" stroke="#F27300"
-        stroke-width="104" stroke-linecap="round"/>
-  <circle cx="512" cy="398" r="58" fill="#FFFFFF" stroke="#F27300" stroke-width="28"/>
-  <rect x="208" y="794" width="608" height="20" rx="10" fill="#1A1A1A"/>
-  <rect x="704" y="794" width="112" height="20" rx="10" fill="#F27300"/>
+  <path fill="url(#orange)" d="M226,248
+    C276,226 344,228 396,204
+    C358,236 340,276 346,322
+    C372,430 430,540 452,628
+    C430,700 400,750 368,792
+    C330,700 260,560 218,430
+    C194,370 186,284 226,248 Z"/>
+  <path fill="url(#black)" d="M398,800
+    C440,700 480,580 520,470
+    C534,500 546,530 558,566
+    C562,470 560,380 590,320
+    C630,250 690,205 750,212
+    C800,218 820,270 812,330
+    C796,450 720,640 642,792
+    C606,740 566,690 528,640
+    C490,690 440,750 398,800 Z"/>
 </svg>
