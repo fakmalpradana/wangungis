@@ -12,4 +12,5 @@ Semua aturan proyek ada di AGENTS.md (diimpor di atas). File ini hanya berisi ta
 - Catat di log sesi bahwa padanan ini dipakai (tidak setara penuh dengan skill Claude Code).
 - Jangan pernah mengubah lingkungan (memasang/menambal paket, membuat stub dependensi) agar test lulus. Laporkan kegagalan apa adanya.
 - Setiap klaim riset wajib URL; tanpa sumber tandai "asumsi". Jangan mengarang URL.
+- Lewat agy headless dari Claude Code, Gemini hanya me-review dan tidak menjalankan perintah atau menulis berkas, kecuali pemilik memberi izin tulis. Jawab dalam format `berkas:baris — masalah — perbaikan`, atau `NONE` bila tidak ada masalah nyata.
 - Peran utama (AGENTS.md §12): modul I/O dan format, test tambahan, benchmark, dokumentasi, review silang kebenaran pekerjaan Claude.

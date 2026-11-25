@@ -12,4 +12,7 @@ Semua aturan proyek ada di AGENTS.md (diimpor di atas). File ini hanya berisi ta
 - Untuk tugas besar atau multi-file, gunakan plan mode lebih dulu; minta persetujuan manusia sebelum implementasi.
 - Gunakan subagent hanya bila diminta manusia atau tugas jelas terpisah (mis. riset library, penulisan test). Beri konteks lengkap karena subagent mulai dari nol.
 - Jangan membaca seluruh repo. Mulai dari SPEC.md modul terkait.
-- Review silang: setelah selesai, minta manusia menjalankan review oleh Gemini untuk kebenaran geometri pada perubahan di `core-geometry/` dan `inference/`.
+- Delegasi coding: `Agent` dengan `model: "sonnet"`, `effort: "medium"`, brief lengkap (SPEC, berkas, test, definisi selesai), larang tulis git. Opus membaca diff, menjalankan gerbang (AGENTS.md §9), commit, dan membuka PR.
+- Review silang per PR dijalankan Claude sendiri lewat agy, read-only: `agy-delegate --model "Gemini 4 Argon (High)" --timeout 20m --dir <folder kosong> - < prompt`, prompt diawali "Do not run any command or tool" lalu diff atau berkasnya. Rekonsiliasi temuan terhadap kode; Claude yang memutuskan.
+- CI: jangan polling. Cek sekali dengan `gh pr view <n> --json statusCheckRollup`; bila belum selesai, laporkan dan tunggu pemilik.
+- Uji di jendela asli macOS: bundle uji di scratchpad dengan HOME sementara, bukan `~/.wangungis` pemilik. Jangan sentuh panel Open/Save OS.
