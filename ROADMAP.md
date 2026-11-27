@@ -4,7 +4,7 @@ WangunGIS is built in milestones. A milestone is done when its exit criteria are
 
 ## Where we are
 
-- **v0.1 (core modeling): in beta.** `v0.1.0-rc.2` is out for testing by a 3D engineer. Findings from that test decide what lands before `v0.1.0`.
+- **v0.1 (core modeling): in beta.** `v0.1.0-rc.2` is tagged for testing by a 3D engineer. Findings from that test decide what lands before `v0.1.0`.
 - The geometry kernel is not ours. We use the crates `kernel`, `inference`, `tessellate` and `mesh-export` from Hew, pinned to one commit ([ADR-000](docs/adr/ADR-000-strategi-hew.md), [ADR-004](docs/adr/ADR-004-kernel-geometri.md)). Our crates wrap Hew and add what it lacks. Changing the pin needs the owner's approval.
 
 ## Milestones
