@@ -51,6 +51,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          # The runner's preinstalled Microsoft apt repo can fail (403); we use none of it.
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list.d/* | xargs -r sudo rm -f || true
           sudo apt-get update
           sudo apt-get install -y libcgal-dev libeigen3-dev libgeos++-dev libgeos-dev libboost-filesystem-dev
           if [ "${{ steps.v3-cache.outputs.cache-hit }}" != "true" ]; then
@@ -109,7 +111,9 @@ jobs:
       # Software Vulkan (lavapipe) for the golden-image render tests.
       - name: GPU (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+        run: |
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list.d/* | xargs -r sudo rm -f || true
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

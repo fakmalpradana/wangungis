@@ -94,7 +94,7 @@ The full list is in [docs/user/uji-asap.md](docs/user/uji-asap.md) (Indonesian).
 
 ## Contributing
 
-Project rules for contributors and AI agents are in [AGENTS.md](AGENTS.md) (Indonesian). In short: every behavior needs automated tests, geometry correctness comes before speed, and new dependencies need an ADR. The project is clean-room: no code, assets or branding from proprietary modelers.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and workflow, and [ROADMAP.md](ROADMAP.md) for the milestones and open areas. The full rules for contributors and AI agents are in [AGENTS.md](AGENTS.md) (Indonesian). In short: every behavior needs automated tests, geometry correctness comes before speed, and new dependencies need an ADR. The project is clean-room: no code, assets or branding from proprietary modelers.
 
 ## License
 

@@ -9,7 +9,7 @@ Bagian bertanda `TODO` diisi setelah riset (Tahap 0) dan ADR selesai. Jangan men
 - Platform: macOS, Windows, Linux. Satu basis kode. Dev utama di macOS (Apple Silicon).
 - Pelaksana: 1 manusia (pemilik, pengambil keputusan) + agen AI. Penguji beta: 3D engineer milik pemilik, menguji perilaku aplikasi dan memberi umpan balik langsung. Tidak ada budget uang.
 - Strategi: jalur **A2** (ADR-000, K2 2026-11-01). Crate inti Hew (`kernel`, `inference`, `tessellate`, `mesh-export`) dipakai sebagai library, dengan aplikasi native sendiri.
-- Status: `v0.1.0-rc.1` di-tag 2026-11-25 (prerelease untuk uji beta). Lingkup v0.1.0 dan batas yang diketahui: `CHANGELOG.md` dan `README.md`.
+- Status: `v0.1.0-rc.2` di-tag 2026-11-25 (prerelease untuk uji beta; rc.1 tanpa ikon aplikasi). Lingkup v0.1.0 dan batas yang diketahui: `CHANGELOG.md` dan `README.md`.
 - Clean-room: tiru alur kerja dan perilaku UX SketchUp, JANGAN salin kode, aset, ikon, nama, atau merek dagangnya.
 
 ## 2. Prinsip (urutan prioritas)
